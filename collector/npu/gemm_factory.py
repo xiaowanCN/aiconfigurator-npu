@@ -30,6 +30,32 @@ OUTSIDE_LOOP_COUNT = 6
 _VLLM_CONFIG_CTX = None
 
 
+def _init_ascend_config(vllm_config) -> None:
+    """Initialize vllm-ascend's global AscendConfig.
+
+    vllm-ascend >= 0.23 reads ``get_ascend_config()`` from the weight
+    post-processing path (``process_weights_after_loading`` ->
+    ``maybe_trans_nz`` -> ``_should_trans_nz``) in addition to the quantized
+    layer construction path. In production this global is installed by
+    ``vllm_ascend.worker`` / ``init_ascend_config``, which standalone
+    microbenchmarks bypass, so without it every GEMM build raises
+    "Ascend config is not initialized. Please call init_ascend_config first."
+
+    Safe to call multiple times; failures are logged instead of raised so the
+    collector still attempts the benchmark (older versions lack the symbol).
+    """
+    try:
+        from vllm_ascend.ascend_config import init_ascend_config
+    except ImportError as e:
+        logger.warning("init_ascend_config unavailable: %s", e)
+        return
+
+    try:
+        init_ascend_config(vllm_config)
+    except Exception as e:
+        logger.warning("init_ascend_config failed: %s: %s", type(e).__name__, e)
+
+
 def _ensure_vllm_config_ctx() -> None:
     """Install a default VllmConfig and keep it active for the whole run.
 
@@ -51,9 +77,12 @@ def _ensure_vllm_config_ctx() -> None:
 
     from vllm.config import VllmConfig, set_current_vllm_config
 
+    vllm_config = VllmConfig()
+    _init_ascend_config(vllm_config)
+
     # Keep the VllmConfig object alive by binding the entered context manager
     # to a module-level global.
-    _VLLM_CONFIG_CTX = set_current_vllm_config(VllmConfig())
+    _VLLM_CONFIG_CTX = set_current_vllm_config(vllm_config)
     _VLLM_CONFIG_CTX.__enter__()
 
 
@@ -143,6 +172,11 @@ def _create_bf16_gemm(
     """
     import torch_npu  # noqa: F401
     import vllm_ascend.patch.worker  # noqa: F401
+
+    # Idempotent. vllm-ascend >= 0.23 needs both a current VllmConfig and an
+    # initialized AscendConfig for weight post-processing (maybe_trans_nz);
+    # keep this in sync with the W8A8 path below.
+    _ensure_vllm_config_ctx()
 
     op_list = [_create_single_bf16_gemm(spec, device) for _ in range(OUTSIDE_LOOP_COUNT)]
     x = torch.randn(spec.m, spec.k, dtype=spec.dtype, device=device)

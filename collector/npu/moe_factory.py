@@ -79,6 +79,18 @@ def _ensure_forward_context(num_tokens: int = 1) -> None:
 
         # Keep vllm_config alive for the process
         _vllm_config = VllmConfig()
+
+        # vllm-ascend >= 0.23: weight post-processing (maybe_trans_nz ->
+        # _should_trans_nz) reads get_ascend_config(), normally installed by
+        # the Ascend worker. Without it MoE weight prep raises
+        # "Ascend config is not initialized. Please call init_ascend_config first."
+        try:
+            from vllm_ascend.ascend_config import init_ascend_config
+
+            init_ascend_config(_vllm_config)
+        except Exception as e:
+            logger.warning("init_ascend_config failed: %s: %s", type(e).__name__, e)
+
         _cfg_ctx = set_current_vllm_config(_vllm_config)
         _cfg_ctx.__enter__()
 
