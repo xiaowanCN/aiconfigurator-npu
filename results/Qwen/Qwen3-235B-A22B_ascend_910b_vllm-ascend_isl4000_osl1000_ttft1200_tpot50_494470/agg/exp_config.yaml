@@ -1,0 +1,35 @@
+agg_Qwen/Qwen3-235B-A22B_ascend_910b_vllm-ascend_0.18.0_4000_1000_0_1200.0_50.0:
+  attention_backend: flashinfer
+  backend_name: vllm-ascend
+  backend_version: 0.18.0
+  config:
+    nextn: 0
+    nextn_accept_rates: [0.85, 0.3, 0.0, 0.0, 0.0]
+    worker_config:
+      backend_name: vllm-ascend
+      backend_version: 0.18.0
+      comm_quant_mode: half
+      dp_list: [1, 2, 4, 8]
+      fmha_quant_mode: float16
+      gemm_quant_mode: float16
+      kvcache_quant_mode: float16
+      moe_ep_list: [1, 2, 4, 8]
+      moe_quant_mode: float16
+      moe_tp_list: [1, 2, 4, 8]
+      num_gpu_per_worker: [1, 2, 4, 8]
+      pp_list: [1]
+      system_name: ascend_910b
+      tp_list: [1, 2, 4, 8]
+  enable_wideep: false
+  isl: 4000
+  mode: patch
+  model_path: Qwen/Qwen3-235B-A22B
+  moe_backend: null
+  osl: 1000
+  prefix: 0
+  profiles: []
+  serving_mode: agg
+  system_name: ascend_910b
+  total_gpus: 16
+  tpot: 50.0
+  ttft: 1200.0

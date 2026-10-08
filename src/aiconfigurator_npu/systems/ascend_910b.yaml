@@ -19,7 +19,7 @@ node:
   inter_node_bw: 25000000000 # Byte/s per die, single direction, 100Gb/s RoCE
   intra_node_bw: 56000000000 # Byte/s per die, single direction, HCCS 56GB/s
   pcie_bw: 32000000000 # Byte/s, single direction, PCIe 4.0
-  p2p_latency: 0.00001 # 10us
+  p2p_latency: 0.00005 # 10us
 
 misc:
   nccl_mem: # HCCL memory overhead (approximate, similar to NCCL)

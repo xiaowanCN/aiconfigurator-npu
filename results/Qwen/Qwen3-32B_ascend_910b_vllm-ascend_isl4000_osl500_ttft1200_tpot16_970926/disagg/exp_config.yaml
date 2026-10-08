@@ -1,0 +1,72 @@
+disagg_Qwen/Qwen3-32B_ascend_910b_ascend_910b_vllm-ascend_0.18.0_4000_500_0_1200.0_16.67:
+  attention_backend: flashinfer
+  backend_name: vllm-ascend
+  backend_version: 0.18.0
+  config:
+    advanced_tuning_config:
+      decode_latency_correction_scale: 1.08
+      decode_max_batch_size: 512
+      prefill_latency_correction_scale: 1.1
+      prefill_max_batch_size: 1
+      rate_matching_decode_degradation_factor: null
+      rate_matching_prefill_degradation_factor: null
+    decode_worker_config:
+      attention_backend: flashinfer
+      backend_name: vllm-ascend
+      backend_version: 0.18.0
+      comm_quant_mode: half
+      dp_list: [1]
+      enable_eplb: null
+      enable_wideep: false
+      fmha_quant_mode: float16
+      gemm_quant_mode: float16
+      kvcache_quant_mode: float16
+      moe_backend: null
+      moe_ep_list: [1]
+      moe_quant_mode: float16
+      moe_tp_list: [1]
+      num_gpu_per_worker: [1, 2, 4, 8]
+      pp_list: [1]
+      system_name: ascend_910b
+      tp_list: [1, 2, 4, 8]
+    nextn: 0
+    nextn_accept_rates: [0.85, 0.3, 0.0, 0.0, 0.0]
+    prefill_worker_config:
+      attention_backend: flashinfer
+      backend_name: vllm-ascend
+      backend_version: 0.18.0
+      comm_quant_mode: half
+      dp_list: [1]
+      enable_eplb: null
+      enable_wideep: false
+      fmha_quant_mode: float16
+      gemm_quant_mode: float16
+      kvcache_quant_mode: float16
+      moe_backend: null
+      moe_ep_list: [1]
+      moe_quant_mode: float16
+      moe_tp_list: [1]
+      num_gpu_per_worker: [1, 2, 4, 8]
+      pp_list: [1]
+      system_name: ascend_910b
+      tp_list: [1, 2, 4, 8]
+    replica_config:
+      max_decode_worker: 32
+      max_gpu_per_replica: 16
+      max_prefill_worker: 32
+      num_gpu_per_replica: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
+        104, 112, 120, 128]
+  decode_system_name: ascend_910b
+  enable_wideep: false
+  isl: 4000
+  mode: patch
+  model_path: Qwen/Qwen3-32B
+  moe_backend: null
+  osl: 500
+  prefix: 0
+  profiles: []
+  serving_mode: disagg
+  system_name: ascend_910b
+  total_gpus: 16
+  tpot: 16.67
+  ttft: 1200.0

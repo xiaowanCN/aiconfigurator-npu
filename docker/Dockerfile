@@ -1,7 +1,7 @@
 # Ascend NPU runtime image for aiconfigurator-npu
 # Base: vllm-ascend official image (CANN 8.5+ / torch-npu / vLLM 0.18.0 / vllm-ascend)
 # Usage on 910B: see README.md "Docker Image" section.
-FROM quay.io/ascend/vllm-ascend:v0.18.0
+FROM quay.io/ascend/vllm-ascend:v0.23.0.post1
 
 WORKDIR /workspace
 

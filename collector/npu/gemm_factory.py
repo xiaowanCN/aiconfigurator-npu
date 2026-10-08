@@ -26,6 +26,36 @@ SUPPORTED_QUANT_TYPES = (QUANT_BF16, QUANT_W8A8_DYNAMIC)
 # Matches AIConfigurator's outside_loop_count=6 in collect_gemm.py:201.
 OUTSIDE_LOOP_COUNT = 6
 
+# VllmConfig context kept open for the lifetime of the process.
+_VLLM_CONFIG_CTX = None
+
+
+def _ensure_vllm_config_ctx() -> None:
+    """Install a default VllmConfig and keep it active for the whole run.
+
+    ``set_current_vllm_config`` is a ``@contextmanager``: calling it without
+    entering never installs the config, so it has to be entered explicitly
+    (same trick used by ``moe_factory._ensure_forward_context``). Leaving it
+    entered is intentional — unlike a ``with`` block, the config stays visible
+    during the timed ``forward()`` calls, not just during op construction.
+
+    This matters because vllm-ascend >= 0.18 reads ``get_current_vllm_config()``
+    both when building quantized layers (``get_quant_method`` ->
+    ``AscendLinearMethod.__init__`` -> ``enable_dsa_cp_with_layer_shard``) and
+    potentially at forward time, while standalone microbenchmarks run outside
+    ``vllm serve`` where that global is normally set.
+    """
+    global _VLLM_CONFIG_CTX
+    if _VLLM_CONFIG_CTX is not None:
+        return
+
+    from vllm.config import VllmConfig, set_current_vllm_config
+
+    # Keep the VllmConfig object alive by binding the entered context manager
+    # to a module-level global.
+    _VLLM_CONFIG_CTX = set_current_vllm_config(VllmConfig())
+    _VLLM_CONFIG_CTX.__enter__()
+
 
 @dataclass(frozen=True)
 class GemmSpec:
@@ -50,7 +80,6 @@ def _init_vllm_context() -> None:
     import os
     import socket
 
-    from vllm.config import VllmConfig, set_current_vllm_config
     from vllm.distributed import init_distributed_environment
     from vllm.distributed.parallel_state import ensure_model_parallel_initialized
 
@@ -72,10 +101,12 @@ def _init_vllm_context() -> None:
     torch.npu.config.allow_internal_format = True
 
     init_distributed_environment()
-    with set_current_vllm_config(VllmConfig()):
-        ensure_model_parallel_initialized(1, 1)
 
-    set_current_vllm_config(VllmConfig())
+    # Must be entered (not merely called) so vllm-ascend's layer constructors
+    # can read get_current_vllm_config() later on.
+    _ensure_vllm_config_ctx()
+
+    ensure_model_parallel_initialized(1, 1)
 
 
 def _create_single_bf16_gemm(spec: GemmSpec, device: torch.device):
@@ -194,6 +225,13 @@ def _create_w8a8_dynamic_gemm(
             return cls()
 
     qc = _BenchW8A8Config()
+
+    # vllm-ascend >= 0.18 asserts on get_current_vllm_config() while building
+    # quantized layers (enable_dsa_cp_with_layer_shard). Benchmarks run outside
+    # `vllm serve`, so make sure a default VllmConfig is installed — and keep it
+    # installed, since forward() is timed after this function returns.
+    _ensure_vllm_config_ctx()
+
     op_list = [_create_single_w8a8_gemm(spec, device, qc) for _ in range(OUTSIDE_LOOP_COUNT)]
     x = torch.randn(spec.m, spec.k, dtype=spec.dtype, device=device)
 
@@ -236,3 +274,4 @@ def create_gemm_func(
     if spec.quant_type == QUANT_BF16:
         return _create_bf16_gemm(spec, device)
     return _create_w8a8_dynamic_gemm(spec, device)
+

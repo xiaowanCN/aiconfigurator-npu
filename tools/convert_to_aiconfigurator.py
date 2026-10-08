@@ -73,13 +73,20 @@ def convert_gemm(input_path: str, output_path: str, device: str, framework: str,
                     continue
 
                 shapes = _parse_input_shapes(row["Input Shapes"])
-                # MatMul: input0=[M,K], input1=[K,N] → output=[M,N]
-                # shapes[0] = [M, K], shapes[1] = [K, N]  (or [N, K] transposed)
+                # MatMul: input0=[M,K] (activations), input1=[N,K] (weight).
+                # RowParallelLinear stores its weight as
+                # [out_features, in_features] = [N, K], and the collector writes
+                # this as f"{m},{k};{n},{k}"
+                # (collector/npu/collect_gemm.py::_format_shapes), so N is the
+                # FIRST element of the second shape. Reading the last element
+                # yields K instead, which collapses the perf table onto the
+                # n == k diagonal and makes the 3-D interpolation in
+                # PerfDatabase.query_gemm fail with a flat-simplex QhullError.
                 if len(shapes) < 2:
                     continue
                 m = shapes[0][0]
                 k = shapes[0][1]
-                n = shapes[1][1] if len(shapes[1]) > 1 else shapes[1][0]
+                n = shapes[1][0]
 
                 latency_ms = _us_to_ms(float(row["Average Duration(us)"]))
 
@@ -430,3 +437,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
