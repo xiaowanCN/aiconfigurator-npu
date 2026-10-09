@@ -79,6 +79,16 @@ python collector/npu/collect_mla.py \
   --output-dir ./data/dsr1_mla_gen
 ```
 
+```bash
+# 将GEMM、Attention、MOE中的文件放到--input-dir路径下，执行
+python tools/convert_to_aiconfigurator.py \
+    --input-dir collect-data-1009-1 \
+    --output-dir src/aiconfigurator/systems/data/ascend_910b/vllm-ascend/0.23.0 \
+    --device "Ascend 910B" \
+    --framework vllm-ascend \
+    --version 0.23.0
+```
+
 ## Docker Image
 
 The image is based on the official `quay.io/ascend/vllm-ascend:v0.18.0` base
