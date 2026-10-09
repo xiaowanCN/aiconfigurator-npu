@@ -254,6 +254,21 @@ def _token_combine(
     )
 
 
+def _unwrap_mlp_output(mlp_out: torch.Tensor | tuple[torch.Tensor, ...]) -> torch.Tensor:
+    """Drop the extra elements vllm-ascend >= 0.23 returns from the MoE MLP.
+
+    Both ``unquant_apply_mlp`` (bf16) and ``quant_apply_mlp`` (W8A8) now hand
+    back ``(output, scale)``; older builds return the tensor directly. Passing
+    the tuple on fails later in token combine with:
+
+        npu:moe_token_unpermute() Expected a value of type 'Tensor' for
+        argument 'permuted_tokens' but instead found type 'tuple'
+    """
+    if isinstance(mlp_out, tuple):
+        return mlp_out[0]
+    return mlp_out
+
+
 def _create_bf16_moe(
     spec: MoeSpec, device: torch.device,
 ) -> Callable[[], torch.Tensor]:
@@ -317,6 +332,7 @@ def _create_bf16_moe(
             group_list_type=1,
             need_trans=False,
         )
+        mlp_out = _unwrap_mlp_output(mlp_out)
 
         # Pad MLP output back to num_tokens*topk rows for token_unpermute
         if local_token_count < total_token_count:
@@ -525,13 +541,7 @@ def _create_w8a8_dynamic_moe(
             **_fusion_kwargs,
         )
 
-        # vllm-ascend >= 0.23 returns a tuple from quant_apply_mlp (the MLP
-        # output plus its dynamic quant scale); older builds return the tensor
-        # directly. Feeding the tuple onward fails later with
-        # "npu:moe_token_unpermute() Expected a value of type 'Tensor' ...
-        #  but instead found type 'tuple'".
-        if isinstance(mlp_out, tuple):
-            mlp_out = mlp_out[0]
+        mlp_out = _unwrap_mlp_output(mlp_out)
 
         # Pad MLP output back to num_tokens*topk rows for token_unpermute
         if local_token_count < total_token_count:
