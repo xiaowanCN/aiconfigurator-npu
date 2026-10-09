@@ -16,7 +16,7 @@ DeepSeek-R1 与 DeepSeek-V3 **同架构（`DeepseekV3ForCausalLM`）、同维度
 |------|-------|-------|------------|
 | A. 模型配置登记 | 4 | 4 | 否 |
 | B. 代码适配（采集/转换链路） | 2 | 2 | 否 |
-| C. 性能数据采集 | 3 | 1（GEMM/MoE/Comm 复用现有） | **是** |
+| C. 性能数据采集 | 5 | 4（C1–C4；C5 脚本已就绪，待硬件采集） | **是** |
 | D. 验证 | 2 | 0 | 是 |
 
 ---
@@ -106,8 +106,8 @@ generation: data[KVCacheQuantMode][num_heads][batch][isl + step]
 | C1 | `gemm_perf.txt` | ✅ 已有 | 覆盖 R1 线性层维度 |
 | C2 | `moe_perf.txt` | ✅ 已有 | `GroupedMatmul_MoE_*.csv` 已含 256 experts / topk 8 / 7168 / 2048 |
 | C3 | `custom_allreduce_perf.txt`、`nccl` | ✅ 已有 | 通信 |
-| C4 | `context_mla_perf.txt` / `generation_mla_perf.txt` | ⬜ **待采集** | R1 唯一缺口 |
-| C5 | `mla_bmm_perf.txt` | ⬜ 待采集 | 仅 generation 的 bmm pre/post 使用；缺失时 HYBRID 走 SOL 估算 |
+| C4 | `context_mla_perf.txt` / `generation_mla_perf.txt` | ✅ 已采集 | context 224 点 + generation 256 点 |
+| C5 | `mla_bmm_perf.txt` | ⬜ 待采集 | 仅 generation 的 bmm pre/post 使用；采集脚本 `collect_mla_bmm.py` 已就绪，缺失时 HYBRID 走 SOL 估算 |
 
 #### C4 采集命令（在 NPU 机器上执行）
 
@@ -160,6 +160,19 @@ python collector/npu/collect_mla.py \
   --kv-cache-dtype float16 \
   --output-dir ./data/dsr1_mla_gen \
   --resume
+
+python collector/npu/collect_mla.py \
+  --output-format mla \
+  --architecture DeepseekV3ForCausalLM \
+  --model deepseek-ai/DeepSeek-R1 \
+  --op-types generation \
+  --batch-list 1 2 4 8 16 32 64 128 256 \
+  --seq-len-list 128 256 512 1024 2048 4096 8192 16384 32768 \
+  --num-heads-list 128 64 32 16 \
+  --kv-lora-rank 512 --qk-nope-head-dim 128 --qk-rope-head-dim 64 --v-head-dim 128 \
+  --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
+  --mla-dtype float16 --kv-cache-dtype float16 \
+  --output-dir ./data/dsr1_mla_gen
 ```
 
 要点：
@@ -243,6 +256,72 @@ python tools/convert_to_aiconfigurator.py \
 
 > `--mla-output` 取值：`dsa`（默认，V3.2/GLM-5 模块表）/ `mla`（V3/R1 内核表）/ `both` / `none`。
 
+#### C5：`mla_bmm_perf.txt`（MLA decode 的两个 batched 投影）
+
+**它测什么**：MLA decode 的「未吸收（non-absorbed）」路径中两个 batched GEMM：
+
+| `op_name` | 计算 | 形状（V3/R1：`kv_lora_rank=512`、`head_dim=128`） |
+|---|---|---|
+| `mla_gen_pre` | `kv_c @ W_uk` | `[H, T, 512] @ [H, 512, 128]` → `[H, T, 128]` |
+| `mla_gen_post` | `attn_out @ W_uv` | `[H, T, 128] @ [H, 128, 512]` → `[H, T, 512]` |
+
+只在 **generation（decode）** 路径使用（`models.py:1436` / `1449`），context/prefill 没有它。
+索引结构为 `data[GEMMQuantMode][op_name][num_heads][num_tokens]`。
+
+**缺失时的影响**：
+
+| 模式 | 行为 |
+|---|---|
+| `SILICON` | `self._mla_bmm_data.raise_if_not_loaded()` → 抛异常，跑不了 |
+| `HYBRID` | `get_empirical` = `SOL / 0.8`（`perf_database.py:5190-5192`） |
+
+量级参考：batch=128 / heads=128 时两个 BMM 合计约 47 µs/层，占单层 decode 的百分之几。
+**HYBRID 下不采也能跑**，但要 SILICON 精度（或提高 TPOT 预测准确度）就必须采。
+
+**采集命令**（`collector/npu/collect_mla_bmm.py`）：
+
+```bash
+python collector/npu/collect_mla_bmm.py \
+  --num-tokens-list 1 2 4 8 16 32 64 128 256 \
+  --num-heads-list 128 64 32 16 \
+  --kv-lora-rank 512 \
+  --head-dim 128 \
+  --op-types pre post \
+  --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
+  --bmm-dtype float16 \
+  --output-dir ./data/dsr1_mla_bmm
+```
+
+2 op × 9 tokens × 4 heads = 72 个点。纯 GEMM，没有 attention 那类 tiling 坑，一两分钟可完成。
+建议先冒烟 4 个点：
+
+```bash
+python collector/npu/collect_mla_bmm.py \
+  --num-tokens-list 1 128 --num-heads-list 128 \
+  --warmup-iters 1 --bench-iters 3 \
+  --output-dir ./data/dsr1_mla_bmm_smoke
+```
+
+**要点**：
+
+- `--num-tokens-list` 是**唯一被插值**的轴（decode 并发），要覆盖实际查询的 batch。
+- `--num-heads-list` 是精确 key，必须含 `128 // tp_size` = `128 / 64 / 32 / 16`。
+- `op_name` 只能是 `mla_gen_pre` / `mla_gen_post` —— `query_mla_bmm()` 里写死，不能改。
+- `--bmm-dtype` 目前仅 `float16`（实测走 bf16）。`--gemm-quant-mode w8a8_dynamic` 下
+  `mla_bmm_quant_mode` 会变成 `fp8`，此时 `query_mla_bmm()` 有 fallback
+  （`quant_mode_lookup = quant_mode if quant_mode in data else float16`），能跑但按 bf16 估。
+- 支持 `--resume` 续跑，checkpoint 为 `mla_bmm_checkpoint.json`。
+
+**落位**：
+
+```bash
+cp ./data/dsr1_mla_bmm/mla_bmm_perf.txt \
+   src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0/
+```
+
+补齐后 `0.23.0/` 共 8 张表（`gemm` / `moe` / `context_attention` / `generation_attention` /
+`custom_allreduce` / `context_mla` / `generation_mla` / `mla_bmm`），**SILICON 模式即可直接使用**。
+
 ### D 类：验证（需 NPU/运行环境）
 
 | # | 任务 | 命令 |
@@ -305,9 +384,11 @@ results.print_pareto_table()
 2. **MTP 已建模**：`num_nextn_predict_layers=1` 由 `_mtp_scale_factor` 处理，无需额外配置。
 3. **W8A8 在 decode 更慢**：小 M（≤128）时 W8A8 比 BF16 慢约 30%
    （详见 `docs/GLM5_ADAPTATION_DESIGN.md` 8.3）。建议 decode 用 `float16`，prefill 再开 `w8a8_dynamic`。
-4. **`mla_bmm_perf.txt` 无采集脚本**：目前没有对应的 collector；
-   在 HYBRID 模式下由 SOL 估算（`query_mla_bmm()` 的 `get_sol`），SILICON 模式仍会报错。
-   若需要 SILICON 精度，需补一个 BMM 采集（`op_name` 必须是 `mla_gen_pre` / `mla_gen_post`）。
+4. **`mla_bmm_perf.txt` 尚未采集**：采集脚本 `collector/npu/collect_mla_bmm.py` 已就绪，
+   但还没在硬件上跑过（脚本本身也未经验证）。缺表时 HYBRID 由 SOL 估算
+   （`query_mla_bmm()` 的 `get_empirical` = `SOL / 0.8`），SILICON 模式会报错。
+   采集方式见 **C5**。另外 `--bmm-dtype` 目前只支持 `float16`，W8A8 配置下这两个投影
+   会 fallback 到 bf16 估算。
 5. **MoE 并行约束**：vllm-ascend 不支持同时按 TP 和 EP 切分 MoE 权重
    （`sdk/utils.py:enumerate_parallel_config()`），R1 只能选纯 TEP / 纯 DEP / 纯 TP。
 
