@@ -1,0 +1,156 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/27.0.9 Chrome/134.0.6998.205 Electron/35.4.0 Safari/537.36" version="27.0.9">
+  <diagram name="2.2-功能模块" id="aic-func-modules">
+    <mxGraphModel dx="2329" dy="1313" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1620" pageHeight="1300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="3" value="aic-npu default --model-path /workspace/model_configs/qwen_3_8_config.json  --total-gpus 8 --system ascend_910b --backend vllm-ascend --database-mode HYBRID --isl 128 --osl 128 --ttft 1600 --tpot 60 --top-n 10 --save-dir results" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2d2d2d;strokeColor=#000000;fontColor=#7fdb7f;fontSize=12;fontFamily=Courier New;align=left;spacingLeft=12;" parent="1" vertex="1">
+          <mxGeometry x="40" y="62" width="1540" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#555555;endArrow=blockThin;endFill=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="3" target="5" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="&lt;b&gt;M1 CLI 参数解析&lt;/b&gt;&lt;br&gt;&lt;i&gt;cli/main.py&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=left;spacingLeft=10;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="40" y="160" width="380" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="default / disagg 子命令注册" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="210" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="参数校验（total-gpus / sys-tp-size 整除性）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="258" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="TaskConfig 构建（agg 实验）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="306" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="配置叠层工厂&#xa;base → agg-defaults → profile → finalize" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="354" width="344" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#555555;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="5" target="11" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="&lt;b&gt;M2 模型解析与建模&lt;/b&gt;&lt;br&gt;&lt;i&gt;sdk/utils.py + models.py&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=left;spacingLeft=10;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="450" y="160" width="380" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="HF config.json 解析（layers/hidden/heads/kv）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="210" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="架构映射：Qwen3ForCausalLM → LLAMA family" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="258" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="QK-Norm 标记（use_qk_norm=True）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="306" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="LLAMAModel 算子图构建&#xa;Embedding / QKV / Attn / Proj / FFN / Logits" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="354" width="344" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#555555;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="11" target="17" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="17" value="&lt;b&gt;M3 并行配置拆解&lt;/b&gt;&lt;br&gt;&lt;i&gt;sdk/utils.py&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=left;spacingLeft=10;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="860" y="160" width="380" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="18" value="五元组 [tp, pp, dp, moe_tp, moe_ep]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="210" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="19" value="Qwen3-8B 非 MoE：TP∈{1,2,4,8}，PP=DP=1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="258" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="20" value="合法性校验（num_heads % tp == 0）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="306" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="total-gpus=8 预算裁剪&#xa;num_gpu_per_worker ∩ {1,2,4,8}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="354" width="344" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#555555;endArrow=blockThin;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="5" target="23" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="230" y="500" />
+              <mxPoint x="230" y="520" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="23" value="&lt;b&gt;M4 性能估算引擎&lt;/b&gt;&lt;br&gt;&lt;i&gt;sdk/perf_database.py + inference_session.py&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=left;spacingLeft=10;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="40" y="520" width="380" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="24" value="DatabaseMode=HYBRID（实测优先 + SOL 兜底）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="570" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="25" value="GEMM / Attention / MoE 查表插值" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="618" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="26" value="AllReduce / NCCL 通信估算" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="666" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="27" value="TTFT≤1600ms / TPOT≤60ms 校验 · 显存 OOM 检查" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="58" y="714" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#555555;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="23" target="29" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="29" value="&lt;b&gt;M5 Pareto 选型&lt;/b&gt;&lt;br&gt;&lt;i&gt;sdk/pareto_analysis.py + picking.py&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=left;spacingLeft=10;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="450" y="520" width="380" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="30" value="batch / concurrency 扫描 [1..512]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="570" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="31" value="SLA 硬过滤（ttft≤1600 · tpot≤60）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="618" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="32" value="Pareto 前沿提取（user 效率 × gpu 效率）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="666" width="344" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="33" value="pick_default：固定 8 卡最大化吞吐&#xa;top-n=10，按并行组去重" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="468" y="714" width="344" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="34" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#555555;endArrow=blockThin;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="29" target="35" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="35" value="&lt;b&gt;M6 结果输出与部署生成&lt;/b&gt;&lt;br&gt;&lt;i&gt;cli/report_and_save.py + generator/&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=left;spacingLeft=10;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="860" y="520" width="380" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="36" value="best_config_topn.csv" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="570" width="344" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="37" value="pareto.csv + pareto_frontier.png" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="614" width="344" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="38" value="exp_config.yaml（可复现实验）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="658" width="344" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="39" value="top1..top10 / generator_config.yaml" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="702" width="344" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="40" value="backend artifacts（vLLM 部署配置）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;" parent="1" vertex="1">
+          <mxGeometry x="878" y="746" width="344" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="输出物&#xa;Output Files" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;align=center;spacingTop=6;" parent="1" vertex="1">
+          <mxGeometry x="1290" y="160" width="290" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="best_config_topn.csv&#xa;&lt;i&gt;top-10 推荐部署配置&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=12;align=left;spacingLeft=10;" parent="1" vertex="1">
+          <mxGeometry x="1310" y="230" width="250" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="pareto.csv&#xa;&lt;i&gt;完整 Pareto 前沿点集&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=12;align=left;spacingLeft=10;" parent="1" vertex="1">
+          <mxGeometry x="1310" y="314" width="250" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="44" value="pareto_frontier.png&#xa;&lt;i&gt;吞吐-效率 Pareto 散点图&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=12;align=left;spacingLeft=10;" parent="1" vertex="1">
+          <mxGeometry x="1310" y="398" width="250" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="45" value="exp_config.yaml&#xa;&lt;i&gt;可复现实验配置&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=12;align=left;spacingLeft=10;" parent="1" vertex="1">
+          <mxGeometry x="1310" y="482" width="250" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="46" value="top1..top10/generator_config.yaml&#xa;&lt;i&gt;部署生成配置 + backend artifacts&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=12;align=left;spacingLeft=10;" parent="1" vertex="1">
+          <mxGeometry x="1310" y="566" width="250" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="47" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d6b656;endArrow=blockThin;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="35" target="41" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="48" value="&lt;b&gt;拆解能力摘要&lt;/b&gt;　Qwen3-8B（dense · 36 层 · hidden 4096 · GQA 32/8） + 8 × Ascend 910B&#xa;&#xa;&lt;b&gt;搜索空间&lt;/b&gt;　并行 TP∈{1,2,4,8} 共 4 组　×　batch/concurrency 1-512　×　tpot 网格（1-19 步1，20-295 步5）　≈ 数千候选点&#xa;&#xa;&lt;b&gt;过滤与输出&lt;/b&gt;　SLA 硬过滤（ttft ≤ 1600 ms · tpot ≤ 60 ms） + OOM 剔除　→　Pareto 前沿　→　pick_default 按 8 卡预算取 &lt;b&gt;top-10&lt;/b&gt; 最优部署配置" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef3fb;strokeColor=#6c8ebf;strokeWidth=2;align=left;spacingLeft=14;spacingTop=10;verticalAlign=top;fontSize=12;" parent="1" vertex="1">
+          <mxGeometry x="40" y="860" width="1540" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="49" value="图例：蓝=M1 CLI　绿=M2 建模　橙=M3 并行　紫=M4 估算　红=M5 选型　灰=M6 输出　黄=输出物" style="text;html=1;fontSize=11;align=center;fontColor=#555555;" parent="1" vertex="1">
+          <mxGeometry x="40" y="1010" width="1540" height="24" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
