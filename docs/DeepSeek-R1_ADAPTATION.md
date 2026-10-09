@@ -111,45 +111,133 @@ generation: data[KVCacheQuantMode][num_heads][batch][isl + step]
 
 #### C4 采集命令（在 NPU 机器上执行）
 
+> 镜像基线是 `quay.io/ascend/vllm-ascend:v0.23.0.post1`，所以 `--version` 写 `0.23.0`，
+> 数据也落到 `0.23.0/` 目录（见下面的「0.23 数据落位」）。
+
+R1 维度：`128 heads / kv_lora_rank 512 / qk_nope 128 / qk_rope 64 / v_head 128`。
+
+**Context 与 generation 必须分开跑** —— 两者显存模型完全不同：prefill 的输入是
+`batch × seq × heads × dim`，`batch=128, seq=8192` 会到数十 GB 直接 OOM；decode 的
+输入是 `batch × heads` 加上 KV block，占用低，可以跑满默认范围。
+
 ```bash
-# R1 维度：128 heads / kv_lora_rank 512 / qk_nope 128 / qk_rope 64 / v_head 128
+# 1) context（prefill）—— 限制 batch×seq 防止 OOM
 python collector/npu/collect_mla.py \
   --output-format mla \
   --architecture DeepseekV3ForCausalLM \
+  --model deepseek-ai/DeepSeek-R1 \
+  --op-types context \
+  --batch-list 1 2 4 8 16 32 \
+  --seq-len-list 128 256 512 1024 2048 4096 8096 \
   --num-heads-list 128 64 32 16 \
   --kv-lora-rank 512 \
   --qk-nope-head-dim 128 \
   --qk-rope-head-dim 64 \
   --v-head-dim 128 \
   --framework vllm-ascend \
-  --version 0.18.0 \
+  --version 0.23.0 \
   --device "Ascend 910B" \
   --mla-dtype float16 \
   --kv-cache-dtype float16 \
-  --output-dir ./data/dsr1_mla
+  --output-dir ./data/dsr1_mla_ctx \
+  --resume
 
-# 拷贝到性能数据库目录
-cp data/dsr1_mla/context_mla_perf.txt \
-   src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.18.0/
-cp data/dsr1_mla/generation_mla_perf.txt \
-   src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.18.0/
+# 2) generation（decode）—— 显存占用低，可跑满默认范围
+python collector/npu/collect_mla.py \
+  --output-format mla \
+  --architecture DeepseekV3ForCausalLM \
+  --model deepseek-ai/DeepSeek-R1 \
+  --op-types generation \
+  --num-heads-list 128 64 32 16 \
+  --kv-lora-rank 512 \
+  --qk-nope-head-dim 128 \
+  --qk-rope-head-dim 64 \
+  --v-head-dim 128 \
+  --framework vllm-ascend \
+  --version 0.23.0 \
+  --device "Ascend 910B" \
+  --mla-dtype float16 \
+  --kv-cache-dtype float16 \
+  --output-dir ./data/dsr1_mla_gen \
+  --resume
 ```
 
-`--num-heads-list` 需要覆盖 `128 // tp_size`，即 TP=1/2/4/8 分别对应 128/64/32/16。
+要点：
+
+- `--num-heads-list` 要覆盖 `128 // tp_size`，即 TP=1/2/4/8 对应 128/64/32/16。
+- `--model` 默认值就是 `deepseek-ai/DeepSeek-R1`，显式写出来便于切换；它只用于构造
+  合成 `VllmConfig`（只读 config、不加载权重），要求 `model_configs/` 下有缓存。
+- 两个阶段要用**不同输出目录**：`mla_checkpoint.json` 是单文件 checkpoint，同目录
+  分两批跑会互相覆盖已完成记录。
+- 参数是**空格**分隔（`nargs="+"`），写成 `1,2` 会报 `invalid int value`。
+- `--resume` 支持中断续跑；失败的 spec 不写入 checkpoint，修好后会重跑。
+
+#### MLA 表的插值要求（决定采集网格）
+
+`query_context_mla()` / `query_generation_mla()` 都走 `_interp_3d()`，即**三维插值**，
+三个轴全部参与：
+
+| 阶段 | 调用 | 轴顺序 | 插值方式 |
+|------|------|--------|---------|
+| context | `_interp_3d(num_heads, full_s, b, data, "cubic")` | num_heads / seq / batch | cubic |
+| generation | `_interp_3d(num_heads, b, s, data, "bilinear")` | num_heads / batch / seq | bilinear |
+
+由此推出采集网格的硬约束：
+
+1. **`num_heads` 也是插值轴**，不是附属维度。`DeepSeekModel` 查的是 `128 // tp_size`
+   （见 `models.py:ContextMLA/GenerationMLA`），所以必须采集 `128 / 64 / 32 / 16`
+   对应 TP=1/2/4/8；每个轴上至少 2 个采样点。
+2. **不能外推**：`_nearest_1d_point_helper()` 默认 `inner_only=True`，查询点落在采集
+   范围之外会直接 `raise ValueError`。网格必须**覆盖**实际查询范围。
+3. **context 用 cubic**（`scipy.interpolate.griddata(method="cubic")`）：只用矩形四角
+   时精度很差甚至产生 NaN，每个 `num_heads` 下的 `(seq, batch)` 网格建议至少 3×3，
+   默认的 7×8 很充裕。
+4. **generation 用 bilinear**（`_bilinear_interpolation`）：2×2 网格即可成立，
+   但同样受约束 2 的覆盖要求。
+
+推荐网格（比默认更宽，覆盖大并发 / 长上下文场景）：
+
+| 轴 | 取值 |
+|----|------|
+| num_heads | `128 64 32 16` |
+| batch | `1 2 4 8 16 32 64 128`（并发更高时补 `256`） |
+| context seq | `128 256 512 1024 2048 4096 8192` |
+| generation seq | `128 256 512 1024 2048 4096 8192 16384`（长上下文补 `32768`） |
+
+> 采集脚本对每个 spec 都有 `try/except`，单点失败（含 OOM）只累加 error 并继续，
+> 不会中断整批。所以可以直接跑满网格，跑完再统计缺哪些点、按需补采。
+
+#### 0.23 数据落位
+
+镜像里实际是 vllm-ascend 0.23.0，但仓库性能库当前只有 `0.18.0/` 目录。需要新建
+`0.23.0/` 并把已有数据平移过去（加载时不校验文件内 `version` 列，只按目录定位）：
+
+```bash
+cd src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend
+mkdir -p 0.23.0 && cp 0.18.0/*.txt 0.23.0/
+
+cp data/dsr1_mla_ctx/context_mla_perf.txt 0.23.0/
+cp data/dsr1_mla_gen/generation_mla_perf.txt 0.23.0/
+```
+
+同时把 `support_matrix.csv` 的 `Version` 列改为 `0.23.0`（`check_support()` 按
+Version 精确匹配）。注意 `get_latest_database_version()` 会选最新版本，建了 `0.23.0/`
+后它就是默认版本，务必保证该目录数据完整。
 
 #### C4 备选：先采 TensorCast CSV 再转换
 
 ```bash
 python collector/npu/collect_mla.py \
   --architecture DeepseekV3ForCausalLM \
+  --model deepseek-ai/DeepSeek-R1 \
   --num-heads-list 128 64 32 16 \
   --kv-lora-rank 512 --qk-nope-head-dim 128 --qk-rope-head-dim 64 --v-head-dim 128 \
   --output-dir ./data/dsr1_mla_raw
 
 python tools/convert_to_aiconfigurator.py \
   --input-dir ./data/dsr1_mla_raw \
-  --output-dir ./src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.18.0 \
-  --device "Ascend 910B" --framework vllm-ascend --version 0.18.0 \
+  --output-dir ./src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0 \
+  --device "Ascend 910B" --framework vllm-ascend --version 0.23.0 \
   --mla-output mla
 ```
 
@@ -225,7 +313,30 @@ results.print_pareto_table()
 
 ---
 
-## 5. 与 GLM-5 适配的差异
+## 5. vllm-ascend 0.23.0 兼容性修复记录
+
+`collector/npu/mla_factory.py` 原本是照 vllm-ascend 0.18 写的，在 0.23.0 上采集会
+连续触发四个问题。修复后 context / generation 两条路径均已冒烟通过。
+
+| # | 现象 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | `AttributeError: 'MockConfig' object has no attribute 'tensor_parallel_size'` | 0.23 的 `AscendConfig.__init__` 新增 `get_flashcomm2_config_and_validate()`，读 `parallel_config.tensor_parallel_size` | 见 2（逐个补 mock 属性是打地鼠，直接换真实 config） |
+| 2 | `...no attribute 'enforce_eager'` / `'runner_type'` | `AscendConfig.__init__`、`platform.set_additional_forward_context`、`VllmConfig.use_v2_model_runner` 多处读真实 `ModelConfig` | 放弃手工 `MockConfig`，改用真实 `VllmConfig`（复用 `mla_module_factory._create_npu_vllm_config`） |
+| 3 | `TypeError: AscendMLAMetadata.__init__() missing 1 required positional argument: 'seq_lens_cpu'` | 0.23 给 `AscendMLAMetadata` 新增必填字段 `seq_lens_cpu` | `_ascend_mla_metadata_extra()`：用 `inspect.signature` 探测，仅在字段存在时补（兼容 0.18） |
+| 4 | `ERR01001 ... atten mask ... has incorrect shape [1024,1024]` / `[8192,8192]` | CANN 的 `sparse_mode=3` 只接受 `[2048,2048]`、`[1,2048,2048]`、`[1,1,2048,2048]`，**且该形状与 seq_len 无关** | `_make_causal_mask()`：固定 2048×2048 上三角 mask 并缓存 |
+
+补充观察：
+
+- 问题 4 曾出现过"部分点能出结果"的假象：`DEFAULT_SEQ_CONTEXT` 里只有 `seq_len=2048`
+  这一档恰好构造出 `[2048,2048]` 而通过了校验，其余全部 reject。
+- `_forward_decode` 在 0.23 里把 `sparse_mode = 0` 和 `attn_mask = None` **写死**，
+  并不读 `metadata.attn_mask`；decode 侧传的 mask 当前未被 kernel 使用。保留它是为了
+  避免 `None` 在其它路径下触发 `ERR01001`，且语义上无害（decode 的 query 长度为 1，
+  能看到全部历史 KV）。
+- 采集过程中若 NPU 被其它进程占用，会出现 `std::logic_error` + `Aborted (core dumped)`。
+  这是环境问题而非代码问题，采集前先确认卡空闲。
+
+## 6. 与 GLM-5 适配的差异
 
 | 维度 | GLM-5 / V3.2 | DeepSeek-R1 / V3 |
 |------|-------------|-----------------|
@@ -238,7 +349,7 @@ results.print_pareto_table()
 
 ---
 
-## 6. 参考资料
+## 7. 参考资料
 
 - 模型族映射：`src/aiconfigurator_npu/sdk/common.py:ARCHITECTURE_TO_MODEL_FAMILY`
 - 模型实现：`src/aiconfigurator_npu/sdk/models.py:DeepSeekModel`

@@ -5,6 +5,7 @@ vllm_ascend.attention.mla_v1.AscendMLAImpl:
   - Decode:  npu_fused_infer_attention_score_v2  (BNSD_NBSD layout)
   - Prefill: npu_fused_infer_attention_score     (TND layout)
 """
+import inspect
 import logging
 import math
 from dataclasses import dataclass
@@ -72,53 +73,143 @@ def _dry_run(forward: Callable, spec: MlaSpec, phase: str) -> None:
 _forward_ctx_initialized = False
 _ctx_refs = []
 
+# Real HF config that backs the synthetic VllmConfig. vllm / vllm-ascend
+# >= 0.23 read ModelConfig fields (enforce_eager, runner_type, ...) while
+# wiring the forward context, so a real ModelConfig is required. Only the
+# config is consumed -- no weights are loaded, so this choice does not affect
+# the measured shapes.
+_config_model = "deepseek-ai/DeepSeek-R1"
+_MAX_MODEL_LEN = 131072
+
+
+def set_config_model(model_name: str) -> None:
+    """Select which cached HF config backs the synthetic VllmConfig."""
+    global _config_model
+    _config_model = model_name
+
+
+def _build_vllm_config():
+    """Build a real VllmConfig for the standalone MLA kernel benchmark.
+
+    Reuses mla_module_factory's builder so collect_mla.py and
+    collect_mla_module.py share the same real ModelConfig / ParallelConfig /
+    SchedulerConfig path (see mla_module_factory._create_npu_vllm_config).
+    A hand-rolled mock config is no longer viable on vllm-ascend >= 0.23.
+    """
+    from mla_module_factory import _create_npu_vllm_config, _resolve_model_path
+
+    vllm_config = _create_npu_vllm_config(
+        model_name=_resolve_model_path(_config_model),
+        max_model_len=_MAX_MODEL_LEN,
+        block_size=BLOCK_SIZE,
+        num_kv_cache_blocks=1,
+        max_num_seqs=1,
+        max_num_batched_tokens=_MAX_MODEL_LEN,
+    )
+
+    # AscendMLAImpl reads these off the config. Keep the explicit values the
+    # 0.18-era mock provided: a real SpeculativeConfig would require a draft
+    # model, which a kernel-level benchmark does not need.
+    class MockConfig:
+        pass
+
+    speculative_config = MockConfig()
+    speculative_config.num_speculative_tokens = 4
+    speculative_config.disable_padded_drafter_batch = False
+    vllm_config.speculative_config = speculative_config
+
+    quant_config = MockConfig()
+    quant_config.enabling_fa_quant = lambda *args: False
+    vllm_config.quant_config = quant_config
+
+    vllm_config.kv_transfer_config = None
+    vllm_config.additional_config = {}
+    return vllm_config
+
+
 def _ensure_forward_context() -> None:
     global _forward_ctx_initialized
     if _forward_ctx_initialized:
         return
     try:
-        from vllm.config import VllmConfig, set_current_vllm_config, ModelConfig
+        from vllm.config import set_current_vllm_config
         from vllm.forward_context import set_forward_context
-        from vllm_ascend.ascend_config import init_ascend_config
-
-        vllm_config = VllmConfig()
-        # Create minimal nested configs explicitly requested by AscendMLAImpl
-        class MockConfig: pass
-        model_config = MockConfig()
-        model_config.dtype = torch.bfloat16
-        
-        speculative_config = MockConfig()
-        speculative_config.num_speculative_tokens = 4
-        speculative_config.disable_padded_drafter_batch = False
-        
-        parallel_config = MockConfig()
-        parallel_config.prefill_context_parallel_size = 1
-        
-        quant_config = MockConfig()
-        quant_config.enabling_fa_quant = lambda *args: False
-        
-        vllm_config.model_config = model_config # type: ignore
-        vllm_config.speculative_config = speculative_config # type: ignore
-        vllm_config.parallel_config = parallel_config # type: ignore
-        vllm_config.quant_config = quant_config # type: ignore
-        vllm_config.kv_transfer_config = None # type: ignore
-        vllm_config.additional_config = {} # type: ignore
-        
-        init_ascend_config(vllm_config)
-        cfg_ctx = set_current_vllm_config(vllm_config)
-        cfg_ctx.__enter__()
-        _ctx_refs.append(cfg_ctx)
-
-        fwd_ctx = set_forward_context(attn_metadata=None, vllm_config=vllm_config)
-        fwd_ctx.__enter__()
-        _ctx_refs.append(fwd_ctx)
-
-        from vllm.forward_context import get_forward_context
-        ctx = get_forward_context()
-        ctx.capturing = False
-        _forward_ctx_initialized = True
     except ImportError as e:
-        logger.warning(f"Failed to initialize proper vllm context, depending on raw mocks: {e}")
+        logger.warning(f"vllm unavailable, cannot initialize forward context: {e}")
+        return
+
+    vllm_config = _build_vllm_config()
+
+    cfg_ctx = set_current_vllm_config(vllm_config)
+    cfg_ctx.__enter__()
+    _ctx_refs.append(cfg_ctx)
+
+    fwd_ctx = set_forward_context(attn_metadata=None, vllm_config=vllm_config)
+    fwd_ctx.__enter__()
+    _ctx_refs.append(fwd_ctx)
+
+    from vllm.forward_context import get_forward_context
+
+    ctx = get_forward_context()
+    ctx.capturing = False
+    _forward_ctx_initialized = True
+
+
+# Ascend FIA only accepts this padded causal-mask shape for sparse_mode=3.
+_CAUSAL_MASK_SIZE = 2048
+_causal_mask_cache: dict[tuple[str, torch.dtype], torch.Tensor] = {}
+
+
+def _make_causal_mask(device: torch.device, dtype: torch.dtype = torch.int8) -> torch.Tensor:
+    """Padded upper-triangular causal mask for Ascend FIA (sparse_mode=3).
+
+    CANN accepts only the padded 2048 layouts and rejects everything else,
+    even for long sequences:
+
+        Parameter atten mask of FusedInferAttentionScore has incorrect shape
+        [8192, 8192]. Reason: The shape of atten mask must be [2048, 2048],
+        [1, 2048, 2048] or [1, 1, 2048, 2048], when the sparse mode is 3.
+
+    The kernel tiles longer sequences internally, so one 2048x2048 buffer is
+    valid for every seq_len. It is cached because it is identical for all
+    specs.
+    """
+    key = (str(device), dtype)
+    mask = _causal_mask_cache.get(key)
+    if mask is None:
+        mask = torch.triu(
+            torch.ones(_CAUSAL_MASK_SIZE, _CAUSAL_MASK_SIZE, dtype=dtype, device=device),
+            diagonal=1,
+        )
+        _causal_mask_cache[key] = mask
+    return mask
+
+
+def _ascend_mla_metadata_extra(spec: MlaSpec) -> dict[str, torch.Tensor]:
+    """Extra AscendMLAMetadata fields required by newer vllm-ascend builds.
+
+    vllm-ascend >= 0.23 makes ``seq_lens_cpu`` a required field (the CPU mirror
+    of ``seq_lens``). Older builds neither declare nor accept it, so probe the
+    constructor signature instead of hard-coding a version check.
+    """
+    try:
+        from vllm_ascend.attention.mla_v1 import AscendMLAMetadata
+    except ImportError:
+        return {}
+
+    try:
+        params = inspect.signature(AscendMLAMetadata).parameters
+    except (TypeError, ValueError):
+        return {}
+
+    if "seq_lens_cpu" not in params:
+        return {}
+
+    return {
+        "seq_lens_cpu": torch.tensor(
+            [spec.seq_len] * spec.batch, dtype=torch.int32, device="cpu"
+        )
+    }
 
 
 def _create_impl(spec: MlaSpec, device: torch.device):
@@ -206,7 +297,11 @@ def _create_generation_mla(
         max_seq_lens=spec.seq_len,
         seq_lens_list=[spec.seq_len] * spec.batch,
         actual_seq_lengths_q=[1] * spec.batch,
-        attn_mask=None,
+        # vllm-ascend 0.23's _forward_decode hard-codes sparse_mode=0 with
+        # attn_mask=None, so this buffer is currently unused by the kernel.
+        # Keep a valid padded mask anyway so that None never reaches FIA,
+        # which rejects an empty attn_mask with ERR01001 under sparse_mode=3.
+        attn_mask=_make_causal_mask(device),
         sin=None,
         cos=None,
         cp_seq_len=None
@@ -223,7 +318,8 @@ def _create_generation_mla(
         num_decode_tokens=spec.batch,
         num_prefills=0,
         attn_state=AscendAttentionState.DecodeOnly,
-        decode=decode_metadata
+        decode=decode_metadata,
+        **_ascend_mla_metadata_extra(spec),
     )
 
     def forward() -> torch.Tensor:
@@ -256,8 +352,10 @@ def _create_context_mla(
     from vllm_ascend.attention.attention_v1 import AscendAttentionState
 
     actual_seq_lengths_q = [(i + 1) * spec.seq_len for i in range(spec.batch)]
-    
-    attn_mask = torch.triu(torch.ones(spec.seq_len, spec.seq_len, dtype=torch.int8, device=device), diagonal=1)
+
+    # Must be the fixed 2048x2048 padded causal mask (see _make_causal_mask);
+    # a (seq_len, seq_len) buffer is rejected by CANN unless seq_len == 2048.
+    attn_mask = _make_causal_mask(device)
 
     prefill_metadata = AscendMLAPrefillMetadata(
         attn_mask=attn_mask,
@@ -283,7 +381,8 @@ def _create_context_mla(
         num_decode_tokens=0,
         num_prefills=spec.batch,
         attn_state=AscendAttentionState.PrefillNoCache,
-        prefill=prefill_metadata
+        prefill=prefill_metadata,
+        **_ascend_mla_metadata_extra(spec),
     )
 
     def forward() -> torch.Tensor:

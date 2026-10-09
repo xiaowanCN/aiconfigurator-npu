@@ -33,7 +33,13 @@ from mla_factory import (
     SUPPORTED_OP_TYPES,
     MlaSpec,
     create_mla_func,
+    set_config_model,
 )
+
+# Default HF config used to build the (synthetic) VllmConfig. Only the config
+# is read -- no weights are loaded, so it does not affect the measured shapes.
+# It must exist in model_configs/ for offline runs.
+DEFAULT_CONFIG_MODEL = "deepseek-ai/DeepSeek-R1"
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +449,14 @@ def parse_args() -> argparse.Namespace:
         help="Output directory for CSV files and checkpoint",
     )
     parser.add_argument(
+        "--model", type=str, default=DEFAULT_CONFIG_MODEL,
+        help=(
+            "HF model id or local path whose config backs the synthetic "
+            f"VllmConfig (default: {DEFAULT_CONFIG_MODEL}). Only the config is "
+            "read; a cached copy must exist in model_configs/ for offline runs."
+        ),
+    )
+    parser.add_argument(
         "--op-types", nargs="+", default=["context", "generation"],
         choices=["context", "generation"],
         help="Op types to benchmark",
@@ -539,6 +553,8 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    set_config_model(args.model)
 
     logger.info("Initializing vLLM context...")
     _init_vllm_context()
