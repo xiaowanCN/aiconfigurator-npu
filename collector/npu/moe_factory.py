@@ -33,6 +33,12 @@ QUANT_BF16 = "bf16"
 QUANT_W8A8_DYNAMIC = "w8a8_dynamic"
 SUPPORTED_QUANT_TYPES = (QUANT_BF16, QUANT_W8A8_DYNAMIC)
 
+# aclnnGroupedMatmulSwigluQuant (CANN fused gate+up GMM + SwiGLU + quant) only
+# supports the fused width N = 2 * intermediate_size up to 10240:
+#   "The current version does not support the scenario that N(...) is greater
+#    than 10240."
+GMM_SWIGLU_MAX_N = 10240
+
 
 @dataclass(frozen=True)
 class MoeSpec:
@@ -331,6 +337,101 @@ def _create_bf16_moe(
     return forward
 
 
+def _int8_act_quant_kwargs(quant_mlp_func) -> dict[str, torch.dtype]:
+    """Pin quant_apply_mlp's activation quantisation output to int8, if exposed.
+
+    vllm-ascend >= 0.23 derives the dynamic-quant output dtype from a quant
+    type selector. When the caller provides no quantisation metadata it picks
+    fp8, which the 910B kernel rejects outright:
+
+        ERR01002 / EZ1001: Tensor dynamicQuantParams.y not implemented for
+        DT_FLOAT8_E4M3FN, should be in dtype support list [DT_INT32, DT_INT8]
+
+    Probe the signature so older builds (no such parameter) keep working.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(quant_mlp_func).parameters
+    except (TypeError, ValueError):
+        return {}
+
+    for name in ("act_quant_type", "activation_quant_type", "dst_type", "quant_dtype"):
+        if name in params:
+            return {name: torch.int8}
+
+    logger.warning(
+        "quant_apply_mlp exposes no activation quant dtype parameter; on "
+        "vllm-ascend >= 0.23 this may default to fp8, which the 910B "
+        "dynamic-quant kernel does not support."
+    )
+    return {}
+
+
+def _gmm_swiglu_fusion_kwargs(quant_mlp_func, intermediate_size: int) -> dict[str, bool]:
+    """Ask quant_apply_mlp for its fused GMM + SwiGLU + quant path.
+
+    ``use_gmm_swiglu_quant_fusion = fusion and not dynamic_eplb``. Without
+    ``fusion`` the call falls through to the last branch, which prefers the
+    Triton ``swiglu_quant`` kernel -- and that kernel fails to compile on 910B
+    for the larger MoE shapes:
+
+        swiglu_quant.py:80: error: ub overflow, requires 1835008 bits while
+        1572064 bits available! ... Failed to run BiShengIR pipeline
+
+    The fused branch calls ``DeviceOperator.npu_grouped_matmul_swiglu_quant``
+    (CANN) instead, which is also what production vllm-ascend uses -- but that
+    op has its own hard ceiling on the fused gate+up width:
+
+        aclnnGroupedMatmulSwigluQuant A8W8: The current version does not
+        support the scenario that N(32768) is greater than 10240.
+
+    So keep the fused path only while ``2 * intermediate_size`` fits, and let
+    the unfused CANN fallback (see _disable_triton_swiglu_quant) handle the
+    rest. R1's inter=2048 gives N=4096, comfortably inside the limit.
+    """
+    import inspect
+
+    if 2 * intermediate_size > GMM_SWIGLU_MAX_N:
+        logger.info(
+            "intermediate_size=%d gives N=%d > %d; using the unfused CANN "
+            "swiglu+quant path for this shape",
+            intermediate_size, 2 * intermediate_size, GMM_SWIGLU_MAX_N,
+        )
+        return {}
+
+    try:
+        params = inspect.signature(quant_mlp_func).parameters
+    except (TypeError, ValueError):
+        return {}
+
+    if "fusion" in params:
+        return {"fusion": True}
+
+    logger.warning(
+        "quant_apply_mlp exposes no `fusion` parameter; the Triton swiglu_quant "
+        "kernel may still be selected."
+    )
+    return {}
+
+
+def _disable_triton_swiglu_quant(moe_mlp_module) -> None:
+    """Route quant_apply_mlp's fallback branch to CANN instead of Triton.
+
+    The last branch reads the module-level ``HAS_TRITON`` flag and, when set,
+    imports ``vllm_ascend.ops.triton.activation.swiglu_quant``. On 910B that
+    kernel overflows the unified buffer at compile time and hard-fails. With
+    the flag cleared the same branch uses ``torch_npu.npu_swiglu`` +
+    ``torch_npu.npu_dynamic_quant``, which always works.
+
+    The flag is only consulted by that one branch, so the fused CANN path
+    (preferred when ``fusion=True`` is accepted) is unaffected.
+    """
+    if getattr(moe_mlp_module, "HAS_TRITON", False):
+        moe_mlp_module.HAS_TRITON = False
+        logger.info("Disabled Triton swiglu_quant; W8A8 MoE falls back to CANN swiglu+quant")
+
+
 def _create_w8a8_dynamic_moe(
     spec: MoeSpec, device: torch.device,
 ) -> Callable[[], torch.Tensor]:
@@ -348,7 +449,12 @@ def _create_w8a8_dynamic_moe(
     Pipeline: init_routing → quant_apply_mlp(w1, w2, scales) → token_unpermute
     """
     import torch_npu  # noqa: F401
+    from vllm_ascend.ops.fused_moe import moe_mlp as _moe_mlp
     from vllm_ascend.ops.fused_moe.moe_mlp import quant_apply_mlp
+
+    _act_quant_kwargs = _int8_act_quant_kwargs(quant_apply_mlp)
+    _fusion_kwargs = _gmm_swiglu_fusion_kwargs(quant_apply_mlp, spec.intermediate_size)
+    _disable_triton_swiglu_quant(_moe_mlp)
 
     _ensure_forward_context(num_tokens=spec.num_tokens)
     local_experts = spec.local_num_experts
@@ -415,7 +521,17 @@ def _create_w8a8_dynamic_moe(
             w2_scale=[w2_scale],
             group_list=group_list,
             group_list_type=1,
+            **_act_quant_kwargs,
+            **_fusion_kwargs,
         )
+
+        # vllm-ascend >= 0.23 returns a tuple from quant_apply_mlp (the MLP
+        # output plus its dynamic quant scale); older builds return the tensor
+        # directly. Feeding the tuple onward fails later with
+        # "npu:moe_token_unpermute() Expected a value of type 'Tensor' ...
+        #  but instead found type 'tuple'".
+        if isinstance(mlp_out, tuple):
+            mlp_out = mlp_out[0]
 
         # Pad MLP output back to num_tokens*topk rows for token_unpermute
         if local_token_count < total_token_count:
