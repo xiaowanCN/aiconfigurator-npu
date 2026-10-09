@@ -35,7 +35,7 @@ try:
 except ImportError:
     pass
 
-from bench_engine import BenchResult, benchmark_npu
+from bench_engine import BenchResult, benchmark_npu, describe_mode
 from gemm_factory import _init_vllm_context
 from moe_factory import (
     QUANT_BF16,
@@ -263,10 +263,9 @@ def run_benchmark(
             _, writer = csv_files[spec.quant_type]
             writer.writerow(row)
 
-            graph_tag = "graph" if result.used_graph else "eager"
             logger.info(
                 "%s -> %.2f us (avg of %d runs, %s)",
-                progress, result.avg_us, result.num_runs, graph_tag,
+                progress, result.avg_us, result.num_runs, describe_mode(result),
             )
         except Exception:
             logger.exception(

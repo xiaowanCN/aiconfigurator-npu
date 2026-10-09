@@ -35,7 +35,7 @@ try:
 except ImportError:
     pass
 
-from bench_engine import BenchResult, benchmark_npu
+from bench_engine import BenchResult, benchmark_npu, describe_mode
 from gemm_factory import (
     QUANT_BF16,
     QUANT_W8A8_DYNAMIC,
@@ -232,10 +232,9 @@ def run_benchmark(
             writer.writerow(row)
 
             single_us = result.avg_us / op_count
-            graph_tag = "graph" if result.used_graph else "eager"
             logger.info(
                 "%s -> %.2f us (avg of %d runs, %d ops/run, %s)",
-                progress, single_us, result.num_runs, op_count, graph_tag,
+                progress, single_us, result.num_runs, op_count, describe_mode(result),
             )
         except Exception:
             logger.exception("%s FAILED M=%d N=%d K=%d quant=%s", progress, spec.m, spec.n, spec.k, spec.quant_type)

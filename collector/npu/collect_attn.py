@@ -44,7 +44,7 @@ from attn_factory import (
     _resolve_kv_heads,
     create_attn_func,
 )
-from bench_engine import BenchResult, benchmark_npu
+from bench_engine import BenchResult, benchmark_npu, describe_mode
 from gemm_factory import _init_vllm_context
 
 logger = logging.getLogger(__name__)
@@ -261,10 +261,9 @@ def run_benchmark(
             _, writer = csv_files[spec.op_type]
             writer.writerow(row)
 
-            graph_tag = "graph" if result.used_graph else "eager"
             logger.info(
                 "%s -> %.2f us (avg of %d runs, %s)",
-                progress, result.avg_us, result.num_runs, graph_tag,
+                progress, result.avg_us, result.num_runs, describe_mode(result),
             )
         except Exception:
             logger.exception(
