@@ -296,11 +296,18 @@ def _create_generation_mla(
         seq_lens=torch.tensor([spec.seq_len] * spec.batch, dtype=torch.int32, device=device),
         max_seq_lens=spec.seq_len,
         seq_lens_list=[spec.seq_len] * spec.batch,
-        actual_seq_lengths_q=[1] * spec.batch,
-        # vllm-ascend 0.23's _forward_decode hard-codes sparse_mode=0 with
-        # attn_mask=None, so this buffer is currently unused by the kernel.
-        # Keep a valid padded mask anyway so that None never reaches FIA,
-        # which rejects an empty attn_mask with ERR01001 under sparse_mode=3.
+        # vllm-ascend routes through its spec-decode branch whenever
+        # vllm_config.speculative_config is set (we install a stub so that
+        # AscendMLAImpl can be constructed). That branch selects
+        # input_layout="TND_NTD", sparse_mode=3, and forwards this list
+        # verbatim as FIA's actual_seq_qlen -- which under TND must be
+        # *cumulative*, with its last element equal to the query T dim.
+        # A flat [1]*batch only satisfied that when batch == 1, which is why
+        # every other batch size failed tiling with
+        # "CheckTNDLayoutAndSeqLen: actual seqLenQ is not equal to the T".
+        actual_seq_lengths_q=list(range(1, spec.batch + 1)),
+        # The same branch feeds this straight into FIA's atten_mask, and
+        # sparse_mode=3 rejects an empty mask with ERR01001.
         attn_mask=_make_causal_mask(device),
         sin=None,
         cos=None,
