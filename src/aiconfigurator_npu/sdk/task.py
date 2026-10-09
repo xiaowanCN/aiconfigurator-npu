@@ -24,6 +24,34 @@ logger = logging.getLogger(__name__)
 DEFAULT_PREFILL_LATENCY_CORRECTION_SCALE = 1.1
 DEFAULT_DECODE_LATENCY_CORRECTION_SCALE = 1.08
 
+# Default parallel sweeps are hard-coded to workers of at most 8 GPUs.
+_EXTRA_SWEEP_POWERS = (16, 32, 64, 128, 256)
+
+
+def _widen_gpu_sweep_lists(worker_cfg: DefaultMunch, total_gpus: int) -> None:
+    """Widen the default <=8-GPU parallel sweep up to ``total_gpus``.
+
+    The default sweep enumerates tp/dp/moe sizes from [1, 2, 4, 8] only, and
+    ``--total-gpus`` merely filters those lists down. Large models (e.g.
+    DeepSeek-R1: ~671 GB of weights even at fp8) can never fit on any
+    <=8-GPU worker, so the search fails with "the model does not fit in GPU
+    memory for any parallel configuration" even when --total-gpus is large
+    enough -- dp only replicates, it does not shard weights.
+
+    Add the missing powers of two (16, 32, ...) up to total_gpus to every
+    sweep axis so larger tp/moe_ep shards become candidates. Invalid
+    combinations (e.g. tp > num_attention_heads on smaller models) are
+    skipped later by the per-config try/except in get_worker_candidates, so
+    widening cannot crash the search. pp stays disabled (see
+    should_enable_pp FIXME).
+    """
+    extra = [n for n in _EXTRA_SWEEP_POWERS if n <= total_gpus]
+    # moe_tp_list is deliberately not widened: vLLM-family backends pin expert
+    # TP (etp) to 1, and other backends keep their own backend-specific lists.
+    for key in ("num_gpu_per_worker", "tp_list", "dp_list", "moe_ep_list"):
+        existing = worker_cfg.get(key) or []
+        worker_cfg[key] = sorted({int(n) for n in existing} | set(extra))
+
 
 @dataclass(frozen=True)
 class ConfigLayer:
@@ -231,14 +259,16 @@ def build_disagg_parallel_lists(
             prefill_worker_config["tp_list"] = parallel_config_list
             prefill_worker_config["pp_list"] = parallel_config_list if should_enable_pp else [1]
             prefill_worker_config["dp_list"] = parallel_config_list
-            prefill_worker_config["moe_tp_list"] = parallel_config_list
+            # vLLM-family backends shard MoE expert weights by EP only --
+            # there is no separate expert TP (etp), so pin it to 1.
+            prefill_worker_config["moe_tp_list"] = [1]
             prefill_worker_config["moe_ep_list"] = parallel_config_list
 
             decode_worker_config["num_gpu_per_worker"] = parallel_config_list
             decode_worker_config["tp_list"] = parallel_config_list
             decode_worker_config["pp_list"] = parallel_config_list if should_enable_pp else [1]
             decode_worker_config["dp_list"] = parallel_config_list
-            decode_worker_config["moe_tp_list"] = parallel_config_list
+            decode_worker_config["moe_tp_list"] = [1]
             decode_worker_config["moe_ep_list"] = parallel_config_list
         else:
             raise ValueError(f"Invalid backend: {backend_name}")
@@ -419,7 +449,9 @@ class TaskConfigFactory:
                 worker_config["tp_list"] = [1, 2, 4, 8]
                 worker_config["pp_list"] = [1, 2, 4, 8] if should_enable_pp else [1]
                 worker_config["dp_list"] = [1, 2, 4, 8]
-                worker_config["moe_tp_list"] = [1, 2, 4, 8]
+                # vLLM-family backends shard MoE expert weights by EP only --
+                # there is no separate expert TP (etp), so pin it to 1.
+                worker_config["moe_tp_list"] = [1]
                 worker_config["moe_ep_list"] = [1, 2, 4, 8]
             else:
                 raise ValueError(f"Invalid backend: {ctx.backend_name}")
@@ -512,6 +544,7 @@ class TaskConfigFactory:
         if ctx.total_gpus is not None:
             if ctx.total_gpus < 0:
                 raise ValueError(f"total_gpus of agg must be no smaller than 0, got {ctx.total_gpus}")
+            _widen_gpu_sweep_lists(worker_config, ctx.total_gpus)
             worker_config.num_gpu_per_worker = [
                 num for num in worker_config.num_gpu_per_worker if num <= ctx.total_gpus
             ]
@@ -536,6 +569,10 @@ class TaskConfigFactory:
                 raise ValueError(f"total_gpus must be greater than 2 for disagg, got {ctx.total_gpus}")
             replica_cfg.max_gpu_per_replica = min(ctx.total_gpus, replica_cfg.get("max_gpu_per_replica"))
             logger.debug("Using max gpu per replica %s", replica_cfg.max_gpu_per_replica)
+            # Widen the <=8-GPU default sweep first (large models need tp/moe_ep
+            # shards beyond 8 GPUs per worker), then cap by total_gpus.
+            _widen_gpu_sweep_lists(prefill_cfg, ctx.total_gpus)
+            _widen_gpu_sweep_lists(decode_cfg, ctx.total_gpus)
             # Prefill/Decode num_gpu_per_worker should be strictly smaller than total_gpus
             prefill_cfg.num_gpu_per_worker = [num for num in prefill_cfg.num_gpu_per_worker if num <= ctx.total_gpus]
             logger.debug("Overwriting num gpu per prefill worker to %s", prefill_cfg.num_gpu_per_worker)

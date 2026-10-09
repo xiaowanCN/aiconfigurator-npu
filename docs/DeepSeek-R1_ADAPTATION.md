@@ -282,7 +282,7 @@ python tools/convert_to_aiconfigurator.py \
 
 ```bash
 python collector/npu/collect_mla_bmm.py \
-  --num-tokens-list 1 2 4 8 16 32 64 128 256 \
+  --num-tokens-list 1 2 4 8 16 32 64 128 256 512 1024 2048 \
   --num-heads-list 128 64 32 16 \
   --kv-lora-rank 512 \
   --head-dim 128 \
@@ -379,8 +379,8 @@ results.print_pareto_table()
 
 ## 4. 已知限制
 
-1. **`first_k_dense_replace=1` 未建模**：R1 第 0 层是 dense MLP（`intermediate_size=18432`），
-   `DeepSeekModel` 按全部 61 层均为 MoE 建模，误差约 1/61。
+1. **`first_k_dense_replace=3` 未建模**：R1 前 3 层是 dense MLP（`intermediate_size=18432`），
+   `DeepSeekModel` 按全部 61 层均为 MoE 建模，误差约 3/61。
 2. **MTP 已建模**：`num_nextn_predict_layers=1` 由 `_mtp_scale_factor` 处理，无需额外配置。
 3. **W8A8 在 decode 更慢**：小 M（≤128）时 W8A8 比 BF16 慢约 30%
    （详见 `docs/GLM5_ADAPTATION_DESIGN.md` 8.3）。建议 decode 用 `float16`，prefill 再开 `w8a8_dynamic`。
@@ -390,7 +390,19 @@ results.print_pareto_table()
    采集方式见 **C5**。另外 `--bmm-dtype` 目前只支持 `float16`，W8A8 配置下这两个投影
    会 fallback 到 bf16 估算。
 5. **MoE 并行约束**：vllm-ascend 不支持同时按 TP 和 EP 切分 MoE 权重
-   （`sdk/utils.py:enumerate_parallel_config()`），R1 只能选纯 TEP / 纯 DEP / 纯 TP。
+   （`sdk/utils.py:enumerate_parallel_config()`）。vLLM 系后端 MoE 专家权重只按 EP 切分，
+   不存在独立的专家 TP（etp），搜索空间中 `moe_tp_list` 已固定为 `[1]`
+   （agg 与 disagg 的 vllm/vllm-ascend 分支，`sdk/task.py`）。
+6. **大卡数部署（`--total-gpus > 8`）的搜索空间**：默认并行搜索硬编码为单 worker
+   最多 8 卡（`tp/dp/moe` 列表 `[1,2,4,8]`），`--total-gpus` 只做过滤不做扩展；
+   R1（fp8 权重约 671 GB）在 8×64 GB 上放不下，曾报
+   `the model does not fit in GPU memory for any parallel configuration`。
+   已在 `sdk/task.py` 的 `_widen_gpu_sweep_lists()` 修复：`total_gpus > 8` 时把各并行轴
+   扩展到相应的 2 的幂（16/32/64…）。注意 **MLA 表的 `num_heads` 覆盖**：
+   已采 `{128,64,32,16}` 对应 `tp ≤ 8`；`tp=16/32` 会查询 `heads=8/4`，
+   超出插值范围（`inner_only`）会被逐 config 跳过（warning）。32 卡部署仍可由
+   `tp=8 + dp×moe_ep` 组合覆盖（attention 按 8 切、MoE 按 16/32 切）；
+   如需 `tp≥16` 的候选，需补采 `--num-heads-list 8 4` 的 MLA 点。
 
 ---
 
