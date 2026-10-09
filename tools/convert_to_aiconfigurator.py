@@ -390,6 +390,93 @@ def convert_dsa_module(input_path: str, output_path_ctx: str, output_path_gen: s
     return total
 
 
+def convert_mla(input_path: str, output_path_ctx: str, output_path_gen: str,
+                device: str, framework: str, version: str) -> int:
+    """Convert FusedInferAttentionScore_MLA.csv → context_mla_perf.txt
+    and FusedInferAttentionScore_Decode_MLA.csv → generation_mla_perf.txt.
+
+    These are the kernel-level MLA tables consumed by the DEEPSEEK model family
+    (DeepSeek-V3 / DeepSeek-R1), as opposed to convert_dsa_module() which
+    produces the module-level tables for the DEEPSEEKV32 family
+    (DeepSeek-V3.2 / GLM-5).
+
+    The TensorCast MLA CSV must have been produced by collect_mla.py with the
+    Architecture column present.
+    """
+    ctx_rows: list[dict] = []
+    gen_rows: list[dict] = []
+
+    file_map = {
+        "FusedInferAttentionScore_MLA.csv": "context",
+        "FusedInferAttentionScore_Decode_MLA.csv": "generation",
+    }
+
+    for fname, phase in file_map.items():
+        fpath = os.path.join(input_path, fname)
+        if not os.path.exists(fpath):
+            print(f"  [skip] {fname} not found")
+            continue
+
+        with open(fpath, encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                batch = int(row["Batch"])
+                seq_len = int(row["Seq Len"])
+                num_heads = int(row["Num Heads"])
+                latency_ms = _us_to_ms(float(row["Average Duration(us)"]))
+
+                base = {
+                    "framework": framework,
+                    "version": version,
+                    "device": device,
+                    "op_name": "mla_context" if phase == "context" else "mla_generation",
+                    "mla_dtype": "float16",
+                    "kv_cache_dtype": "float16",
+                    "batch_size": batch,
+                    "num_heads": num_heads,
+                    "latency": latency_ms,
+                }
+
+                if phase == "context":
+                    base["isl"] = seq_len
+                    ctx_rows.append(base)
+                else:
+                    # decode: isl=1, step=seq_len-1 (total context = seq_len)
+                    base["isl"] = 1
+                    base["step"] = max(0, seq_len - 1)
+                    gen_rows.append(base)
+
+    total = 0
+
+    if ctx_rows:
+        os.makedirs(os.path.dirname(output_path_ctx), exist_ok=True)
+        ctx_fields = ["framework", "version", "device", "op_name", "mla_dtype",
+                      "kv_cache_dtype", "batch_size", "isl", "num_heads", "latency"]
+        with open(output_path_ctx, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=ctx_fields)
+            writer.writeheader()
+            writer.writerows(ctx_rows)
+        print(f"  context_mla_perf.txt: {len(ctx_rows)} rows")
+        total += len(ctx_rows)
+
+    if gen_rows:
+        os.makedirs(os.path.dirname(output_path_gen), exist_ok=True)
+        gen_fields = ["framework", "version", "device", "op_name", "mla_dtype",
+                      "kv_cache_dtype", "batch_size", "isl", "num_heads", "step",
+                      "latency"]
+        with open(output_path_gen, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=gen_fields)
+            writer.writeheader()
+            writer.writerows(gen_rows)
+        print(f"  generation_mla_perf.txt: {len(gen_rows)} rows")
+        total += len(gen_rows)
+
+    if not ctx_rows and not gen_rows:
+        print("  [warn] no MLA kernel rows converted")
+
+    return total
+
+
 def main():
     parser = argparse.ArgumentParser(description="Convert aiconfigurator-npu CSV data to aiconfigurator txt format")
     parser.add_argument("--input-dir", required=True, help="Input directory with TensorCast CSV files")
@@ -397,6 +484,15 @@ def main():
     parser.add_argument("--device", default="Ascend 910B", help="Device name string in output files")
     parser.add_argument("--framework", default="vllm-ascend", help="Framework name")
     parser.add_argument("--version", default="0.18.0", help="Framework version")
+    parser.add_argument(
+        "--mla-output", default="dsa", choices=["dsa", "mla", "both", "none"],
+        help=(
+            "Which attention tables to emit from the MLA TensorCast CSVs. "
+            "dsa: DEEPSEEKV32 module tables (DeepSeek-V3.2 / GLM-5, default); "
+            "mla: DEEPSEEK kernel-level tables (DeepSeek-V3 / R1); "
+            "both: emit both; none: skip."
+        ),
+    )
     args = parser.parse_args()
 
     print(f"Converting: {args.input_dir} → {args.output_dir}")
@@ -424,12 +520,21 @@ def main():
         args.device, args.framework, args.version,
     )
 
-    total += convert_dsa_module(
-        args.input_dir,
-        os.path.join(args.output_dir, "dsa_context_module_perf.txt"),
-        os.path.join(args.output_dir, "dsa_generation_module_perf.txt"),
-        args.device, args.framework, args.version,
-    )
+    if args.mla_output in ("dsa", "both"):
+        total += convert_dsa_module(
+            args.input_dir,
+            os.path.join(args.output_dir, "dsa_context_module_perf.txt"),
+            os.path.join(args.output_dir, "dsa_generation_module_perf.txt"),
+            args.device, args.framework, args.version,
+        )
+
+    if args.mla_output in ("mla", "both"):
+        total += convert_mla(
+            args.input_dir,
+            os.path.join(args.output_dir, "context_mla_perf.txt"),
+            os.path.join(args.output_dir, "generation_mla_perf.txt"),
+            args.device, args.framework, args.version,
+        )
 
     print(f"\nDone. Total rows written: {total}")
     print(f"Output: {args.output_dir}")

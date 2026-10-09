@@ -283,6 +283,8 @@ DefaultHFModels = {
     # DeepSeek V3/V3.1 Models
     "deepseek-ai/DeepSeek-V3",
     "nvidia/DeepSeek-V3.1-NVFP4",
+    # DeepSeek R1 Models (same architecture/dims as V3 -> DEEPSEEK family)
+    "deepseek-ai/DeepSeek-R1",
     # DeepSeek V3.2 / GLM-5 (DEEPSEEKV32 family)
     "deepseek-ai/DeepSeek-V3.2",
     "zai-org/GLM-5",
@@ -323,9 +325,12 @@ DefaultHFModels = {
 }
 
 """
-Supported systems (GPU types)
+Supported systems (GPU types and NPU types)
 """
 SupportedSystems = {
+    # Ascend NPU
+    "ascend_910b",
+    # NVIDIA GPU
     "h100_sxm",
     "h200_sxm",
     "b200_sxm",

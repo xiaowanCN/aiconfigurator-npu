@@ -52,7 +52,7 @@ The image is based on the official `quay.io/ascend/vllm-ascend:v0.18.0` base
 (CANN 8.5+ / torch-npu / vLLM 0.18.0 / vllm-ascend pre-installed) and contains
 `collector/`, `tools/`, `model_configs/` plus the search engine (`aic-npu` CLI).
 Offline mode is enabled by default (`HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`);
-the GLM-5 model config ships in `model_configs/`.
+the GLM-5, DeepSeek-V3 and DeepSeek-R1 model configs ship in `model_configs/`.
 
 ### Build via GitHub Actions (recommended)
 
@@ -115,4 +115,28 @@ python tools/check_vllm_compat.py
 # DSA module collection (GLM-5), see docs/DSA_COLLECTION_COMMANDS.md
 python collector/npu/collect_mla_module.py --mode context --quick \
   --batch-size 4 --seq-len 2048 --output-dir /workspace/data/glm5_dsa_module
+```
+
+## Model Support
+
+| Model | Architecture | Family | Attention perf data |
+|-------|--------------|--------|---------------------|
+| `deepseek-ai/DeepSeek-R1` | `DeepseekV3ForCausalLM` | `DEEPSEEK` | `context_mla_perf.txt` / `generation_mla_perf.txt` — pending collection |
+| `deepseek-ai/DeepSeek-V3` | `DeepseekV3ForCausalLM` | `DEEPSEEK` | same as R1 |
+| `zai-org/GLM-5` | `GlmMoeDsaForCausalLM` | `DEEPSEEKV32` | `dsa_*_module_perf.txt` — pending collection |
+| `Qwen/Qwen3-235B-A22B` | `Qwen3MoeForCausalLM` | `MOE` | ready (`*_attention_perf.txt`) |
+
+GEMM / MoE / communication tables for `ascend_910b` are already in
+`src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.18.0/`.
+
+DeepSeek-R1 reuses `DeepSeekModel` (same architecture and dimensions as V3), so no
+model code changes are needed — see `docs/DeepSeek-R1_ADAPTATION.md` for the full
+onboarding checklist and MLA collection commands.
+
+Until the MLA tables are collected, run the search in HYBRID mode so the attention
+ops fall back to the analytic (SOL) model:
+
+```bash
+aic-npu default --model deepseek-ai/DeepSeek-R1 --system ascend_910b \
+  --backend vllm --database-mode hybrid --total-gpus 16
 ```

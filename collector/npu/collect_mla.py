@@ -4,7 +4,8 @@ Adapted from AIConfigurator's collect_attn.py design with MLA specifics.
 
 Output formats:
   tensorcast  - TensorCast CSV (default, for archival and conversion)
-  dsa_module  - aiconfigurator DSA module perf .txt (direct integration)
+  dsa_module  - aiconfigurator DSA module perf .txt (DeepSeek-V3.2 / GLM-5)
+  mla         - aiconfigurator kernel-level MLA perf .txt (DeepSeek-V3 / R1)
 """
 
 import argparse
@@ -79,14 +80,29 @@ DSA_GENERATION_COLUMNS = [
     "kv_cache_dtype", "architecture", "step", "latency",
 ]
 
+# aiconfigurator kernel-level MLA perf .txt columns (DEEPSEEK family: V3 / R1)
+MLA_CONTEXT_COLUMNS = [
+    "framework", "version", "device", "op_name",
+    "mla_dtype", "kv_cache_dtype", "batch_size", "isl",
+    "num_heads", "latency",
+]
+MLA_GENERATION_COLUMNS = [
+    "framework", "version", "device", "op_name",
+    "mla_dtype", "kv_cache_dtype", "batch_size", "isl",
+    "num_heads", "step", "latency",
+]
+
 OUTPUT_FORMAT_TENSORCAST = "tensorcast"
 OUTPUT_FORMAT_DSA_MODULE = "dsa_module"
+OUTPUT_FORMAT_MLA = "mla"
 
 CHECKPOINT_FILE = "mla_checkpoint.json"
 
 # GLM-5 architecture identifier (matches aiconfigurator DSA_MODEL_DIMS key)
 ARCH_GLM5 = "GlmMoeDsaForCausalLM"
 ARCH_DSV3 = "DeepseekV32ForCausalLM"
+# DeepSeek-V3 / R1 architecture identifier (DEEPSEEK family, kernel-level MLA)
+ARCH_DSR1 = "DeepseekV3ForCausalLM"
 
 
 def _format_context_shapes(spec: MlaSpec) -> tuple[str, str]:
@@ -181,6 +197,43 @@ def _make_dsa_row(
         return base
 
 
+def _make_mla_row(
+    spec: MlaSpec,
+    result: BenchResult,
+    architecture: str,
+    framework: str,
+    version: str,
+    device: str,
+    mla_dtype: str,
+    kv_cache_dtype: str,
+) -> dict[str, str]:
+    """Build an aiconfigurator kernel-level MLA perf row from a benchmark result.
+
+    Target tables (consumed by perf_database.load_context_mla_data /
+    load_generation_mla_data):
+        context:    [FMHAQuantMode][KVCacheQuantMode][num_heads][isl][batch]
+        generation: [KVCacheQuantMode][num_heads][batch][isl + step]
+    """
+    latency_ms = result.avg_us / 1000.0
+    base = {
+        "framework": framework,
+        "version": version,
+        "device": device,
+        "op_name": "mla_context" if spec.op_type == OP_CONTEXT else "mla_generation",
+        "mla_dtype": mla_dtype,
+        "kv_cache_dtype": kv_cache_dtype,
+        "batch_size": str(spec.batch),
+        "isl": str(spec.seq_len),
+        "num_heads": str(spec.num_heads),
+        "latency": f"{latency_ms:.6f}",
+    }
+    if spec.op_type == OP_GENERATION:
+        # decode: isl=1, step=seq_len-1 (total context length = seq_len)
+        base["isl"] = "1"
+        base["step"] = str(max(0, spec.seq_len - 1))
+    return base
+
+
 def _spec_key(spec: MlaSpec) -> str:
     return (
         f"{spec.op_type}_{spec.batch}_{spec.seq_len}"
@@ -269,19 +322,30 @@ def run_benchmark(
                 writer.writeheader()
             csv_files[op_type] = (fh, writer)
     else:
-        dsa_filenames = {
-            OP_CONTEXT: "dsa_context_module_perf.txt",
-            OP_GENERATION: "dsa_generation_module_perf.txt",
-        }
-        dsa_columns = {
-            OP_CONTEXT: DSA_CONTEXT_COLUMNS,
-            OP_GENERATION: DSA_GENERATION_COLUMNS,
-        }
+        if output_format == OUTPUT_FORMAT_MLA:
+            # Kernel-level MLA tables for the DEEPSEEK family (DeepSeek-V3 / R1).
+            filenames = {
+                OP_CONTEXT: "context_mla_perf.txt",
+                OP_GENERATION: "generation_mla_perf.txt",
+            }
+            columns = {
+                OP_CONTEXT: MLA_CONTEXT_COLUMNS,
+                OP_GENERATION: MLA_GENERATION_COLUMNS,
+            }
+        else:
+            filenames = {
+                OP_CONTEXT: "dsa_context_module_perf.txt",
+                OP_GENERATION: "dsa_generation_module_perf.txt",
+            }
+            columns = {
+                OP_CONTEXT: DSA_CONTEXT_COLUMNS,
+                OP_GENERATION: DSA_GENERATION_COLUMNS,
+            }
         for op_type in op_types_in_specs:
-            csv_path = output_dir / dsa_filenames[op_type]
+            csv_path = output_dir / filenames[op_type]
             file_exists = csv_path.exists() and resume
             fh = open(csv_path, "a" if file_exists else "w", newline="", encoding="utf-8")
-            writer = csv.DictWriter(fh, fieldnames=dsa_columns[op_type])
+            writer = csv.DictWriter(fh, fieldnames=columns[op_type])
             if not file_exists:
                 writer.writeheader()
             csv_files[op_type] = (fh, writer)
@@ -313,6 +377,12 @@ def run_benchmark(
             )
             if output_format == OUTPUT_FORMAT_TENSORCAST:
                 row = _make_csv_row(spec, result, architecture)
+            elif output_format == OUTPUT_FORMAT_MLA:
+                row = _make_mla_row(
+                    spec, result, architecture,
+                    framework, version, device,
+                    mla_dtype, kv_cache_dtype,
+                )
             else:
                 row = _make_dsa_row(
                     spec, result, architecture,
@@ -417,15 +487,20 @@ def parse_args() -> argparse.Namespace:
     # Output format and metadata
     parser.add_argument(
         "--output-format", default=OUTPUT_FORMAT_TENSORCAST,
-        choices=[OUTPUT_FORMAT_TENSORCAST, OUTPUT_FORMAT_DSA_MODULE],
+        choices=[OUTPUT_FORMAT_TENSORCAST, OUTPUT_FORMAT_DSA_MODULE, OUTPUT_FORMAT_MLA],
         help=(
             "tensorcast: TensorCast CSV (for archival/conversion); "
-            "dsa_module: aiconfigurator DSA module perf .txt (direct integration)"
+            "dsa_module: aiconfigurator DSA module perf .txt (DeepSeek-V3.2 / GLM-5); "
+            "mla: aiconfigurator kernel-level MLA perf .txt (DeepSeek-V3 / R1)"
         ),
     )
     parser.add_argument(
         "--architecture", default=ARCH_GLM5,
-        help=f"Model architecture identifier (default: {ARCH_GLM5})",
+        help=(
+            f"Model architecture identifier (default: {ARCH_GLM5} for DSA). "
+            f"Use {ARCH_DSR1} with --output-format mla for DeepSeek-V3/R1, "
+            f"{ARCH_DSV3} with --output-format dsa_module for DeepSeek-V3.2."
+        ),
     )
     parser.add_argument(
         "--framework", default="vllm-ascend",
