@@ -18,7 +18,9 @@ from aiconfigurator_npu.sdk.common import (
     ARCHITECTURE_TO_MODEL_FAMILY,
     MULTIMODAL_TEXT_CONFIG_KEY,
     BlockConfig,
+    DEEPSEEK_V4_HF_MODELS,
     DefaultHFModels,
+    DeepSeekV4Config,
     HybridMoEConfig,
     Qwen35Config,
 )
@@ -632,6 +634,45 @@ def _parse_hf_config_json(config: dict) -> dict:
             "index_n_heads": config["index_n_heads"],
             "index_topk": config["index_topk"],
         }
+    elif architecture == "DeepseekV4ForCausalLM":
+        # DeepSeek-V4: per-layer compressed attention (SWA / CSA / HCA) plus mHC.
+        # compress_ratios is the only per-layer field; everything else is global.
+        compress_ratios_raw = config.get("compress_ratios")
+        if not isinstance(compress_ratios_raw, (list, tuple)) or len(compress_ratios_raw) < layers:
+            raise ValueError(
+                f"DeepSeek-V4 config for {architecture} must provide 'compress_ratios' "
+                f"with at least num_hidden_layers ({layers}) entries, got "
+                f"{len(compress_ratios_raw) if isinstance(compress_ratios_raw, (list, tuple)) else 'none'}"
+            )
+        extra_params = DeepSeekV4Config(
+            q_lora_rank=config["q_lora_rank"],
+            o_lora_rank=config["o_lora_rank"],
+            o_groups=config["o_groups"],
+            head_dim=config["head_dim"],
+            qk_rope_head_dim=config["qk_rope_head_dim"],
+            index_head_dim=config["index_head_dim"],
+            index_n_heads=config["index_n_heads"],
+            index_topk=config["index_topk"],
+            sliding_window=config["sliding_window"],
+            compress_ratios=tuple(int(r) for r in compress_ratios_raw[:layers]),
+            hc_mult=config["hc_mult"],
+            hc_sinkhorn_iters=config.get("hc_sinkhorn_iters", 20),
+            n_shared_experts=config.get("n_shared_experts", 1),
+            num_hash_layers=config.get("num_hash_layers", 0),
+            compress_rope_theta=config.get("compress_rope_theta", 0),
+            hc_eps=config.get("hc_eps", 1e-6),
+        )
+        logger.info(
+            "DeepSeek-V4 config: layers=%d, swa_layers=%d, csa_layers=%d, hca_layers=%d, "
+            "hc_mult=%d, head_dim=%d, index_topk=%d",
+            layers,
+            extra_params.compress_ratios.count(0),
+            extra_params.compress_ratios.count(4),
+            extra_params.compress_ratios.count(128),
+            extra_params.hc_mult,
+            extra_params.head_dim,
+            extra_params.index_topk,
+        )
     elif architecture in {"Qwen3ForCausalLM", "Qwen3MoeForCausalLM"}:
         # Qwen3-family attention may include additional Q/K normalization.
         extra_params = {"architecture": architecture, "use_qk_norm": True}
@@ -973,6 +1014,13 @@ def get_model_config_from_model_path(model_path: str) -> dict:
     """
     raw_config = _load_model_config_from_model_path(model_path)
     parsed = _parse_hf_config_json(raw_config)
+    if parsed["architecture"] == "DeepseekV4ForCausalLM" and model_path not in DEEPSEEK_V4_HF_MODELS:
+        logger.warning(
+            "DeepSeek-V4 model path '%s' is not in the preview allowlist. Proceeding based on "
+            "architecture; known cached configs: %s",
+            model_path,
+            ", ".join(sorted(DEEPSEEK_V4_HF_MODELS)),
+        )
     logger.info(
         "Loaded model config for %s: %s",
         model_path,

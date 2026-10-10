@@ -115,6 +115,49 @@ class Qwen35Config:
     shared_expert_inter_size: int = 0
 
 
+@dataclass(frozen=True)
+class DeepSeekV4Config:
+    """Config fields unique to DeepSeek-V4 (compressed SWA/CSA/HCA attention + mHC).
+
+    Mirrors ``aiconfigurator_core.sdk.common.DeepSeekV4Config``. DeepSeek-V4 drops
+    the V3-style ``kv_lora_rank`` / ``qk_nope_head_dim`` / ``v_head_dim`` triple in
+    favour of a single ``head_dim`` latent (with ``num_key_value_heads == 1``, i.e.
+    MQA over the *compressed* KV) plus a grouped low-rank output projection
+    (``o_groups`` x ``o_lora_rank``).
+
+    ``compress_ratios`` is a per-layer tuple:
+        0   -> SWA  (pure sliding window, folded into HCA when modeling)
+        4   -> CSA  (4x compressed sparse attention, has a learned indexer)
+        128 -> HCA  (128x compressed attention, no learned indexer)
+    """
+
+    q_lora_rank: int
+    o_lora_rank: int
+    o_groups: int
+    head_dim: int
+    qk_rope_head_dim: int
+    index_head_dim: int
+    index_n_heads: int
+    index_topk: int
+    sliding_window: int
+    compress_ratios: tuple[int, ...]
+    hc_mult: int
+    hc_sinkhorn_iters: int
+    n_shared_experts: int = 1
+    num_hash_layers: int = 0
+    compress_rope_theta: int = 0
+    hc_eps: float = 1e-6
+
+
+def deepseek_v4_indexer_cache_entry_bytes(index_head_dim: int) -> float:
+    """Per-token indexer cache entry size (bytes) for DeepSeek-V4.
+
+    V4 stores the indexer keys in FP4, so an entry is half the elements of the
+    FP8 indexer used by DeepSeek-V3.2 (which additionally keeps per-128 scales).
+    """
+    return index_head_dim * 0.5
+
+
 def _get_support_matrix_resource():
     """Get the support_matrix.csv as a Traversable resource."""
     return pkg_resources.files("aiconfigurator_npu") / "systems" / "support_matrix.csv"
@@ -270,6 +313,20 @@ def get_default_models() -> set[str]:
 
 
 """
+DeepSeek-V4 models (DEEPSEEKV4 family). Kept as a separate frozenset so the CLI can
+warn when a V4 model path is not part of the known/preview allowlist.
+"""
+DEEPSEEK_V4_HF_MODELS = frozenset(
+    {
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "sgl-project/DeepSeek-V4-Pro-FP8",
+        "sgl-project/DeepSeek-V4-Flash-FP8",
+    }
+)
+
+
+"""
 Cached HuggingFace model configs - these are pre-downloaded and stored in model_configs/
 Model parameters are parsed from these configs via get_model_config_from_model_path() in utils.py
 The list of default models for testing is derived from support_matrix.csv via get_default_models()
@@ -288,6 +345,8 @@ DefaultHFModels = {
     # DeepSeek V3.2 / GLM-5 (DEEPSEEKV32 family)
     "deepseek-ai/DeepSeek-V3.2",
     "zai-org/GLM-5",
+    # DeepSeek V4 (DEEPSEEKV4 family) — compressed SWA/CSA/HCA attention + mHC
+    *DEEPSEEK_V4_HF_MODELS,
     # Qwen 3 Models
     "Qwen/Qwen3-0.6B",
     "Qwen/Qwen3-1.7B",
@@ -344,7 +403,18 @@ SupportedSystems = {
 """
 Model family for model definition
 """
-ModelFamily = {"GPT", "LLAMA", "MOE", "DEEPSEEK", "DEEPSEEKV32", "NEMOTRONNAS", "NEMOTRONH", "HYBRIDMOE", "QWEN35"}
+ModelFamily = {
+    "GPT",
+    "LLAMA",
+    "MOE",
+    "DEEPSEEK",
+    "DEEPSEEKV32",
+    "DEEPSEEKV4",
+    "NEMOTRONNAS",
+    "NEMOTRONH",
+    "HYBRIDMOE",
+    "QWEN35",
+}
 ARCHITECTURE_TO_MODEL_FAMILY = {
     "LlamaForCausalLM": "LLAMA",
     "Qwen2ForCausalLM": "LLAMA",
@@ -354,6 +424,7 @@ ARCHITECTURE_TO_MODEL_FAMILY = {
     "DeepseekV3ForCausalLM": "DEEPSEEK",
     "DeepseekV32ForCausalLM": "DEEPSEEKV32",
     "GlmMoeDsaForCausalLM": "DEEPSEEKV32",
+    "DeepseekV4ForCausalLM": "DEEPSEEKV4",
     "KimiK25ForConditionalGeneration": "DEEPSEEK",
     "NemotronForCausalLM": "NEMOTRONNAS",
     "DeciLMForCausalLM": "NEMOTRONNAS",
@@ -586,6 +657,14 @@ class PerfDataFilename(Enum):
     mla_generation_module = "mla_generation_module_perf.txt"
     dsa_context_module = "dsa_context_module_perf.txt"
     dsa_generation_module = "dsa_generation_module_perf.txt"
+    # DeepSeek-V4 module-level attention data — one file per
+    # (attn_kind in {csa, hca}) x (phase in {context, generation}).
+    dsv4_csa_context_module = "dsv4_csa_context_module_perf.txt"
+    dsv4_hca_context_module = "dsv4_hca_context_module_perf.txt"
+    dsv4_csa_generation_module = "dsv4_csa_generation_module_perf.txt"
+    dsv4_hca_generation_module = "dsv4_hca_generation_module_perf.txt"
+    # DeepSeek-V4 mHC (manifold-constrained hyper-connections) module
+    mhc_module = "mhc_module_perf.txt"
 
 
 QuantMapping = namedtuple("QuantMapping", ["memory", "compute", "name"])

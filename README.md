@@ -121,6 +121,25 @@ docker build -t quay.io/18896723947/aiconfigurator-npu:v0.1.0 -f docker/Dockerfi
 docker push quay.io/18896723947/aiconfigurator-npu:v0.1.0
 ```
 
+### DeepSeek-V4-Pro image (this branch)
+
+Build with **Actions → Build and Push Aiconfigurator NPU Image (DeepSeek-V4-Pro)
+→ Run workflow**; the `ref` input defaults to `feature/deepseek-v4-pro-support`.
+It uses `docker/Dockerfile.dsv4` and pushes to a separate repository so the two
+variants coexist:
+
+```
+quay.io/18896723947/aiconfigurator-npu-dsv4:<tag>
+quay.io/18896723947/aiconfigurator-npu-dsv4:<short-sha>
+```
+
+To build locally:
+
+```bash
+docker build -t quay.io/18896723947/aiconfigurator-npu-dsv4:v0.1.0 -f docker/Dockerfile.dsv4 .
+docker push quay.io/18896723947/aiconfigurator-npu-dsv4:v0.1.0
+```
+
 > Note: building on GitHub/x86 runners only installs dependencies; NPU
 > functionality must be verified on real hardware (run
 > `tools/check_vllm_compat.py` and `npu-smi info` inside the container).
@@ -167,19 +186,31 @@ python collector/npu/collect_mla_module.py --mode context --quick \
 | `deepseek-ai/DeepSeek-R1` | `DeepseekV3ForCausalLM` | `DEEPSEEK` | `context_mla_perf.txt` / `generation_mla_perf.txt` — pending collection |
 | `deepseek-ai/DeepSeek-V3` | `DeepseekV3ForCausalLM` | `DEEPSEEK` | same as R1 |
 | `zai-org/GLM-5` | `GlmMoeDsaForCausalLM` | `DEEPSEEKV32` | `dsa_*_module_perf.txt` — pending collection |
+| `deepseek-ai/DeepSeek-V4-Pro` | `DeepseekV4ForCausalLM` | `DEEPSEEKV4` | `dsv4_{csa,hca}_{context,generation}_module_perf.txt` + `mhc_module_perf.txt` — pending collection |
 | `Qwen/Qwen3-235B-A22B` | `Qwen3MoeForCausalLM` | `MOE` | ready (`*_attention_perf.txt`) |
 
 GEMM / MoE / communication tables for `ascend_910b` are already in
-`src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.18.0/`.
+`src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0/`.
 
 DeepSeek-R1 reuses `DeepSeekModel` (same architecture and dimensions as V3), so no
 model code changes are needed — see `docs/DeepSeek-R1_ADAPTATION.md` for the full
 onboarding checklist and MLA collection commands.
 
-Until the MLA tables are collected, run the search in HYBRID mode so the attention
-ops fall back to the analytic (SOL) model:
+DeepSeek-V4-Pro is a new model family (`DEEPSEEKV4`): compressed SWA/CSA/HCA
+attention plus mHC residual connections, 384 experts, and a grouped low-rank
+output projection. See `docs/DeepSeek-V4-Pro_ADAPTATION.md` for the architecture
+breakdown, collection commands and known limitations.
+
+Until the MLA / DSv4 tables are collected, run the search in HYBRID mode so the
+attention ops fall back to the analytic (SOL) model:
 
 ```bash
 aic-npu default --model deepseek-ai/DeepSeek-R1 --system ascend_910b \
-  --backend vllm --database-mode hybrid --total-gpus 16
+  --backend vllm-ascend --database-mode HYBRID --total-gpus 16
+
+aic-npu default --model deepseek-ai/DeepSeek-V4-Pro --system ascend_910b \
+  --backend vllm-ascend --database-mode HYBRID --total-gpus 128
 ```
+
+> `--backend` for `default` must be `vllm-ascend` on `ascend_910b`; `--database-mode`
+> takes upper-case values (`SILICON | HYBRID | EMPIRICAL | SOL`).

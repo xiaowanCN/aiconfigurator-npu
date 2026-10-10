@@ -477,6 +477,75 @@ def convert_mla(input_path: str, output_path_ctx: str, output_path_gen: str,
     return total
 
 
+# DeepSeek-V4 tables already carry the final aiconfigurator schema (the
+# collectors write it directly), so conversion only rewrites the provenance
+# columns and copies them into the systems data directory.
+DSV4_TABLES = (
+    "dsv4_csa_context_module_perf.txt",
+    "dsv4_hca_context_module_perf.txt",
+    "dsv4_csa_generation_module_perf.txt",
+    "dsv4_hca_generation_module_perf.txt",
+)
+MHC_TABLES = ("mhc_module_perf.txt",)
+PROVENANCE_COLUMNS = ("framework", "version", "device")
+
+
+def _copy_perf_table(input_path: str, output_path: str, device: str, framework: str, version: str) -> int:
+    """Copy an already-converted perf table, rewriting framework/version/device."""
+    if not os.path.exists(input_path):
+        return 0
+
+    with open(input_path, encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fields = reader.fieldnames or []
+
+    if not rows:
+        print(f"  [warn] {os.path.basename(input_path)} is empty")
+        return 0
+
+    for row in rows:
+        for col in PROVENANCE_COLUMNS:
+            if col in row:
+                row[col] = {"framework": framework, "version": version, "device": device}[col]
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"  {os.path.basename(output_path)}: {len(rows)} rows")
+    return len(rows)
+
+
+def convert_dsv4_module(input_path: str, output_path: str, device: str, framework: str, version: str) -> int:
+    """Copy DeepSeek-V4 module-level attention tables (CSA/HCA x context/generation)."""
+    total = 0
+    for name in DSV4_TABLES:
+        total += _copy_perf_table(
+            os.path.join(input_path, name),
+            os.path.join(output_path, name),
+            device, framework, version,
+        )
+    if total == 0:
+        print("  [skip] no DeepSeek-V4 attention tables found")
+    return total
+
+
+def convert_mhc_module(input_path: str, output_path: str, device: str, framework: str, version: str) -> int:
+    """Copy the DeepSeek-V4 mHC module table."""
+    total = 0
+    for name in MHC_TABLES:
+        total += _copy_perf_table(
+            os.path.join(input_path, name),
+            os.path.join(output_path, name),
+            device, framework, version,
+        )
+    if total == 0:
+        print("  [skip] no DeepSeek-V4 mHC table found")
+    return total
+
+
 def main():
     parser = argparse.ArgumentParser(description="Convert aiconfigurator-npu CSV data to aiconfigurator txt format")
     parser.add_argument("--input-dir", required=True, help="Input directory with TensorCast CSV files")
@@ -492,6 +561,14 @@ def main():
             "mla: DEEPSEEK kernel-level tables (DeepSeek-V3 / R1); "
             "both: emit both; none: skip."
         ),
+    )
+    parser.add_argument(
+        "--dsv4-output", action="store_true",
+        help="Also copy DeepSeek-V4 attention tables (dsv4_{csa,hca}_{context,generation}_module_perf.txt).",
+    )
+    parser.add_argument(
+        "--mhc-output", action="store_true",
+        help="Also copy the DeepSeek-V4 mHC table (mhc_module_perf.txt).",
     )
     args = parser.parse_args()
 
@@ -534,6 +611,16 @@ def main():
             os.path.join(args.output_dir, "context_mla_perf.txt"),
             os.path.join(args.output_dir, "generation_mla_perf.txt"),
             args.device, args.framework, args.version,
+        )
+
+    if args.dsv4_output:
+        total += convert_dsv4_module(
+            args.input_dir, args.output_dir, args.device, args.framework, args.version,
+        )
+
+    if args.mhc_output:
+        total += convert_mhc_module(
+            args.input_dir, args.output_dir, args.device, args.framework, args.version,
         )
 
     print(f"\nDone. Total rows written: {total}")

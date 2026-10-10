@@ -515,7 +515,13 @@ class TRTLLMBackend(BaseBackend):
         # count weights on a single GPU
         weights /= model.config.pp_size
 
-        h = model._num_heads * model._head_size
+        # DeepSeek-V4's `head_size` is the compressed KV latent (512), not a per-head
+        # attention dim, so `num_heads * head_size` massively overstates the residual
+        # stream width. Use hidden_size instead.
+        if model.model_family == "DEEPSEEKV4":
+            h = model._hidden_size
+        else:
+            h = model._num_heads * model._head_size
         if num_tokens == 0:
             num_tokens = (isl - prefix) * batch_size
 
@@ -535,7 +541,7 @@ class TRTLLMBackend(BaseBackend):
             c_dict = {1: 22, 2: 13, 4: 10, 8: 10}
             activations = 2 * num_tokens * h * c_dict[min(model.config.tp_size, 8)]
             activations = max(activations, 70 * 1024 * 1024)  # minimum act
-        elif model.model_family in ("DEEPSEEK", "DEEPSEEKV32"):
+        elif model.model_family in ("DEEPSEEK", "DEEPSEEKV32", "DEEPSEEKV4"):
             c_dict = {1: 22, 2: 13, 4: 10, 8: 10}
             activations = 2 * num_tokens * h * c_dict[min(model.config.tp_size, 8)]
             # moe workspace, 128 for block scale, float for 4bytes
@@ -565,17 +571,26 @@ class TRTLLMBackend(BaseBackend):
         if model.config.nextn > 0:
             activations = activations * (model.config.nextn + 1)
 
-        if model.model_family in ("DEEPSEEK", "DEEPSEEKV32"):
-            kvcache_per_token = model._num_layers * 576
+        if model.model_family == "DEEPSEEKV4":
+            # Compressed per-layer KV: only 1/ratio of a latent entry per token, plus a
+            # bounded sliding-window term that is constant per sequence.
+            total_tokens = batch_size * isl + batch_size * beam_width * osl
+            kvcache = (
+                total_tokens * model.get_kvcache_elements_per_token()
+                + batch_size * beam_width * model.get_kvcache_sliding_window_elements()
+            ) * model.config.kvcache_quant_mode.value.memory
         else:
-            num_kv_heads_per_gpu = (model._num_kv_heads + model.config.tp_size - 1) // model.config.tp_size
-            kvcache_per_token = num_kv_heads_per_gpu * model._head_size * model._num_layers * 2
-        # should not be divided by pp_size as you need to hold all kvcache for stages.
-        kvcache = (
-            (batch_size * isl + batch_size * beam_width * osl)
-            * model.config.kvcache_quant_mode.value.memory
-            * kvcache_per_token
-        )
+            if model.model_family in ("DEEPSEEK", "DEEPSEEKV32"):
+                kvcache_per_token = model._num_layers * 576
+            else:
+                num_kv_heads_per_gpu = (model._num_kv_heads + model.config.tp_size - 1) // model.config.tp_size
+                kvcache_per_token = num_kv_heads_per_gpu * model._head_size * model._num_layers * 2
+            # should not be divided by pp_size as you need to hold all kvcache for stages.
+            kvcache = (
+                (batch_size * isl + batch_size * beam_width * osl)
+                * model.config.kvcache_quant_mode.value.memory
+                * kvcache_per_token
+            )
         # if 'DEEPSEEK' in model.model_path or 'MOE' in model.model_path:
         #    kvcache = kvcache * model.config.attention_dp_size # this is incorrect. tp will
         #    duplicate the kvcache while attn_dp will not.

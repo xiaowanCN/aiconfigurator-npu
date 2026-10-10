@@ -1263,6 +1263,181 @@ def load_generation_dsa_module_data(dsa_file: str):
     return dsa_data
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# DeepSeek-V4 (DEEPSEEKV4) module-level attention + mHC data
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# DeepSeek-V4 compresses the KV cache per layer by ``compress_ratios[layer]``:
+#   4   -> CSA (Compressed Sparse Attention): 4x compression + learned indexer topk
+#   128 -> HCA (Highly-Compressed Attention): 128x compression, no indexer
+#   0   -> SWA (pure sliding window), folded into HCA at the model level.
+DSV4_ATTN_CSA = "csa"
+DSV4_ATTN_HCA = "hca"
+DSV4_ATTN_KINDS = (DSV4_ATTN_CSA, DSV4_ATTN_HCA)
+DEFAULT_DSV4_ARCHITECTURE = "DeepseekV4ForCausalLM"
+
+
+def dsv4_attn_kind(compress_ratio: int) -> str:
+    """Map a DeepSeek-V4 per-layer compress ratio to its attention kind.
+
+    ``4`` -> CSA, everything else (``0`` / ``128``) -> HCA. The SWA -> HCA folding
+    happens in ``DeepSeekV4Model`` before the op is constructed, mirroring upstream.
+    """
+    return DSV4_ATTN_CSA if int(compress_ratio) == 4 else DSV4_ATTN_HCA
+
+
+def load_context_dsv4_module_data(dsv4_file: str):
+    """
+    Load DeepSeek-V4 context (prefill) module-level attention data.
+
+    Dict structure:
+        data[fmha_quant_mode][kv_cache_quant_mode][gemm_quant_mode][num_heads][s][b]
+
+    Same layout as :func:`load_context_dsa_module_data` minus the architecture level:
+    the table file is already per-attention-kind (``dsv4_csa_*`` / ``dsv4_hca_*``) and
+    per-architecture dims come from the model config, not from the table.
+    """
+    if not os.path.exists(dsv4_file):
+        logger.debug(f"DeepSeek-V4 context data file {dsv4_file} not found.")
+        return None
+
+    dsv4_data = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict()))))
+    )
+
+    with open(dsv4_file, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    has_power = len(rows) > 0 and "power" in rows[0]
+
+    for row in rows:
+        num_heads = int(row["num_heads"])
+        b = int(row["batch_size"])
+        s = int(row["isl"])
+        latency = float(row["latency"])
+        power = float(row.get("power", 0.0)) if has_power else 0.0
+        energy = power * latency
+
+        gemm_mode = common.GEMMQuantMode[_normalize_dtype_key(row["gemm_type"])]
+        fmha_mode = common.FMHAQuantMode[_normalize_dtype_key(row["mla_dtype"])]
+        kv_dtype = common.KVCacheQuantMode[_normalize_dtype_key(row["kv_cache_dtype"])]
+
+        dsv4_data[fmha_mode][kv_dtype][gemm_mode][num_heads][s][b] = {
+            "latency": latency,
+            "power": power,
+            "energy": energy,
+        }
+
+    return dsv4_data
+
+
+def load_generation_dsv4_module_data(dsv4_file: str):
+    """
+    Load DeepSeek-V4 generation (decode) module-level attention data.
+
+    Dict structure:
+        data[kv_cache_quant_mode][gemm_quant_mode][num_heads][b][s]
+
+    ``s`` is the total KV length (``isl + step``), matching the DSA generation table.
+    """
+    if not os.path.exists(dsv4_file):
+        logger.debug(f"DeepSeek-V4 generation data file {dsv4_file} not found.")
+        return None
+
+    dsv4_data = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict())))
+    )
+
+    with open(dsv4_file, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    has_power = len(rows) > 0 and "power" in rows[0]
+
+    for row in rows:
+        num_heads = int(row["num_heads"])
+        b = int(row["batch_size"])
+        s = int(row["isl"]) + int(row["step"])
+        latency = float(row["latency"])
+        power = float(row.get("power", 0.0)) if has_power else 0.0
+        energy = power * latency
+
+        gemm_mode = common.GEMMQuantMode[_normalize_dtype_key(row["gemm_type"])]
+        kv_dtype = common.KVCacheQuantMode[_normalize_dtype_key(row["kv_cache_dtype"])]
+
+        dsv4_data[kv_dtype][gemm_mode][num_heads][b][s] = {
+            "latency": latency,
+            "power": power,
+            "energy": energy,
+        }
+
+    return dsv4_data
+
+
+def load_mhc_module_data(mhc_file: str):
+    """
+    Load DeepSeek-V4 mHC (manifold-constrained hyper-connections) module data.
+
+    CSV columns: framework, version, device, op_name, num_tokens, hc_mult,
+    hidden_size, latency (optional: power).
+
+    Dict structure:
+        data[op_name][hc_mult][hidden_size][num_tokens] -> {latency, power, energy}
+    """
+    if not os.path.exists(mhc_file):
+        logger.debug(f"DeepSeek-V4 mHC data file {mhc_file} not found.")
+        return None
+
+    mhc_data = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict())))
+
+    with open(mhc_file, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    has_power = len(rows) > 0 and "power" in rows[0]
+
+    for row in rows:
+        op_name = row["op_name"]
+        hc_mult = int(row["hc_mult"])
+        hidden_size = int(row["hidden_size"])
+        num_tokens = int(row["num_tokens"])
+        latency = float(row["latency"])
+        power = float(row.get("power", 0.0)) if has_power else 0.0
+
+        mhc_data[op_name][hc_mult][hidden_size][num_tokens] = {
+            "latency": latency,
+            "power": power,
+            "energy": power * latency,
+        }
+
+    return mhc_data
+
+
+def _dsv4_context_quant_modes(database) -> list[str]:
+    """Supported FMHA quant modes across both DeepSeek-V4 context tables (CSA + HCA)."""
+    names: set[str] = set()
+    for attr in ("_context_dsv4_csa_module_data", "_context_dsv4_hca_module_data"):
+        data = getattr(database, attr, None)
+        if not data:
+            continue
+        for key in data:
+            names.add(key.name if hasattr(key, "name") else str(key))
+    return sorted(names)
+
+
+def _dsv4_generation_quant_modes(database) -> list[str]:
+    """Supported KV-cache quant modes across both DeepSeek-V4 generation tables (CSA + HCA)."""
+    names: set[str] = set()
+    for attr in ("_generation_dsv4_csa_module_data", "_generation_dsv4_hca_module_data"):
+        data = getattr(database, attr, None)
+        if not data:
+            continue
+        for key in data:
+            names.add(key.name if hasattr(key, "name") else str(key))
+    return sorted(names)
+
+
 def load_mamba2_data(mamba2_file: str):
     """
     Load Mamba2 Conv1D + SSM kernel performance data from mamba2_perf.txt.
@@ -2147,6 +2322,12 @@ class PerfDatabase:
                 PerfDataFilename.trtllm_alltoall: load_trtllm_alltoall_data,
                 PerfDataFilename.dsa_context_module: load_context_dsa_module_data,
                 PerfDataFilename.dsa_generation_module: load_generation_dsa_module_data,
+                # DeepSeek-V4 (DEEPSEEKV4)
+                PerfDataFilename.dsv4_csa_context_module: load_context_dsv4_module_data,
+                PerfDataFilename.dsv4_hca_context_module: load_context_dsv4_module_data,
+                PerfDataFilename.dsv4_csa_generation_module: load_generation_dsv4_module_data,
+                PerfDataFilename.dsv4_hca_generation_module: load_generation_dsv4_module_data,
+                PerfDataFilename.mhc_module: load_mhc_module_data,
             }
             perf_data_dir = data_dir
             if op_filename_enum == PerfDataFilename.nccl:
@@ -2199,6 +2380,13 @@ class PerfDatabase:
         # Uses same dict structure as MLA so interpolation/query can be reused
         self._context_dsa_module_data = _load_op_data(PerfDataFilename.dsa_context_module)
         self._generation_dsa_module_data = _load_op_data(PerfDataFilename.dsa_generation_module)
+
+        # DeepSeek-V4 module-level attention data (CSA / HCA) + mHC module data
+        self._context_dsv4_csa_module_data = _load_op_data(PerfDataFilename.dsv4_csa_context_module)
+        self._context_dsv4_hca_module_data = _load_op_data(PerfDataFilename.dsv4_hca_context_module)
+        self._generation_dsv4_csa_module_data = _load_op_data(PerfDataFilename.dsv4_csa_generation_module)
+        self._generation_dsv4_hca_module_data = _load_op_data(PerfDataFilename.dsv4_hca_generation_module)
+        self._mhc_module_data = _load_op_data(PerfDataFilename.mhc_module)
 
         # TensorRT-LLM wideep path
         if backend == "trtllm":
@@ -2678,6 +2866,71 @@ class PerfDatabase:
                             target_z_list=target_z_list,
                         )
 
+        # DeepSeek-V4 module-level attention interpolation
+        # Context:  data[fmha_mode][kv_dtype][gemm_mode][num_heads][s][b]
+        # Generation: data[kv_dtype][gemm_mode][num_heads][b][s]
+        _dsv4_seq_grid = (
+            [1, 16, 32, 64, 128, 256, 512, 1024, 2048]
+            + [4096 + i * 2048 for i in range(14)]
+            + [32768 + 16384 * i for i in range(6)]
+            + [131072 + 32768 * i for i in range(12)]
+            + [524288 + 65536 * i for i in range(9)]
+        )
+        _dsv4_batch_grid = [1, 2, 4, 8, 16, 32, 64, 128, 256, 384, 512, 1024, 2048]
+
+        for attr in ("_context_dsv4_csa_module_data", "_context_dsv4_hca_module_data"):
+            table = getattr(self, attr, None)
+            if not table:
+                continue
+            for fmha_mode in table:
+                for kv_cache_dtype in table[fmha_mode]:
+                    for gemm_mode in table[fmha_mode][kv_cache_dtype]:
+                        data_dict = table[fmha_mode][kv_cache_dtype][gemm_mode]
+                        self._extrapolate_data_grid(
+                            data_dict=data_dict,
+                            target_x_list=list(data_dict.keys()),
+                            target_y_list=_dsv4_seq_grid,
+                            target_z_list=_dsv4_batch_grid,
+                        )
+
+        for attr in ("_generation_dsv4_csa_module_data", "_generation_dsv4_hca_module_data"):
+            table = getattr(self, attr, None)
+            if not table:
+                continue
+            for kv_cache_dtype in table:
+                for gemm_mode in table[kv_cache_dtype]:
+                    data_dict = table[kv_cache_dtype][gemm_mode]
+                    self._extrapolate_data_grid(
+                        data_dict=data_dict,
+                        target_x_list=list(data_dict.keys()),
+                        target_y_list=_dsv4_batch_grid,
+                        target_z_list=[
+                            1,
+                            2,
+                            4,
+                            8,
+                            16,
+                            32,
+                            64,
+                            128,
+                            256,
+                            512,
+                            1024,
+                            2048,
+                            4096,
+                            8192,
+                            16384,
+                            32768,
+                            65536,
+                            131072,
+                            262144,
+                            2097152,
+                            2097152 * 2,
+                            2097152 * 4,
+                            2097152 * 8,
+                        ],
+                    )
+
         # post-correction
         self._correct_data()
 
@@ -2758,6 +3011,8 @@ class PerfDatabase:
                 "generation_mla": [],
                 "dsa_context_module": _enum_key_names(getattr(self, "_context_dsa_module_data", None)),
                 "dsa_generation_module": _enum_key_names(getattr(self, "_generation_dsa_module_data", None)),
+                "dsv4_context_module": _dsv4_context_quant_modes(self),
+                "dsv4_generation_module": _dsv4_generation_quant_modes(self),
                 "mla_bmm": [],
                 "moe": _enum_key_names(getattr(self, "_moe_data", None)),
                 "nccl": _enum_key_names(getattr(self, "_nccl_data", None)),
@@ -3532,7 +3787,11 @@ class PerfDatabase:
         Normalize GEMM quant modes for perf table lookup.
 
         `fp8_static` is a behavioral mode that reuses `fp8` perf tables.
+        `w8a8_dynamic` (Ascend NPU W8A8 dynamic quant) reuses the `sq` (w8int8)
+        perf tables — see tools/convert_to_aiconfigurator.py GEMM_QUANT_MAP.
         """
+        if quant_mode == common.GEMMQuantMode.w8a8_dynamic:
+            return common.GEMMQuantMode.sq
         if quant_mode == common.GEMMQuantMode.fp8_static:
             return common.GEMMQuantMode.fp8
         return quant_mode
@@ -6555,6 +6814,438 @@ class PerfDatabase:
                         f"{kv_cache_dtype=}, {database_mode=}."
                     )
                     raise
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # DeepSeek-V4 (DEEPSEEKV4) queries
+    # ═════════════════════════════════════════════════════════════════════════
+
+    def _dsv4_sol(
+        self,
+        *,
+        b: int,
+        s: int,
+        prefix: int,
+        num_heads: int,
+        is_context: bool,
+        hidden_size: int,
+        q_lora_rank: int,
+        o_lora_rank: int,
+        o_groups: int,
+        head_dim: int,
+        qk_rope_head_dim: int,
+        index_n_heads: int,
+        index_head_dim: int,
+        index_topk: int,
+        sliding_window: int,
+        compress_ratio: int,
+        kvcache_quant_mode: common.KVCacheQuantMode,
+        fmha_quant_mode: common.FMHAQuantMode,
+        gemm_quant_mode: common.GEMMQuantMode,
+    ) -> tuple[float, float, float]:
+        """
+        Analytic speed-of-light estimate for one DeepSeek-V4 attention module.
+
+        Mirrors the op breakdown of ``aiconfigurator``'s DSv4 attention operator:
+        q_a/q_b/kv_a projections -> (compressor) -> (indexer wq_b + weights_proj +
+        FP8 MQA logits + topk) -> sparse attention over sliding window + compressed KV
+        -> two-stage grouped low-rank o_proj.
+
+        Returns (sol_time, sol_math, sol_mem) in milliseconds.
+        """
+        full_s = s + prefix
+        tokens = b * s if is_context else b
+
+        attn_dim = head_dim + qk_rope_head_dim  # 576 for V4-Pro (== V3's kv_lora + qk_rope)
+        v_dim = head_dim  # 512 — V4 has no separate v_head_dim
+
+        # ── KV budget ────────────────────────────────────────────────────
+        window_kv = min(full_s, sliding_window)
+        comp_raw = 0 if compress_ratio == 0 else full_s // compress_ratio
+        comp_kv = min(comp_raw, index_topk) if comp_raw else 0
+        kv_cap = max(1, window_kv + comp_kv)
+
+        # ── Attention pair count ─────────────────────────────────────────
+        if is_context:
+            if full_s <= kv_cap:
+                total_kv_pairs = b * (full_s * (full_s + 1) - prefix * (prefix + 1)) // 2
+            elif prefix >= kv_cap:
+                total_kv_pairs = tokens * kv_cap
+            else:
+                ramp_pairs = b * (kv_cap * (kv_cap + 1) - prefix * (prefix + 1)) // 2
+                sat_pairs = b * (full_s - kv_cap) * kv_cap
+                total_kv_pairs = ramp_pairs + sat_pairs
+        else:
+            total_kv_pairs = tokens * kv_cap
+
+        attn_ops = 2 * num_heads * (attn_dim + v_dim) * total_kv_pairs
+
+        # ── GEMM group (governed by gemm_quant_mode) ─────────────────────
+        # q_a_proj + q_b_proj + kv_a_proj (MQA: single KV head) + o_proj stage A/B
+        proj_ops = (
+            2 * tokens * hidden_size * q_lora_rank
+            + 2 * tokens * q_lora_rank * (num_heads * head_dim)
+            + 2 * tokens * hidden_size * head_dim
+            + 2 * tokens * (num_heads * head_dim) * o_lora_rank
+            + 2 * tokens * (o_groups * o_lora_rank) * hidden_size
+        )
+        # o_proj stage A is bf16 even under quantized GEMM (upstream pins it).
+        proj_ops_bf16 = 2 * tokens * (num_heads * head_dim) * o_lora_rank
+        proj_ops -= proj_ops_bf16
+
+        gemm_weight_bytes = (
+            hidden_size * q_lora_rank
+            + q_lora_rank * num_heads * head_dim
+            + hidden_size * head_dim
+            + o_groups * o_lora_rank * hidden_size
+        ) * gemm_quant_mode.value.memory
+        bf16_weight_bytes = (num_heads * head_dim * o_lora_rank) * 2.0
+
+        # ── Compressor (present for every compressed layer) ──────────────
+        if compress_ratio != 0:
+            comp_mult = 2.0 if compress_ratio == 4 else 1.0
+            comp_elems = 2.0 * hidden_size * comp_mult * head_dim
+            proj_ops += 2 * tokens * comp_elems
+            gemm_weight_bytes += comp_elems * gemm_quant_mode.value.memory
+
+        # ── Indexer (only CSA, compress_ratio == 4) ──────────────────────
+        indexer_logits_ops = 0.0
+        indexer_kv_bytes = 0.0
+        if compress_ratio == 4:
+            indexer_elems = (
+                q_lora_rank * index_n_heads * index_head_dim  # wq_b
+                + 2.0 * hidden_size * 2.0 * index_head_dim  # indexer K projection
+            )
+            proj_ops += 2 * tokens * indexer_elems
+            gemm_weight_bytes += indexer_elems * gemm_quant_mode.value.memory
+            # weights_proj is bf16
+            bf16_weight_bytes += hidden_size * index_n_heads * 2.0
+            proj_ops += 2 * tokens * hidden_size * index_n_heads
+
+            if comp_raw > 0:
+                if is_context:
+                    # Causal ramp: average compressed KV seen per query ~= comp_raw / 2
+                    indexer_pairs = tokens * max(1, comp_raw // 2)
+                else:
+                    indexer_pairs = tokens * comp_raw
+                indexer_logits_ops = 2 * indexer_pairs * index_n_heads * index_head_dim
+                indexer_kv_bytes = indexer_pairs * common.deepseek_v4_indexer_cache_entry_bytes(index_head_dim)
+
+        # ── Memory ───────────────────────────────────────────────────────
+        kv_cache_bytes = total_kv_pairs * attn_dim * kvcache_quant_mode.value.memory
+        q_io_bytes = tokens * num_heads * head_dim * fmha_quant_mode.value.memory * 2
+        total_mem = gemm_weight_bytes + bf16_weight_bytes + kv_cache_bytes + indexer_kv_bytes + q_io_bytes
+
+        # ── SOL ──────────────────────────────────────────────────────────
+        gemm_flops = self._get_quant_tc_flops(gemm_quant_mode)
+        bf16_flops = self._get_quant_tc_flops(common.GEMMQuantMode.float16)
+        indexer_fp8_flops = self._get_quant_tc_flops(common.FMHAQuantMode.fp8)
+        attn_flops = self._get_quant_tc_flops(fmha_quant_mode)
+
+        sol_math = (
+            proj_ops / gemm_flops
+            + proj_ops_bf16 / bf16_flops
+            + indexer_logits_ops / indexer_fp8_flops
+            + attn_ops / attn_flops
+        ) * 1000
+        sol_mem = total_mem / self.system_spec["gpu"]["mem_bw"] * 1000
+        return max(sol_math, sol_mem), sol_math, sol_mem
+
+    @functools.lru_cache(maxsize=32768)
+    def query_context_dsv4_module(
+        self,
+        b: int,
+        s: int,
+        num_heads: int,
+        kvcache_quant_mode: common.KVCacheQuantMode,
+        fmha_quant_mode: common.FMHAQuantMode,
+        gemm_quant_mode: common.GEMMQuantMode = common.GEMMQuantMode.float16,
+        database_mode: common.DatabaseMode | None = None,
+        *,
+        attn_kind: str = DSV4_ATTN_CSA,
+        prefix: int = 0,
+        hidden_size: int = 7168,
+        q_lora_rank: int = 1536,
+        o_lora_rank: int = 1024,
+        o_groups: int = 16,
+        head_dim: int = 512,
+        qk_rope_head_dim: int = 64,
+        index_n_heads: int = 64,
+        index_head_dim: int = 128,
+        index_topk: int = 1024,
+        sliding_window: int = 128,
+        compress_ratio: int = 4,
+    ) -> PerformanceResult | tuple[float, float, float]:
+        """
+        Query DeepSeek-V4 context (prefill) module-level latency and energy.
+
+        The module covers q_a/q_b/kv_a projections, the per-layer compressor, the
+        CSA indexer (wq_b + weights_proj + FP8 MQA logits + topk), sparse attention
+        over the sliding window plus the compressed KV, and the two-stage grouped
+        low-rank o_proj.
+        """
+        sol_dims = dict(
+            hidden_size=hidden_size,
+            q_lora_rank=q_lora_rank,
+            o_lora_rank=o_lora_rank,
+            o_groups=o_groups,
+            head_dim=head_dim,
+            qk_rope_head_dim=qk_rope_head_dim,
+            index_n_heads=index_n_heads,
+            index_head_dim=index_head_dim,
+            index_topk=index_topk,
+            sliding_window=sliding_window,
+            compress_ratio=compress_ratio,
+        )
+
+        def get_sol(b: int, s: int, prefix: int, num_heads: int) -> tuple[float, float, float]:
+            return self._dsv4_sol(
+                b=b,
+                s=s,
+                prefix=prefix,
+                num_heads=num_heads,
+                is_context=True,
+                kvcache_quant_mode=kvcache_quant_mode,
+                fmha_quant_mode=fmha_quant_mode,
+                gemm_quant_mode=gemm_quant_mode,
+                **sol_dims,
+            )
+
+        def get_empirical(b: int, s: int, prefix: int, num_heads: int) -> float:
+            return get_sol(b, s, prefix, num_heads)[0] / 0.5
+
+        if database_mode is None:
+            database_mode = self._default_database_mode
+        if database_mode == common.DatabaseMode.SOL:
+            return PerformanceResult(get_sol(b, s, prefix, num_heads)[0], energy=0.0)
+        elif database_mode == common.DatabaseMode.SOL_FULL:
+            return get_sol(b, s, prefix, num_heads)
+        elif database_mode == common.DatabaseMode.EMPIRICAL:
+            return PerformanceResult(get_empirical(b, s, prefix, num_heads), energy=0.0)
+
+        attr = f"_context_dsv4_{attn_kind}_module_data"
+        try:
+            dsv4_data = getattr(self, attr, None)
+            if dsv4_data is None:
+                raise PerfDataNotAvailableError(
+                    f"DeepSeek-V4 {attn_kind} context module perf data not loaded for "
+                    f"system='{self.system}', backend='{self.backend}', version='{self.version}'."
+                )
+            dsv4_dict = dsv4_data[fmha_quant_mode][kvcache_quant_mode][gemm_quant_mode]
+            full_s = s + prefix
+            result = self._interp_3d(num_heads, full_s, b, dsv4_dict, "cubic")
+            latency = result["latency"]
+            energy = result.get("energy", 0.0)
+            if prefix > 0:
+                base_sol = get_sol(b, full_s, 0, num_heads)[0]
+                target_sol = get_sol(b, s, prefix, num_heads)[0]
+                correction = 1.0 if base_sol <= 0 else target_sol / base_sol
+                latency *= correction
+                energy *= correction
+            return PerformanceResult(latency, energy=energy)
+        except Exception:
+            if database_mode == common.DatabaseMode.HYBRID:
+                logger.debug(
+                    f"Failed to query DeepSeek-V4 {attn_kind} context module for {b=}, {s=}, {prefix=}, "
+                    f"{num_heads=}; using empirical"
+                )
+                return PerformanceResult(get_empirical(b, s, prefix, num_heads), energy=0.0)
+            logger.exception(
+                f"Failed to query DeepSeek-V4 {attn_kind} context module for {b=}, {s=}, {prefix=}, "
+                f"{num_heads=}, {attn_kind=}, {kvcache_quant_mode=}, {fmha_quant_mode=}, {database_mode=}."
+            )
+            raise
+
+    @functools.lru_cache(maxsize=32768)
+    def query_generation_dsv4_module(
+        self,
+        b: int,
+        s: int,
+        num_heads: int,
+        kv_cache_dtype: common.KVCacheQuantMode,
+        gemm_quant_mode: common.GEMMQuantMode = common.GEMMQuantMode.float16,
+        database_mode: common.DatabaseMode | None = None,
+        *,
+        attn_kind: str = DSV4_ATTN_CSA,
+        hidden_size: int = 7168,
+        q_lora_rank: int = 1536,
+        o_lora_rank: int = 1024,
+        o_groups: int = 16,
+        head_dim: int = 512,
+        qk_rope_head_dim: int = 64,
+        index_n_heads: int = 64,
+        index_head_dim: int = 128,
+        index_topk: int = 1024,
+        sliding_window: int = 128,
+        compress_ratio: int = 4,
+    ) -> PerformanceResult | tuple[float, float, float]:
+        """
+        Query DeepSeek-V4 generation (decode) module-level latency and energy.
+
+        Each request contributes exactly one query token, so ``s`` is the KV cache
+        length (isl + step).
+        """
+        sol_dims = dict(
+            hidden_size=hidden_size,
+            q_lora_rank=q_lora_rank,
+            o_lora_rank=o_lora_rank,
+            o_groups=o_groups,
+            head_dim=head_dim,
+            qk_rope_head_dim=qk_rope_head_dim,
+            index_n_heads=index_n_heads,
+            index_head_dim=index_head_dim,
+            index_topk=index_topk,
+            sliding_window=sliding_window,
+            compress_ratio=compress_ratio,
+        )
+
+        def get_sol(b: int, s: int, num_heads: int) -> tuple[float, float, float]:
+            return self._dsv4_sol(
+                b=b,
+                s=s,
+                prefix=0,
+                num_heads=num_heads,
+                is_context=False,
+                kvcache_quant_mode=kv_cache_dtype,
+                fmha_quant_mode=common.FMHAQuantMode.float16,
+                gemm_quant_mode=gemm_quant_mode,
+                **sol_dims,
+            )
+
+        def get_empirical(b: int, s: int, num_heads: int) -> float:
+            return get_sol(b, s, num_heads)[0] / 0.5
+
+        if database_mode is None:
+            database_mode = self._default_database_mode
+        if database_mode == common.DatabaseMode.SOL:
+            return PerformanceResult(get_sol(b, s, num_heads)[0], energy=0.0)
+        elif database_mode == common.DatabaseMode.SOL_FULL:
+            return get_sol(b, s, num_heads)
+        elif database_mode == common.DatabaseMode.EMPIRICAL:
+            return PerformanceResult(get_empirical(b, s, num_heads), energy=0.0)
+
+        attr = f"_generation_dsv4_{attn_kind}_module_data"
+        try:
+            dsv4_data = getattr(self, attr, None)
+            if dsv4_data is None:
+                raise PerfDataNotAvailableError(
+                    f"DeepSeek-V4 {attn_kind} generation module perf data not loaded for "
+                    f"system='{self.system}', backend='{self.backend}', version='{self.version}'."
+                )
+            dsv4_dict = dsv4_data[kv_cache_dtype][gemm_quant_mode]
+            result = self._interp_3d(num_heads, b, s, dsv4_dict, "bilinear")
+            return PerformanceResult(result["latency"], energy=result.get("energy", 0.0))
+        except Exception:
+            if database_mode == common.DatabaseMode.HYBRID:
+                logger.debug(
+                    f"Failed to query DeepSeek-V4 {attn_kind} generation module for {b=}, {s=}, "
+                    f"{num_heads=}; using empirical"
+                )
+                return PerformanceResult(get_empirical(b, s, num_heads), energy=0.0)
+            logger.exception(
+                f"Failed to query DeepSeek-V4 {attn_kind} generation module for {b=}, {s=}, "
+                f"{num_heads=}, {attn_kind=}, {kv_cache_dtype=}, {database_mode=}."
+            )
+            raise
+
+    @functools.lru_cache(maxsize=32768)
+    def query_mhc_module(
+        self,
+        op: str,
+        num_tokens: int,
+        hc_mult: int,
+        hidden_size: int,
+        gemm_quant_mode: common.GEMMQuantMode = common.GEMMQuantMode.float16,
+        database_mode: common.DatabaseMode | None = None,
+        *,
+        sinkhorn_iters: int = 20,
+    ) -> PerformanceResult | tuple[float, float, float]:
+        """
+        Query DeepSeek-V4 mHC (manifold-constrained hyper-connections) module latency.
+
+        ``op`` is one of ``"pre"`` / ``"post"`` / ``"both"``. The analytic SOL follows
+        ``aiconfigurator``'s mHC operator (2 sites per layer: attention mHC + FFN mHC).
+        """
+        if op not in ("pre", "post", "both"):
+            raise ValueError(f"Unsupported mHC op: {op!r} (expected 'pre', 'post' or 'both')")
+
+        sites = 2  # attention mHC + FFN mHC
+        hc = hc_mult
+        hc_dim = hc * hidden_size
+        mix_hc = (2 + hc) * hc
+
+        def _ops_for(kind: str, nt: float) -> float:
+            if kind == "pre":
+                return sites * (
+                    2 * nt * hc_dim * mix_hc
+                    + nt * hc_dim * 3
+                    + nt * (hc * hc + 2 * hc) * sinkhorn_iters
+                    + 2 * nt * hc * hidden_size
+                )
+            return sites * (2 * nt * hc * hc * hidden_size + 2 * nt * hc * hidden_size)
+
+        def get_sol(op: str, num_tokens: int) -> tuple[float, float, float]:
+            nt = float(num_tokens)
+            total_ops = 0.0
+            for kind in (("pre", "post") if op == "both" else (op,)):
+                total_ops += _ops_for(kind, nt)
+
+            # 2 mHC sites; the mixing matrices are shared per site.
+            param_bytes = 2 * (mix_hc * hc_dim + mix_hc + 3) * gemm_quant_mode.value.memory
+            # bf16 residual stream: read the hc-expanded stream, write back to hidden.
+            activation_bytes = 2 * (nt * hc_dim + nt * hidden_size) * 2.0
+
+            tc_flops = self._get_quant_tc_flops(gemm_quant_mode)
+            sol_math = total_ops / tc_flops * 1000
+            sol_mem = (param_bytes + activation_bytes) / self.system_spec["gpu"]["mem_bw"] * 1000
+            return max(sol_math, sol_mem), sol_math, sol_mem
+
+        def get_empirical(op: str, num_tokens: int) -> float:
+            return get_sol(op, num_tokens)[0] / 0.5
+
+        if database_mode is None:
+            database_mode = self._default_database_mode
+        if database_mode == common.DatabaseMode.SOL:
+            return PerformanceResult(get_sol(op, num_tokens)[0], energy=0.0)
+        elif database_mode == common.DatabaseMode.SOL_FULL:
+            return get_sol(op, num_tokens)
+        elif database_mode == common.DatabaseMode.EMPIRICAL:
+            return PerformanceResult(get_empirical(op, num_tokens), energy=0.0)
+
+        try:
+            mhc_data = getattr(self, "_mhc_module_data", None)
+            if mhc_data is None:
+                raise PerfDataNotAvailableError(
+                    f"DeepSeek-V4 mHC module perf data not loaded for system='{self.system}', "
+                    f"backend='{self.backend}', version='{self.version}'."
+                )
+
+            def _lookup(kind: str) -> dict:
+                curve = mhc_data[kind][hc_mult][hidden_size]
+                points = sorted(curve.keys())
+                x0, x1 = self._nearest_1d_point_helper(num_tokens, points, inner_only=False)
+                return self._interp_1d([x0, x1], [curve[x0], curve[x1]], num_tokens)
+
+            if op == "both":
+                pre = _lookup("pre")
+                post = _lookup("post")
+                return PerformanceResult(
+                    pre["latency"] + post["latency"],
+                    energy=pre.get("energy", 0.0) + post.get("energy", 0.0),
+                )
+            res = _lookup(op)
+            return PerformanceResult(res["latency"], energy=res.get("energy", 0.0))
+        except Exception:
+            if database_mode == common.DatabaseMode.HYBRID:
+                logger.debug(
+                    f"Failed to query DeepSeek-V4 mHC module for {op=}, {num_tokens=}, "
+                    f"{hc_mult=}, {hidden_size=}; using empirical"
+                )
+                return PerformanceResult(get_empirical(op, num_tokens), energy=0.0)
+            logger.exception(
+                f"Failed to query DeepSeek-V4 mHC module for {op=}, {num_tokens=}, {hc_mult=}, "
+                f"{hidden_size=}, {database_mode=}."
+            )
+            raise
 
 
 if __name__ == "__main__":

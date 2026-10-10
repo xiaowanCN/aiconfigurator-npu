@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from aiconfigurator_npu.sdk import common
-from aiconfigurator_npu.sdk.perf_database import PerfDatabase
+from aiconfigurator_npu.sdk.perf_database import PerfDatabase, dsv4_attn_kind
 from aiconfigurator_npu.sdk.performance_result import PerformanceResult
 
 logger = logging.getLogger(__name__)
@@ -1607,6 +1607,242 @@ class GenerationDSAModule(Operation):
             kv_cache_dtype=self._kv_cache_dtype,
             gemm_quant_mode=self._gemm_quant_mode,
             architecture=self._architecture,
+        )
+        return PerformanceResult(
+            float(result) * self._scale_factor,
+            energy=result.energy * self._scale_factor,
+        )
+
+    def get_weights(self, **kwargs):
+        return self._weights * self._scale_factor
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DeepSeek-V4 (DEEPSEEKV4) Operations
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class DeepSeekV4MHCModule(Operation):
+    """
+    DeepSeek-V4 mHC (manifold-constrained hyper-connections) module.
+
+    V4 replaces the plain residual stream with a ``hc_mult``-wide hyper-connection
+    whose mixing matrices are constrained by a Sinkhorn iteration. There are two
+    sites per layer (attention mHC and FFN mHC), and each site runs a ``pre``
+    (residual -> hyper-expanded stream) and a ``post`` (hyper stream -> residual)
+    projection.
+
+    The analytic model mirrors ``aiconfigurator``'s mHC operator; when
+    ``mhc_module_perf.txt`` is present its silicon curve takes over.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        scale_factor: float,
+        op: str,
+        hidden_size: int,
+        hc_mult: int,
+        sinkhorn_iters: int,
+        quant_mode: common.GEMMQuantMode,
+    ) -> None:
+        super().__init__(name, scale_factor)
+        if op not in ("pre", "post", "both"):
+            raise ValueError(f"{self.__class__.__name__} op must be 'pre', 'post' or 'both', got {op!r}")
+        self._op = op
+        self._hidden_size = hidden_size
+        self._hc_mult = hc_mult
+        self._sinkhorn_iters = sinkhorn_iters
+        self._quant_mode = quant_mode
+
+        hc = hc_mult
+        hc_dim = hc * hidden_size
+        mix_hc = (2 + hc) * hc
+        self._weights = 2 * (mix_hc * hc_dim + mix_hc + 3) * quant_mode.value.memory
+
+    def query(self, database: PerfDatabase, **kwargs) -> PerformanceResult:
+        """Query mHC module latency with energy data."""
+        num_tokens = int(kwargs.get("x") or 0)
+        result = database.query_mhc_module(
+            op=self._op,
+            num_tokens=num_tokens,
+            hc_mult=self._hc_mult,
+            hidden_size=self._hidden_size,
+            gemm_quant_mode=self._quant_mode,
+            sinkhorn_iters=self._sinkhorn_iters,
+        )
+        return PerformanceResult(
+            float(result) * self._scale_factor,
+            energy=result.energy * self._scale_factor,
+        )
+
+    def get_weights(self, **kwargs):
+        return self._weights * self._scale_factor
+
+
+class ContextDeepSeekV4AttentionModule(Operation):
+    """
+    DeepSeek-V4 context (prefill) module-level compressed attention.
+
+    One instance is created per attention kind (CSA / HCA); ``DeepSeekV4Model``
+    folds SWA layers into HCA and scales each op by its layer count. The module
+    covers q_a/q_b/kv_a projections, the per-layer compressor, the CSA indexer,
+    sparse attention over the sliding window plus compressed KV, and the two-stage
+    grouped low-rank o_proj.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        scale_factor: float,
+        num_heads: int,
+        native_heads: int,
+        tp_size: int,
+        hidden_size: int,
+        q_lora_rank: int,
+        o_lora_rank: int,
+        head_dim: int,
+        qk_rope_head_dim: int,
+        index_n_heads: int,
+        index_head_dim: int,
+        index_topk: int,
+        window_size: int,
+        compress_ratio: int,
+        o_groups: int,
+        kvcache_quant_mode: common.KVCacheQuantMode,
+        fmha_quant_mode: common.FMHAQuantMode,
+        gemm_quant_mode: common.GEMMQuantMode,
+    ) -> None:
+        super().__init__(name, scale_factor)
+        self._num_heads = num_heads
+        self._native_heads = native_heads
+        self._tp_size = tp_size
+        self._hidden_size = hidden_size
+        self._q_lora_rank = q_lora_rank
+        self._o_lora_rank = o_lora_rank
+        self._head_dim = head_dim
+        self._qk_rope_head_dim = qk_rope_head_dim
+        self._index_n_heads = index_n_heads
+        self._index_head_dim = index_head_dim
+        self._index_topk = index_topk
+        self._window_size = window_size
+        self._compress_ratio = compress_ratio
+        self._o_groups = o_groups
+        self._kvcache_quant_mode = kvcache_quant_mode
+        self._fmha_quant_mode = fmha_quant_mode
+        self._gemm_quant_mode = gemm_quant_mode
+        self._weights = 0.0
+
+    def query(self, database: PerfDatabase, **kwargs) -> PerformanceResult:
+        """Query DeepSeek-V4 context attention latency with energy data."""
+        batch_size = kwargs.get("batch_size")
+        isl = kwargs.get("s")
+        prefix = kwargs.get("prefix", 0)
+
+        result = database.query_context_dsv4_module(
+            b=batch_size,
+            s=isl,
+            num_heads=self._num_heads,
+            kvcache_quant_mode=self._kvcache_quant_mode,
+            fmha_quant_mode=self._fmha_quant_mode,
+            gemm_quant_mode=self._gemm_quant_mode,
+            attn_kind=dsv4_attn_kind(self._compress_ratio),
+            prefix=prefix,
+            hidden_size=self._hidden_size,
+            q_lora_rank=self._q_lora_rank,
+            o_lora_rank=self._o_lora_rank,
+            o_groups=self._o_groups,
+            head_dim=self._head_dim,
+            qk_rope_head_dim=self._qk_rope_head_dim,
+            index_n_heads=self._index_n_heads,
+            index_head_dim=self._index_head_dim,
+            index_topk=self._index_topk,
+            sliding_window=self._window_size,
+            compress_ratio=self._compress_ratio,
+        )
+        return PerformanceResult(
+            float(result) * self._scale_factor,
+            energy=result.energy * self._scale_factor,
+        )
+
+    def get_weights(self, **kwargs):
+        return self._weights * self._scale_factor
+
+
+class GenerationDeepSeekV4AttentionModule(Operation):
+    """
+    DeepSeek-V4 generation (decode) module-level compressed attention.
+
+    Same components as :class:`ContextDeepSeekV4AttentionModule` but reading from
+    the paged compressed KV cache with one query token per request.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        scale_factor: float,
+        num_heads: int,
+        native_heads: int,
+        tp_size: int,
+        hidden_size: int,
+        q_lora_rank: int,
+        o_lora_rank: int,
+        head_dim: int,
+        qk_rope_head_dim: int,
+        index_n_heads: int,
+        index_head_dim: int,
+        index_topk: int,
+        window_size: int,
+        compress_ratio: int,
+        o_groups: int,
+        kv_cache_dtype: common.KVCacheQuantMode,
+        gemm_quant_mode: common.GEMMQuantMode,
+    ) -> None:
+        super().__init__(name, scale_factor)
+        self._num_heads = num_heads
+        self._native_heads = native_heads
+        self._tp_size = tp_size
+        self._hidden_size = hidden_size
+        self._q_lora_rank = q_lora_rank
+        self._o_lora_rank = o_lora_rank
+        self._head_dim = head_dim
+        self._qk_rope_head_dim = qk_rope_head_dim
+        self._index_n_heads = index_n_heads
+        self._index_head_dim = index_head_dim
+        self._index_topk = index_topk
+        self._window_size = window_size
+        self._compress_ratio = compress_ratio
+        self._o_groups = o_groups
+        self._kv_cache_dtype = kv_cache_dtype
+        self._gemm_quant_mode = gemm_quant_mode
+        self._weights = 0.0
+
+    def query(self, database: PerfDatabase, **kwargs) -> PerformanceResult:
+        """Query DeepSeek-V4 generation attention latency with energy data."""
+        beam_width = kwargs.get("beam_width")
+        if beam_width != 1:
+            raise ValueError(f"{self.__class__.__name__} only supports beam_width=1, got {beam_width}")
+        batch_size = kwargs.get("batch_size")
+        s = kwargs.get("s")
+
+        result = database.query_generation_dsv4_module(
+            b=batch_size,
+            s=s,
+            num_heads=self._num_heads,
+            kv_cache_dtype=self._kv_cache_dtype,
+            gemm_quant_mode=self._gemm_quant_mode,
+            attn_kind=dsv4_attn_kind(self._compress_ratio),
+            hidden_size=self._hidden_size,
+            q_lora_rank=self._q_lora_rank,
+            o_lora_rank=self._o_lora_rank,
+            o_groups=self._o_groups,
+            head_dim=self._head_dim,
+            qk_rope_head_dim=self._qk_rope_head_dim,
+            index_n_heads=self._index_n_heads,
+            index_head_dim=self._index_head_dim,
+            index_topk=self._index_topk,
+            sliding_window=self._window_size,
+            compress_ratio=self._compress_ratio,
         )
         return PerformanceResult(
             float(result) * self._scale_factor,
