@@ -296,7 +296,7 @@ def _set_default_dtype_ctx(dtype):
         return _fallback(dtype)
 
 
-def _build_attention_module(
+def _prepare_npu_vllm_config(
     model_path: str,
     max_seq_len: int,
     max_batch_size: int,
@@ -304,25 +304,20 @@ def _build_attention_module(
     device: str,
     force_mla: bool = False,
 ):
-    """Build a DeepseekV2MLAAttention module with real vllm-ascend wiring.
+    """Build a module-level VllmConfig and run the Ascend platform hooks.
 
-    Steps mirror aiconfigurator GPU's collect_mla_module.py:
-      1. Resolve the model_path to a local config directory.
-      2. Build a minimal VllmConfig via _create_npu_vllm_config.
-      3. Instantiate DeepseekV2MLAAttention under set_current_vllm_config
-         + bf16 default dtype.
-      4. Move to NPU; fill parameters with random bf16 values (real
-         post-loading layout emerges from process_weights_after_loading).
+    Shared entry for the MLA collector and the DSv4 collector
+    (``dsv4_factory._build_framework_module``): wraps
+    ``_create_npu_vllm_config`` with the derived sizing (block size, KV
+    blocks, batched tokens) and triggers the vllm-ascend hooks that
+    normally run inside vllm_ascend's Worker and are bypassed by
+    AIConfigurator (custom-op registration, v1 WorkspaceManager, ATB
+    extension warmup).
 
-    When ``force_mla`` is True, ``index_topk`` is stripped from the HF
-    config so DeepseekV2MLAAttention's ``is_v32`` detection is False —
-    no indexer is built, and the platform selector dispatches to
-    AscendMLABackend instead of AscendSFABackend. The KV cache becomes
-    a 2-tuple (k_nope, k_pe) and the unstable SparseFlashAttention
-    kernel path is bypassed entirely.
+    When ``force_mla`` is True, the DSA/sparse indexer fields are stripped
+    from hf_config so downstream platform selection dispatches to the MLA
+    backend instead of the sparse backend.
     """
-    from vllm.model_executor.models.deepseek_v2 import DeepseekV2MLAAttention
-
     local_model_path = _resolve_model_path(model_path)
 
     # Scale num_kv_cache_blocks so every query can be placed and the
@@ -398,19 +393,107 @@ def _build_attention_module(
     except Exception as e:
         print(f"[ATB] WARMUP FAILED: {type(e).__name__}: {e}", flush=True)
 
-    hf_config = vllm_config.model_config.hf_config
-    num_heads = hf_config.num_attention_heads
-
-    # Optional: strip DSA / sparse fields from hf_config so the platform
-    # selector dispatches to AscendMLABackend instead of AscendSFABackend.
-    # DeepseekV2MLAAttention.__init__ uses ``hasattr(config, 'index_topk')``
-    # to set self.is_v32 — when False, no indexer is built and the
-    # generated MLAModules has indexer=None / is_sparse=False.
     if force_mla:
+        hf_config = vllm_config.model_config.hf_config
         for _attr in ("index_topk", "index_head_dim", "index_n_heads",
                       "indexer_rope_interleave"):
             if hasattr(hf_config, _attr):
                 delattr(hf_config, _attr)
+
+    return vllm_config
+
+
+def _setup_rope_caches(vllm_config, device: str) -> None:
+    """Move vllm-ascend's global rope cos/sin caches onto the NPU device.
+
+    The base RotaryEmbedding class constructs cos_sin_cache on CPU
+    (torch.arange default); vllm-ascend's AscendRotaryEmbedding stores it
+    into the module-level _cos_cache / _sin_cache globals. When
+    AscendSFAMetadataBuilder later calls get_cos_and_sin_mla(positions_npu)
+    it indexes _cos_cache[positions_npu] and crashes with "Expected all
+    tensors to be on the same device" while the cache is still on CPU.
+    Production skips this via a separate device-side _cos_mla / _sin_mla
+    set up by set_cos_and_sin(vllm_config, ...) inside model_runner, which
+    AIConfigurator bypasses.
+    """
+    try:
+        import vllm_ascend.ops.rotary_embedding as _rope_mod
+
+        # Initialise _cos_mla / _sin_mla on NPU. Without this,
+        # get_cos_and_sin_mla(use_cache=True) does
+        # _cos_mla[:num_tokens, ...] = cos and crashes with "'NoneType'
+        # object does not support item assignment". model_runner_v1
+        # normally calls this.
+        if getattr(_rope_mod, "_cos_mla", None) is None or getattr(_rope_mod, "_sin_mla", None) is None:
+            _rope_mod.set_cos_and_sin(
+                vllm_config,
+                max_num_reqs=vllm_config.scheduler_config.max_num_seqs,
+                decode_token_per_req=1,
+                dtype=torch.bfloat16,
+                device=torch.device(device),
+            )
+
+        # Pull _cos_cache / _sin_cache onto NPU if they were created on CPU
+        # by the base RotaryEmbedding ctor.
+        for _attr in ("_cos_cache", "_sin_cache"):
+            t = getattr(_rope_mod, _attr, None)
+            if isinstance(t, torch.Tensor) and t.device != torch.device(device):
+                setattr(_rope_mod, _attr, t.to(device))
+    except Exception as e:
+        print(f"[WARN] cos/sin cache setup failed: {type(e).__name__}: {e}")
+
+
+def _init_triton_device_props() -> None:
+    """Populate module-level _NUM_AICORE / _NUM_VECTORCORE counters.
+
+    init_device_properties_triton fills the counters used by triton-based
+    RoPE etc. The worker normally invokes it (worker.py:299);
+    AIConfigurator bypasses the worker so we trigger it ourselves.
+    """
+    try:
+        from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
+        init_device_properties_triton()
+    except Exception as e:
+        print(f"[WARN] init_device_properties_triton failed: {type(e).__name__}: {e}")
+
+
+def _build_attention_module(
+    model_path: str,
+    max_seq_len: int,
+    max_batch_size: int,
+    is_context: bool,
+    device: str,
+    force_mla: bool = False,
+):
+    """Build a DeepseekV2MLAAttention module with real vllm-ascend wiring.
+
+    Steps mirror aiconfigurator GPU's collect_mla_module.py:
+      1. Resolve the model_path to a local config directory.
+      2. Build a minimal VllmConfig via _create_npu_vllm_config.
+      3. Instantiate DeepseekV2MLAAttention under set_current_vllm_config
+         + bf16 default dtype.
+      4. Move to NPU; fill parameters with random bf16 values (real
+         post-loading layout emerges from process_weights_after_loading).
+
+    When ``force_mla`` is True, ``index_topk`` is stripped from the HF
+    config so DeepseekV2MLAAttention's ``is_v32`` detection is False —
+    no indexer is built, and the platform selector dispatches to
+    AscendMLABackend instead of AscendSFABackend. The KV cache becomes
+    a 2-tuple (k_nope, k_pe) and the unstable SparseFlashAttention
+    kernel path is bypassed entirely.
+    """
+    from vllm.model_executor.models.deepseek_v2 import DeepseekV2MLAAttention
+
+    vllm_config = _prepare_npu_vllm_config(
+        model_path,
+        max_seq_len,
+        max_batch_size,
+        is_context,
+        device,
+        force_mla=force_mla,
+    )
+    hf_config = vllm_config.model_config.hf_config
+    num_heads = hf_config.num_attention_heads
 
     # DSA indexer (GlmMoeDsa / DeepSeek-V3.2) needs a pre-allocated
     # topk_indices_buffer sized to max_num_batched_tokens × index_topk.
@@ -463,52 +546,8 @@ def _build_attention_module(
             else:
                 param.normal_(mean=0.0, std=0.02)
 
-    # Move global rope cos/sin caches to the NPU device. The base
-    # RotaryEmbedding class constructs cos_sin_cache on CPU (torch.arange
-    # default). vllm-ascend's AscendRotaryEmbedding stores it into the
-    # module-level _cos_cache / _sin_cache globals via
-    # _record_cos_and_sin_cache_interleaved(). When AscendSFAMetadataBuilder
-    # later calls get_cos_and_sin_mla(positions_npu), it indexes
-    # _cos_cache[positions_npu] and hits "Expected all tensors to be on
-    # the same device" because _cos_cache is still on CPU. Production
-    # skips this because a separate device-side _cos_mla / _sin_mla is
-    # used via set_cos_and_sin(vllm_config, ...) inside model_runner,
-    # which AIConfigurator bypasses.
-    try:
-        import vllm_ascend.ops.rotary_embedding as _rope_mod
-
-        # Initialise _cos_mla / _sin_mla on NPU. Without this,
-        # get_cos_and_sin_mla(use_cache=True) does
-        # _cos_mla[:num_tokens, ...] = cos
-        # and crashes with "'NoneType' object does not support item
-        # assignment". model_runner_v1 normally calls this.
-        if getattr(_rope_mod, "_cos_mla", None) is None or getattr(_rope_mod, "_sin_mla", None) is None:
-            _rope_mod.set_cos_and_sin(
-                vllm_config,
-                max_num_reqs=vllm_config.scheduler_config.max_num_seqs,
-                decode_token_per_req=1,
-                dtype=torch.bfloat16,
-                device=torch.device(device),
-            )
-
-        # Pull _cos_cache / _sin_cache onto NPU if they were created on CPU
-        # by the base RotaryEmbedding ctor.
-        for _attr in ("_cos_cache", "_sin_cache"):
-            t = getattr(_rope_mod, _attr, None)
-            if isinstance(t, torch.Tensor) and t.device != torch.device(device):
-                setattr(_rope_mod, _attr, t.to(device))
-    except Exception as e:
-        print(f"[WARN] cos/sin cache setup failed: {type(e).__name__}: {e}")
-
-    # init_device_properties_triton populates module-level _NUM_AICORE /
-    # _NUM_VECTORCORE counters used by triton-based RoPE etc. Worker
-    # normally invokes it (worker.py:299); AIConfigurator bypasses worker
-    # so we trigger it ourselves.
-    try:
-        from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
-        init_device_properties_triton()
-    except Exception as e:
-        print(f"[WARN] init_device_properties_triton failed: {type(e).__name__}: {e}")
+    _setup_rope_caches(vllm_config, device)
+    _init_triton_device_props()
 
     return attn_module, vllm_config
 

@@ -278,6 +278,60 @@ def _discover_attention_cls():
     return None
 
 
+_DISTRIBUTED_READY = False
+_TP_VLLM_CONFIG_CTX = None
+
+
+def _ensure_distributed_env(vllm_config) -> None:
+    """Initialise vllm's single-rank distributed world + TP groups (tp=1).
+
+    DeepseekV4Attention.__init__ calls get_tensor_model_parallel_world_size(),
+    which asserts "tensor model parallel group is not initialized" unless
+    vllm's parallel state is up. Mirrors gemm_factory._init_vllm_context():
+    RANK/WORLD_SIZE/MASTER env vars, init_distributed_environment(),
+    ensure_model_parallel_initialized(1, 1). Idempotent per process.
+    """
+    global _DISTRIBUTED_READY, _TP_VLLM_CONFIG_CTX
+    if _DISTRIBUTED_READY:
+        return
+    import os
+    import socket
+
+    from vllm.distributed import init_distributed_environment
+    from vllm.distributed.parallel_state import ensure_model_parallel_initialized
+
+    def _find_free_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", str(_find_free_port()))
+
+    # Enable NZ (FRACTAL_NZ) format for weight tensors. In production vLLM
+    # this is set by vllm_ascend/worker/model_runner_v1.py at import time;
+    # benchmark scripts bypass the worker layer.
+    if hasattr(torch, "npu"):
+        torch.npu.config.allow_internal_format = True
+
+    init_distributed_environment()
+
+    # vllm's initialize_model_parallel reads get_current_vllm_config().
+    # set_current_vllm_config is a @contextmanager: calling it without
+    # entering never installs the config, so enter it and keep it installed
+    # for the whole run (same trick as gemm_factory._ensure_vllm_config_ctx).
+    if _TP_VLLM_CONFIG_CTX is None:
+        from vllm.config import set_current_vllm_config
+
+        _TP_VLLM_CONFIG_CTX = set_current_vllm_config(vllm_config)
+        _TP_VLLM_CONFIG_CTX.__enter__()
+
+    ensure_model_parallel_initialized(1, 1)
+    _DISTRIBUTED_READY = True
+
+
 def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     """Instantiate vllm-ascend's DSv4 attention module.
 
@@ -285,7 +339,11 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     platform hooks (custom-op registration, ATB warmup, workspace manager) run
     the same way they do for the DSA/MLA collectors.
     """
-    from mla_module_factory import _create_npu_vllm_config, _resolve_model_path
+    from mla_module_factory import (
+        _init_triton_device_props,
+        _prepare_npu_vllm_config,
+        _setup_rope_caches,
+    )
     from vllm.config import set_current_vllm_config
 
     cls = _import_class(spec.attention_cls) if spec.attention_cls else _discover_attention_cls()
@@ -296,17 +354,17 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
             "--module-source reference."
         )
 
-    local_model_path = _resolve_model_path(spec.model_path)
     is_context = spec.op_type == OP_CONTEXT
     max_tokens = spec.batch * spec.seq_len if is_context else spec.batch
 
-    vllm_config = _create_npu_vllm_config(
-        model_name=local_model_path,
+    vllm_config = _prepare_npu_vllm_config(
+        model_path=spec.model_path,
         max_seq_len=spec.seq_len,
         max_batch_size=spec.batch,
         is_context=is_context,
         device=device,
     )
+    _ensure_distributed_env(vllm_config)
     hf_config = vllm_config.model_config.hf_config
 
     # Only forward the kwargs the class actually declares, so this works across
@@ -333,7 +391,15 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     kwargs = candidates if accepts_var_kw else {k: v for k, v in candidates.items() if k in params}
     logger.debug("Instantiating %s with kwargs %s", cls.__name__, sorted(kwargs))
 
-    with set_current_vllm_config(vllm_config):
+    # Construct under the NPU default-device context, mirroring production
+    # where the worker builds the model on-device. vllm-ascend's
+    # ComplexExpRotaryEmbedding (rope_dsv4.py) mixes bare torch.arange (t)
+    # with an explicitly-placed inv_freq in __init__ — under a CPU default
+    # device the einsum crashes with "Expected all tensors to be on the same
+    # device". bf16 default dtype matches the MLA collector path.
+    from mla_module_factory import _set_default_dtype_ctx
+
+    with set_current_vllm_config(vllm_config), torch.device(device), _set_default_dtype_ctx(spec.dtype):
         module = cls(**kwargs)
 
     if any(p.is_meta for p in module.parameters()):
@@ -342,12 +408,43 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
         module = module.to(device)
     module.eval()
     module.requires_grad_(False)
+
+    # Same post-instantiation env setup as the MLA collector: rope cos/sin
+    # caches live in module-level globals created on CPU, and the triton
+    # device-property counters are normally filled by the vllm-ascend worker.
+    _setup_rope_caches(vllm_config, device)
+    _init_triton_device_props()
+
     return module, vllm_config, max_tokens
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Public API
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _create_dsv4_kv_cache_and_metadata(
+    module, vllm_config, spec, device, attn_layer_name
+):
+    """Build the DSv4 attention metadata (+ KV cache) for one forward pass.
+
+    Returns the attn_metadata mapping expected by set_ascend_forward_context,
+    or None to take dsa_forward's profiling (zero-input) path when the real path
+    cannot be assembled on this vllm-ascend build.
+
+    The real path needs:
+      * a DSA backend metadata builder (``_get_ascend_dsa_backend().get_builder_cls()``), and
+      * the 6-tuple KV cache that vllm_ascend/ops/dsa.py::_build_kv_cache expects.
+    Both are version-specific and live in the remote vllm-ascend source, so the
+    concrete implementation is filled in once that source is available.
+    """
+    # TODO: assemble AscendCommonAttentionMetadata + DSA builder metadata and
+    # bind the 6-tuple KV cache into static_forward_context[attn_layer_name].kv_cache.
+    logger.warning(
+        "DSv4 real attn_metadata not yet built; using dsa_forward profiling path. "
+        "Provide vllm_ascend/ops/dsa.py::_build_kv_cache + DSA backend builder to enable it."
+    )
+    return None
 
 
 def create_dsv4_module_func(
@@ -378,30 +475,64 @@ def create_dsv4_module_func(
 
     else:
         module, vllm_config, num_tokens = _build_framework_module(spec, device)
+
+        hidden = torch.randn(
+            num_tokens, spec.hidden_size, dtype=spec.dtype, device=device
+        )
+        if is_context:
+            positions = (
+                torch.arange(spec.seq_len, device=device, dtype=torch.long)
+                .unsqueeze(0)
+                .expand(spec.batch, -1)
+                .reshape(-1)
+                .contiguous()
+            )
+        else:
+            positions = torch.full((spec.batch,), spec.seq_len - 1, dtype=torch.long, device=device)
+
+        attn_layer_name = "model.layers.0.self_attn"
+        # DSv4 forward runs through torch.ops.vllm.dsa_forward, which requires a
+        # live ForwardContext. set_ascend_forward_context auto-populates
+        # no_compile_layers from static_forward_context (where the
+        # AscendDeepseekSparseAttention was registered during __init__), and a
+        # non-None attn_metadata selects the real compute path. The attn_metadata
+        # + 6-tuple KV cache are produced by _create_dsv4_kv_cache_and_metadata.
+        attn_metadata = _create_dsv4_kv_cache_and_metadata(
+            module, vllm_config, spec, device, attn_layer_name
+        )
+
+        from contextlib import ExitStack
         from vllm.config import set_current_vllm_config
 
-        with set_current_vllm_config(vllm_config):
-            hidden = torch.randn(
-                num_tokens, spec.hidden_size, dtype=spec.dtype, device=device
-            )
-            if is_context:
-                positions = (
-                    torch.arange(spec.seq_len, device=device, dtype=torch.long)
-                    .unsqueeze(0)
-                    .expand(spec.batch, -1)
-                    .reshape(-1)
-                    .contiguous()
-                )
-            else:
-                positions = torch.full((spec.batch,), spec.seq_len - 1, dtype=torch.long, device=device)
+        def forward_fn() -> None:
+            stack = ExitStack()
+            stack.enter_context(set_current_vllm_config(vllm_config))
+            try:
+                from vllm_ascend.ascend_forward_context import set_ascend_forward_context
+                from vllm_ascend.ascend_config import WeightPrefetchConfig
+                from vllm_ascend.utils import set_weight_prefetch_method
 
-            def forward_fn() -> None:
-                # vLLM attention modules take (positions, hidden_states); fall back
-                # to hidden-only for modules with a different signature.
-                try:
-                    module.forward(positions, hidden, None)
-                except TypeError:
-                    module.forward(positions, hidden)
+                set_weight_prefetch_method(WeightPrefetchConfig({}))
+                num_tokens_across_dp = torch.tensor(
+                    [num_tokens], dtype=torch.int64, device=device
+                )
+                stack.enter_context(
+                    set_ascend_forward_context(
+                        attn_metadata,
+                        vllm_config,
+                        num_tokens=num_tokens,
+                        num_tokens_across_dp=num_tokens_across_dp,
+                    )
+                )
+            except ImportError:
+                from vllm.forward_context import set_forward_context
+
+                stack.enter_context(
+                    set_forward_context(attn_metadata, vllm_config)
+                )
+            # vLLM attention modules take (positions, hidden_states, llama_4_scaling).
+            module.forward(positions, hidden, None)
+            stack.close()
 
     # Dry run so construction/typing failures surface before the timed loop.
     with torch.inference_mode():

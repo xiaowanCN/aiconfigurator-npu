@@ -76,6 +76,12 @@ MODEL_CONFIGS = [
     (3584, 2560, 64, 8, 1, "qwen2-moe-57b"),
     # Qwen3-MoE (30B-A3B)
     (2048, 1024, 128, 8, 4, "qwen3-moe-30b"),
+    # DeepSeek-V4-Pro: 384 experts / topk 6 / hidden 7168 / inter 3072.
+    # ep_size only simulates Expert Parallelism on a single card (local experts
+    # = 384 / ep_size); 8 keeps local experts = 48 (~4 GiB bf16) safely in VRAM.
+    # Add more ep_size entries (e.g. 16 -> local 24, 32 -> local 12) to widen
+    # SILICON coverage for larger EP deployments.
+    (7168, 3072, 384, 6, 8, "deepseek-v4-pro"),
 ]
 
 # --- CSV output file names ---

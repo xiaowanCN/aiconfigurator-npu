@@ -178,7 +178,8 @@ aic-npu 的内存模型是线性的（`kvcache = tokens × kvcache_per_token × 
 
 | # | 数据 | 状态 | 说明 |
 |---|------|------|------|
-| D1 | `gemm_perf.txt` / `moe_perf.txt` / `custom_allreduce_perf.txt` | ✅ 已有（0.23.0 目录） | 维度：384 experts / topk 6 / 7168 / 3072 需补采 |
+| D1 | `gemm_perf.txt` / `custom_allreduce_perf.txt` | ✅ 已有（0.23.0 目录） | 通用表，已覆盖 V4 维度 | 
+| D1 | `moe_perf.txt` | ⚠️ 已有但缺 V4 维度 | 需补采 `384 experts / topk 6 / 7168 / 3072`（见 D1 小节） |
 | D2 | `mhc_module_perf.txt` | ⬜ 待采集 | 脚本 `collector/npu/collect_mhc.py` 已就绪 |
 | D3 | `dsv4_{csa,hca}_{context,generation}_module_perf.txt` | ⬜ 待采集 | 脚本 `collector/npu/collect_dsv4_attn.py` 已就绪 |
 
@@ -191,6 +192,76 @@ aic-npu 的内存模型是线性的（`kvcache = tokens × kvcache_per_token × 
 | `EMPIRICAL` / `SOL` | 直接用解析估算 |
 
 **没有硅数据之前，用 `--database-mode HYBRID` 即可跑通全链路**（见第 4 节）。
+
+#### D1：`gemm_perf.txt` / `moe_perf.txt` / `custom_allreduce_perf.txt`
+
+> **澄清**：`gemm_perf.txt`（GEMM 的 M/N/K 全量扫描）和 `custom_allreduce_perf.txt`
+> （按 message size 的通信延迟）都是**与模型无关的通用表**，现有 `0.23.0` 目录里的
+> 文件已经覆盖 V4 用到的维度：采集器的 `DEFAULT_NK_LIST` 含 `7168`、`collect_hccl.py`
+> 的 `BIZ_HIDDENS` 含 `7168`，所以 `7168×3072`、`7168×7168` 等 GEMM 形状和
+> `bs×7168` 的 allreduce 形状都已有数据，**不需要按 V4 重新补采**。
+>
+> 真正需要补采的是 **`moe_perf.txt`**：MoE 查询是**精确 key**
+> （`quant × distribution × topk × num_experts × hidden × inter × moe_tp × moe_ep`，
+> 见 `perf_database.load_moe_data`），而现有 `moe_perf.txt` 只有 V3 的
+> `7168 / 2048 / 8 / 256 / tp1 / ep8`（见下「现有维度」），**没有 V4 的
+> `7168 / 3072 / 6 / 384`**。缺这些行时 `SILICON` 模式会在 MoE 查询处回落 SOL 估算，
+> 与 D2/D3 缺失时行为一致。
+
+**现有 `moe_perf.txt` 维度（`0.23.0`，可作为对照）**：
+
+```
+7168 / 2048 / 8 / 256 / tp1 / ep8     # DeepSeek-V3 / R1
+6144 / 9216 / 2 / 32  / tp1 / ep4     # MiniMax-Text-01
+...（其余为更小模型，与 V4 无关）
+```
+
+**补采 V4 MoE（已把 `deepseek-v4-pro` 加进 `collector/npu/collect_moe.py` 的 `MODEL_CONFIGS`）**：
+
+采集器只跑 `num_experts=384 / topk=6 / hidden=7168 / inter=3072`，`ep_size=8`
+（`384/8 = 48` 个 local experts，bf16 约 4 GiB，单卡安全）。如需覆盖更大的 EP 部署，
+在 `MODEL_CONFIGS` 里再加 `(7168, 3072, 384, 6, 16, "deepseek-v4-pro")`、
+`(..., 32, ...)` 等条目即可。
+
+```bash
+# 1) 先冒烟（2 个点，确认 vllm-ascend MoE 算子能实例化）
+python collector/npu/collect_moe.py \
+  --models deepseek-v4-pro --quant-types bf16 \
+  --token-list 1 128 --warmup-iters 1 --bench-iters 3 \
+  --output-dir ./data/moe_v4_smoke
+
+# 2) 全量采集（13 个 token 档 × bf16）
+python collector/npu/collect_moe.py \
+  --models deepseek-v4-pro --quant-types bf16 \
+  --token-list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 \
+  --output-dir ./data/moe_v4 --resume
+```
+
+**转换 + 并入（关键：不要整体覆盖，否则会丢掉现有 V3 行）**。
+
+`tools/convert_to_aiconfigurator.py` 的 `convert_moe` 会以 `"w"` 覆盖写
+`moe_perf.txt` 且无条件执行，因此必须把 V4 先转到一个**隔离的输出目录**，
+只产出含 V4 行的 `moe_perf.txt`，再把数据行追加进现有文件：
+
+```bash
+# 3) 隔离转换：输入目录只含 V4 的 GroupedMatmul CSV，输出目录只会生成 moe_perf.txt
+python tools/convert_to_aiconfigurator.py \
+  --input-dir ./data/moe_v4 \
+  --output-dir ./data/moe_v4_out \
+  --device "Ascend 910B" --framework vllm-ascend --version 0.23.0
+
+# 4) 仅把 V4 数据行（去掉表头）追加到现有 moe_perf.txt，保留 V3 等原有行
+#    PowerShell:
+$src = "./data/moe_v4_out/moe_perf.txt"
+$dst = "src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0/moe_perf.txt"
+Get-Content $src | Select-Object -Skip 1 | Add-Content $dst -Encoding utf8
+#    bash:
+# tail -n +2 ./data/moe_v4_out/moe_perf.txt >> src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0/moe_perf.txt
+```
+
+> 转换后 `moe_tp_size` 恒为 `1`、`moe_ep_size = 采集时的 ep_size`（此处 `8`）、
+> `distribution` 固定 `power_law_1.2`，与现有 V3 行一致。
+> 落位后可用 `aic-npu default ... --database-mode SILICON` 验证 V4 MoE 不再回落 SOL。
 
 #### D2：`mhc_module_perf.txt`
 
@@ -231,7 +302,7 @@ context 表的 `s = isl`，generation 表的 `s = isl + step`（脚本写 step=0
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 \
-  --seq-len-list 128 256 512 1024 2048 4096 \
+  --seq-len-list 128 256 512 1024 2048 4096 8196 16384 \
   --num-heads-list 128 64 32 16 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
