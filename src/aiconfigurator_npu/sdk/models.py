@@ -170,20 +170,40 @@ def _apply_model_quant_defaults(
 
     # Ascend NPU (vllm-ascend) has no NVIDIA FP8/FP4 GEMM or MoE kernels. HF configs of
     # FP8 checkpoints (DeepSeek-R1/V3/V4 all ship quantization_config.fp8) infer
-    # fp8_block, which no ascend perf table contains. Remap to the Ascend W8A8 dynamic
-    # quant mode, which is the NPU equivalent of dynamic per-token FP8.
+    # fp8_block, which no ascend perf table contains, so TaskConfig.validate() would
+    # reject it outright. Remap those modes onto a table that actually exists.
+    #
+    # We deliberately fall back to float16 (the bf16 baseline) rather than the Ascend
+    # W8A8 dynamic mode `sq`:
+    #   * float16 is the historical baseline for models whose config carries no
+    #     quantization_config, so results stay comparable across config refreshes
+    #     (see model_configs/deepseek-ai--DeepSeek-R1_config.json, which gained a
+    #     quantization_config block in c3eba1b);
+    #   * `sq` is measurably *slower* than bf16 in decode-dominated regimes on 910B
+    #     (see docs/moe_w8a8_case_study.md), so auto-selecting it would silently
+    #     pessimise results for users who deploy bf16;
+    #   * `aic-npu default` does not expose --gemm-quant-mode, so the inferred value
+    #     is final for that entry point.
+    # Deployments that really run W8A8 should model it explicitly (the `exp` /
+    # `estimate` entry points accept --gemm-quant-mode w8a8_dynamic, which normalises
+    # to the `sq` table).
     if backend_name == "vllm-ascend":
-        # GEMM: the Ascend W8A8 dynamic measurement is published under `sq`
-        # (see tools/convert_to_aiconfigurator.py GEMM_QUANT_MAP).
         if model_config.gemm_quant_mode in _NVIDIA_FP8_GEMM_MODES:
-            model_config.gemm_quant_mode = common.GEMMQuantMode.sq
+            model_config.gemm_quant_mode = common.GEMMQuantMode.float16
         # MoE: MoEQuantMode has no `sq` entry and the Ascend W8A8 MoE sweep is still
         # incomplete, so the collected table only carries float16 rows
         # (see tools/convert_to_aiconfigurator.py MOE_QUANT_MAP).
         if model_config.moe_quant_mode in _NVIDIA_FP8_MOE_MODES:
             model_config.moe_quant_mode = common.MoEQuantMode.float16
+        # FMHA: ascend attention tables only carry float16 rows.
         if model_config.fmha_quant_mode == common.FMHAQuantMode.fp8:
             model_config.fmha_quant_mode = common.FMHAQuantMode.float16
+        # KV cache: every ascend MLA table (context/generation_mla_perf.txt) only has
+        # float16 rows. Leaving fp8 selected would silently miss the silicon table and
+        # fall back to the SOL estimate in HYBRID mode -- both less accurate and slower
+        # than the measured float16 path. Clamp until fp8 MLA data is collected.
+        if model_config.kvcache_quant_mode == common.KVCacheQuantMode.fp8:
+            model_config.kvcache_quant_mode = common.KVCacheQuantMode.float16
 
     # Only log if model_config was modified
     if original_config != model_config:
