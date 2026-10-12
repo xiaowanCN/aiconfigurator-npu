@@ -119,8 +119,64 @@ def convert_gemm(input_path: str, output_path: str, device: str, framework: str,
     return len(rows_out)
 
 
-def convert_moe(input_path: str, output_path: str, device: str, framework: str, version: str) -> int:
-    """Convert GroupedMatmul_MoE_BF16/W8A8.csv → moe_perf.txt"""
+# MoE workload distribution keys. ``_power_law_alpha`` is a per-model-family
+# constant on the SDK side (see sdk/models.py), and ``query_moe`` treats
+# ``distribution`` as an EXACT dict key (no interpolation, no fuzzy match), so a
+# table written with the wrong alpha is silently unreachable:
+#   * 1.2  -> MOEModel (Qwen2/3-MoE, Mixtral, DeepSeek-V2-Lite, ...)
+#   * 1.01 -> DeepSeekModel (V3/R1), DeepSeekV32Model, DeepSeekV4Model, NemotronH
+# A single moe_perf.txt serves both families, hence the "both" option.
+MOE_DISTRIBUTION_KEYS = ("power_law_1.2", "power_law_1.01")
+DEFAULT_MOE_DISTRIBUTION = "power_law_1.2"
+
+
+def _resolve_moe_distributions(spec: str) -> tuple[str, ...]:
+    """Expand the --moe-distribution choice into concrete table keys."""
+    if spec == "both":
+        return MOE_DISTRIBUTION_KEYS
+    return (spec,)
+
+
+def _ensure_trailing_newline(path: str) -> None:
+    """Guarantee ``path`` ends with a newline so appended rows cannot fuse.
+
+    Both sides are written by csv.DictWriter (``\\r\\n`` terminated), so this is
+    normally a no-op — it only matters if someone hand-edited the table.
+    """
+    try:
+        with open(path, "rb") as f:
+            if f.seek(0, os.SEEK_END) == 0:
+                return
+            f.seek(-1, os.SEEK_END)
+            last = f.read(1)
+        if last != b"\n":
+            with open(path, "ab") as f:
+                f.write(b"\n")
+    except OSError:
+        pass
+
+
+def convert_moe(
+    input_path: str,
+    output_path: str,
+    device: str,
+    framework: str,
+    version: str,
+    distributions: tuple[str, ...] = (DEFAULT_MOE_DISTRIBUTION,),
+    append: bool = False,
+) -> int:
+    """Convert GroupedMatmul_MoE_BF16/W8A8.csv → moe_perf.txt
+
+    ``distributions`` controls the ``distribution`` column written for every row.
+    Pass both keys (``--moe-distribution both``) when the table must serve model
+    families with different ``_power_law_alpha`` values.
+
+    ``append`` merges the converted rows into an EXISTING moe_perf.txt instead of
+    overwriting it. That is the only safe way to add a new model: the table is
+    shared by every MoE model, and ``convert_moe`` only ever sees the CSVs of the
+    models present in ``input_path``, so a plain overwrite drops every other
+    model's rows. Falls back to a normal write when the target does not exist.
+    """
     rows_out = []
 
     for fname in ("GroupedMatmul_MoE_BF16.csv", "GroupedMatmul_MoE_W8A8.csv"):
@@ -149,23 +205,24 @@ def convert_moe(input_path: str, output_path: str, device: str, framework: str, 
 
                 latency_ms = _us_to_ms(float(row["Average Duration(us)"]))
 
-                rows_out.append({
-                    "framework": framework,
-                    "version": version,
-                    "device": device,
-                    "op_name": "moe",
-                    "kernel_source": "vllm_ascend_fused_moe",
-                    "moe_dtype": quant,
-                    "num_tokens": num_tokens,
-                    "hidden_size": hidden_size,
-                    "inter_size": inter_size,
-                    "topk": topk,
-                    "num_experts": num_experts,
-                    "moe_tp_size": moe_tp_size,
-                    "moe_ep_size": ep_size,
-                    "distribution": "power_law_1.2",
-                    "latency": latency_ms,
-                })
+                for distribution in distributions:
+                    rows_out.append({
+                        "framework": framework,
+                        "version": version,
+                        "device": device,
+                        "op_name": "moe",
+                        "kernel_source": "vllm_ascend_fused_moe",
+                        "moe_dtype": quant,
+                        "num_tokens": num_tokens,
+                        "hidden_size": hidden_size,
+                        "inter_size": inter_size,
+                        "topk": topk,
+                        "num_experts": num_experts,
+                        "moe_tp_size": moe_tp_size,
+                        "moe_ep_size": ep_size,
+                        "distribution": distribution,
+                        "latency": latency_ms,
+                    })
 
     if not rows_out:
         print("  [warn] no MoE rows converted")
@@ -175,12 +232,19 @@ def convert_moe(input_path: str, output_path: str, device: str, framework: str, 
     fieldnames = ["framework", "version", "device", "op_name", "kernel_source",
                   "moe_dtype", "num_tokens", "hidden_size", "inter_size", "topk",
                   "num_experts", "moe_tp_size", "moe_ep_size", "distribution", "latency"]
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
+
+    do_append = append and os.path.exists(output_path)
+    if do_append:
+        _ensure_trailing_newline(output_path)
+
+    with open(output_path, "a" if do_append else "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
+        if not do_append:
+            writer.writeheader()
         writer.writerows(rows_out)
 
-    print(f"  moe_perf.txt: {len(rows_out)} rows")
+    verb = "appended to" if do_append else "written to"
+    print(f"  moe_perf.txt: {len(rows_out)} rows {verb} {output_path}")
     return len(rows_out)
 
 
@@ -563,6 +627,27 @@ def main():
         ),
     )
     parser.add_argument(
+        "--moe-distribution", default=DEFAULT_MOE_DISTRIBUTION,
+        choices=[DEFAULT_MOE_DISTRIBUTION, "power_law_1.01", "both"],
+        help=(
+            "Value written to the MoE 'distribution' column. It is an EXACT query key, "
+            "so it must match the target model family's _power_law_alpha: "
+            "power_law_1.2 for MOEModel (Qwen2/3-MoE, Mixtral, DeepSeek-V2-Lite); "
+            "power_law_1.01 for DeepSeek-V3/R1, V3.2 and DeepSeek-V4 (sdk/models.py). "
+            "'both' writes each row twice so the table serves every family."
+        ),
+    )
+    parser.add_argument(
+        "--append", action="store_true",
+        help=(
+            "Merge converted MoE rows into an existing moe_perf.txt instead of "
+            "overwriting it (no-op if the target does not exist). Use this when "
+            "adding DeepSeek-V4 rows next to the already-collected V3/R1/... rows; "
+            "without it the other models' rows are dropped, because the converter "
+            "only sees the CSVs present in --input-dir."
+        ),
+    )
+    parser.add_argument(
         "--dsv4-output", action="store_true",
         help="Also copy DeepSeek-V4 attention tables (dsv4_{csa,hca}_{context,generation}_module_perf.txt).",
     )
@@ -585,6 +670,8 @@ def main():
         args.input_dir,
         os.path.join(args.output_dir, "moe_perf.txt"),
         args.device, args.framework, args.version,
+        _resolve_moe_distributions(args.moe_distribution),
+        args.append,
     )
     total += convert_context_attention(
         args.input_dir,

@@ -5003,6 +5003,40 @@ class PerfDatabase:
                 error_msg=f"Failed to query nccl data for {dtype=}, {num_gpus=}, {operation=}, {message_size=}",
             )
 
+    @staticmethod
+    def _resolve_moe_distribution(moe_data, quant_mode, workload_distribution: str) -> str:
+        """Pick which ``distribution`` key to read out of a MoE table.
+
+        ``distribution`` encodes the model family's ``_power_law_alpha`` and is an
+        EXACT dict key, so a table collected with a different alpha used to fall
+        back to ``uniform`` -- which essentially never exists -- making the whole
+        MoE table unreachable. Concretely, DeepSeek-V3/R1, V3.2 and V4 query
+        ``power_law_1.01`` (``models._power_law_alpha``) while the ascend
+        ``moe_perf.txt`` historically carries ``power_law_1.2``.
+
+        Resolution order:
+          1. exact match;
+          2. any sibling of the same family (``power_law_*`` for ``power_law``)
+             -- same measurement, different alpha, so it is safe to reuse;
+          3. ``uniform`` (legacy behaviour).
+        """
+        try:
+            available = list(moe_data[quant_mode].keys())
+        except Exception:
+            return "uniform"
+
+        if workload_distribution in available:
+            return workload_distribution
+
+        family = str(workload_distribution).split("_")[0]
+        for key in available:
+            if family and str(key).startswith(f"{family}_"):
+                logger.debug(
+                    f"MoE distribution '{workload_distribution}' not found, using same-family '{key}' instead"
+                )
+                return key
+        return "uniform"
+
     @functools.lru_cache(maxsize=32768)
     def query_moe(
         self,
@@ -5229,8 +5263,8 @@ class PerfDatabase:
 
                     moe_data.raise_if_not_loaded()
 
-                    used_workload_distribution = (
-                        workload_distribution if workload_distribution in moe_data[quant_mode] else "uniform"
+                    used_workload_distribution = self._resolve_moe_distribution(
+                        moe_data, quant_mode, workload_distribution
                     )
                     moe_dict = moe_data[quant_mode][used_workload_distribution][topk][num_experts][hidden_size][
                         inter_size
@@ -5282,10 +5316,8 @@ class PerfDatabase:
                         and is_gated
                     ):
                         try:
-                            used_workload_distribution = (
-                                workload_distribution
-                                if workload_distribution in self._moe_low_latency_data[quant_mode]
-                                else "uniform"
+                            used_workload_distribution = self._resolve_moe_distribution(
+                                self._moe_low_latency_data, quant_mode, workload_distribution
                             )
                             moe_dict = self._moe_low_latency_data[quant_mode][used_workload_distribution][topk][
                                 num_experts
@@ -5296,17 +5328,15 @@ class PerfDatabase:
                                 f"{inter_size} {moe_tp_size} {moe_ep_size} but failed."
                             )
                         except:
-                            used_workload_distribution = (
-                                workload_distribution
-                                if workload_distribution in self._moe_data[quant_mode]
-                                else "uniform"
+                            used_workload_distribution = self._resolve_moe_distribution(
+                                self._moe_data, quant_mode, workload_distribution
                             )
                             moe_dict = self._moe_data[quant_mode][used_workload_distribution][topk][num_experts][
                                 hidden_size
                             ][inter_size][moe_tp_size][moe_ep_size]
                     else:
-                        used_workload_distribution = (
-                            workload_distribution if workload_distribution in self._moe_data[quant_mode] else "uniform"
+                        used_workload_distribution = self._resolve_moe_distribution(
+                            self._moe_data, quant_mode, workload_distribution
                         )
                         moe_dict = self._moe_data[quant_mode][used_workload_distribution][topk][num_experts][
                             hidden_size
@@ -5344,8 +5374,8 @@ class PerfDatabase:
                     return PerformanceResult(lat, energy=energy)
                 elif self.backend in (common.BackendName.vllm.value, common.BackendName.vllm_ascend.value):
                     self._moe_data.raise_if_not_loaded()
-                    used_workload_distribution = (
-                        workload_distribution if workload_distribution in self._moe_data[quant_mode] else "uniform"
+                    used_workload_distribution = self._resolve_moe_distribution(
+                        self._moe_data, quant_mode, workload_distribution
                     )
                     moe_dict = self._moe_data[quant_mode][used_workload_distribution][topk][num_experts][hidden_size][
                         inter_size

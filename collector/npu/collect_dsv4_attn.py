@@ -53,10 +53,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONTEXT_BATCH_LIST = [1, 2, 4, 8, 16, 32]
 DEFAULT_CONTEXT_SEQ_LIST = [128, 256, 512, 1024, 2048, 4096]
 # Decode: one query token per request, so batch can go much higher.
-DEFAULT_GENERATION_BATCH_LIST = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+# Must reach 512: agg sweeps up to max_batch_size=512 and disagg up to
+# decode_max_num_tokens=512 (pareto_analysis.py / inference_session.py). Anything
+# above the largest collected batch gets clamped to the grid edge by
+# PerfDatabase._nearest_1d_point_helper, i.e. silently constant-extrapolated.
+DEFAULT_GENERATION_BATCH_LIST = [1, 2, 4, 8, 16, 32, 64, 128, 256, 384, 512]
 DEFAULT_GENERATION_SEQ_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
-# 128 // tp_size for tp in {1, 2, 4, 8}
-DEFAULT_NUM_HEADS_LIST = [128, 64, 32, 16]
+# num_heads = num_attention_heads(128) // tp_size. tp is NOT capped at 8:
+# TaskConfig._widen_gpu_sweep_lists (sdk/task.py) extends tp_list with 16/32/64/...
+# up to --total-gpus, because a <=8-GPU worker cannot hold DeepSeek-V4-Pro
+# (~2.9 TB bf16). With --total-gpus 64 tp reaches 64, hence heads down to 2.
+DEFAULT_NUM_HEADS_LIST = [128, 64, 32, 16, 8, 4, 2]
 
 CONTEXT_COLUMNS = [
     "framework", "version", "device", "op_name", "mla_dtype", "kv_cache_dtype",

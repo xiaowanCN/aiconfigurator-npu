@@ -48,6 +48,9 @@ from moe_factory import (
 logger = logging.getLogger(__name__)
 
 # --- Default token counts (MoE is model-specific, not exhaustive like GEMM) ---
+# The aic-npu runtime queries up to prefill_max_num_tokens (16384) on the context
+# side, so 4096 alone is not enough for large-EP/long-ISL deployments — pass
+# --token-list explicitly when collecting for DeepSeek-V4-Pro (see docs).
 DEFAULT_TOKEN_LIST = [
     1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
 ]
@@ -77,11 +80,33 @@ MODEL_CONFIGS = [
     # Qwen3-MoE (30B-A3B)
     (2048, 1024, 128, 8, 4, "qwen3-moe-30b"),
     # DeepSeek-V4-Pro: 384 experts / topk 6 / hidden 7168 / inter 3072.
+    #
     # ep_size only simulates Expert Parallelism on a single card (local experts
-    # = 384 / ep_size); 8 keeps local experts = 48 (~4 GiB bf16) safely in VRAM.
-    # Add more ep_size entries (e.g. 16 -> local 24, 32 -> local 12) to widen
-    # SILICON coverage for larger EP deployments.
+    # = 384 / ep_size). It ends up as the `moe_ep_size` column, which the SDK
+    # treats as an EXACT query key (no interpolation), so every EP value the
+    # runtime can pick must be collected.
+    #
+    # The runtime search space is NOT [1, 2, 4, 8]: `TaskConfig._widen_gpu_sweep_lists`
+    # (sdk/task.py) extends tp/dp/moe_ep with 16/32/64/... up to --total-gpus,
+    # because a <=8-GPU worker can never hold this model (bf16 weights are ~2.9 TB).
+    # On 64 GB 910B cards only ep=64 is memory-feasible (~45-57 GiB/card), so ep=64
+    # is the entry that actually matters for `aic-npu default --total-gpus 64`.
+    #
+    # Larger ep means FEWER local experts, i.e. cheaper collection:
+    #   ep=64 ->  6 local experts (~0.8 GiB bf16)  : required, trivially cheap
+    #   ep=32 -> 12 local experts (~1.6 GiB bf16)  : cheap insurance
+    #   ep=16 -> 24 local experts (~3.2 GiB bf16)  : cheap insurance
+    #   ep=8  -> 48 local experts (~6.3 GiB bf16)  : safe
+    #   ep=4  -> 96 local experts (~12.7 GiB bf16) : safe
+    #   ep=2  -> 192 local experts (~25.3 GiB bf16): tight but fits in 64 GB
+    #   ep=1  -> 384 local experts (~50.7 GiB bf16): likely OOM, and the matching
+    #            1-GPU deployment OOMs anyway — collected only on request.
+    (7168, 3072, 384, 6, 64, "deepseek-v4-pro-ep64"),
+    (7168, 3072, 384, 6, 32, "deepseek-v4-pro-ep32"),
+    (7168, 3072, 384, 6, 16, "deepseek-v4-pro-ep16"),
     (7168, 3072, 384, 6, 8, "deepseek-v4-pro"),
+    (7168, 3072, 384, 6, 4, "deepseek-v4-pro-ep4"),
+    (7168, 3072, 384, 6, 2, "deepseek-v4-pro-ep2"),
 ]
 
 # --- CSV output file names ---
