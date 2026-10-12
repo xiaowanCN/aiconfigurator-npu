@@ -1,4 +1,4 @@
-# DeepSeek-V4-Pro 适配与数据采集文档（aic-npu / Ascend 910B + vllm-ascend 0.23.0）
+﻿# DeepSeek-V4-Pro 适配与数据采集文档（aic-npu / Ascend 910B + vllm-ascend 0.23.0）
 
 目标：让 `aic-npu` 能完成 `deepseek-ai/DeepSeek-V4-Pro` 在 `ascend_910b` + `vllm-ascend 0.23.0` 上的配置搜索，
 并且**结果全部落在硅数据上**（`--database-mode SILICON` 不回落 SOL）。
@@ -343,11 +343,38 @@ CSA/HCA 采集走 `--module-source framework`（vllm-ascend 自己的 DSv4 atten
    生产环境走 finegrained o_lora TP 从不触发该分支，采集器 TP=1 会触发，故在模块构建后整形。
    **缺失症状**：`IndexError: Dimension out of range (expected to be in range of [-2, 1], but got 2)`。
 
-6. **NPU 图（graph）模式对 framework 路径永远不可能成功 —— 加 `--no-graph`**。
-   `benchmark_npu` 默认先尝试 `torch.npu.NPUGraph()` 捕获再回放（消除 Python 派发开销），
-   失败则回落 eager。而 DSv4 framework 前向里会做**主机→设备的拷贝**（构造
-   `num_tokens_across_dp` 形状张量）并做 vLLM forward context 构造，
-   图捕获期间这是非法的：
+6. **图模式（NPU graph）是默认口径，上游 NVIDIA 版也一样用图模式**。
+
+   `benchmark_npu` 默认先 `torch.npu.NPUGraph()` 捕获再回放（消除 Python 派发开销），
+   失败才回落 eager。上游 `collector/vllm/collect_dsv4_attn.py` 对同一个 DSv4 模块
+   用的就是 `benchmark_with_power(..., use_cuda_graph=True)`，而且**没有开**
+   `allow_graph_fail`（默认 `False`）—— 即**图捕获失败会直接抛错**，上游预期它必定成功。
+
+   上游能成功的原因，正是下面这个结构（`collect_dsv4_attn.py:486-541`）：
+
+   ```python
+   common   = _make_common_metadata(...)                       # metadata 预构建
+   metadata = _build_metadata_and_bind_caches(attn_module, vllm_config, common, ...)
+
+   with set_current_vllm_config(vllm_config), set_forward_context(metadata, vllm_config), \
+        torch.inference_mode():
+       attn_module(positions, hidden_states, None)             # 预跑一次
+       torch.cuda.synchronize()
+
+       def kernel_func(...):
+           attn_module(positions, hidden_states, None)          # ← 计时区里只有这一行
+
+       with benchmark_with_power(..., use_cuda_graph=True) as result:
+           pass
+   ```
+
+   即 **metadata 与 vLLM forward context 都在计时闭包之外**，`kernel_func` 是纯设备前向，
+   所以可以捕获。aic-npu 的 `dsv4_factory` 已经是同样的结构（`_create_dsv4_kv_cache_and_metadata`
+   在外、`forward_fn` 只调 `module.forward`）。
+
+   **所以：`--no-graph` 不是默认项，只是逃生开关。**
+   只有当 `module.forward` 内部（vllm-ascend 的 `compressor_metadata` / indexer 等自定义算子）
+   仍然做主机→设备拷贝、导致捕获必失败时才加：
 
    ```
    NPUGraph: ERROR — capture failed: RuntimeError: copy_between_host_and_device_opapi
@@ -356,12 +383,8 @@ CSA/HCA 采集走 `--module-source framework`（vllm-ascend 自己的 DSv4 atten
    during the capture stage is not supported.
    ```
 
-   **这正是"正常不应该是图模式吗"的答案**：模块级注意力（含 metadata 计算）**采不到图模式**——
-   vLLM/vllm-ascend 自己也只对**纯 decode** 用 ACL graph，**prefill 永远是 eager**。
-   所以 eager 才是正确口径；图模式只对 GEMM / MoE / mHC 这类纯算子有效
-   （那些采集器不受影响，仍然走图模式）。
-
-   **缺失症状**：每个 spec 刷一遍上面的 `107030` 报错，然后回落 eager（不会中断，但日志被淹没）。
+   判定方法：看每个点的日志尾部是 `graph` 还是 `eager (...)`。
+   若显示 `graph` 就说明图模式成功，不需要 `--no-graph`。
 
 7. **eager 口径下必须把"每轮不变的工作"挪出计时区**。
    早期实现把 `set_current_vllm_config` / `set_weight_prefetch_method` /
@@ -396,7 +419,7 @@ python collector/npu/collect_dsv4_attn.py \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
   --num-heads-list 128 64 32 16 8 4 2 \
-  --module-source framework --no-graph \
+  --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_hca_ctx_v2 --resume
 
@@ -409,7 +432,7 @@ python collector/npu/collect_dsv4_attn.py \
   --batch-list 1 2 4 8 16 32 64 128 256 384 512 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
   --num-heads-list 128 64 32 16 8 4 2 \
-  --module-source framework --no-graph \
+  --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_hca_gen_v2 --resume
 ```
@@ -427,7 +450,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 --module-source framework --no-graph \
+  --num-heads-list 128 64 32 16 8 4 2 --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_csa_ctx_v2 --resume
 
@@ -439,7 +462,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 64 128 256 384 512 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 --module-source framework --no-graph \
+  --num-heads-list 128 64 32 16 8 4 2 --module-source framework \
   --output-dir ./data/dsv4_csa_gen_v2 --resume
 ```
 
@@ -460,7 +483,7 @@ python collector/npu/collect_dsv4_attn.py \
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds hca \
   --batch-list 1 --seq-len-list 128 --num-heads-list 128 \
-  --module-source framework --no-graph --warmup-iters 1 --bench-iters 3 \
+  --module-source framework --warmup-iters 1 --bench-iters 3 \
   --output-dir ./data/dsv4_hca_smoke
 ```
 

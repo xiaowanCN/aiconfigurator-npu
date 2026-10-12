@@ -94,11 +94,17 @@ def benchmark_npu(
 ) -> BenchResult:
     """Warmup + time kernel_func on NPU. Tries NPU graph, falls back to eager.
 
-    ``use_graph=False`` skips capture entirely. Use it for operators whose
-    forward is *known* to be uncapturable (any host<->device copy, e.g. building
-    a shape tensor inside the timed region, raises
-    ``aclrtMemcpy ... error 107030`` during capture). Retrying a doomed capture
-    per shape only costs time and floods the log.
+    Graph mode is the DEFAULT and is what the NVIDIA collector uses for the
+    same DSv4 module (``collector/vllm/collect_dsv4_attn.py`` calls
+    ``benchmark_with_power(..., use_cuda_graph=True)``). It only works if the
+    timed closure is purely device-side: vLLM metadata and forward context must
+    be built OUTSIDE ``kernel_func``. Anything that copies host->device inside
+    the closure (e.g. building a shape tensor per call) makes capture fail with
+    ``aclrtMemcpy ... error 107030``.
+
+    ``use_graph=False`` skips capture entirely — an escape hatch for forwards
+    that remain uncapturable after hoisting, so a doomed capture is not retried
+    per shape (which costs time and floods the log).
     """
     global _GRAPH_CAPTURE_ERROR_LOGGED
 
@@ -117,6 +123,8 @@ def benchmark_npu(
             graph_attempted=False,
         )
 
+    graph = None
+    graph_us = 0.0
     try:
         graph = torch.npu.NPUGraph()
 
@@ -144,17 +152,12 @@ def benchmark_npu(
         # the timed replay / eager runs below.
         torch.npu.current_stream().wait_stream(side_stream)
 
+        # Warm up the ACTUAL execution path (replay), not just the eager one.
+        for _ in range(_CAPTURE_WARMUP_ITERS):
+            graph.replay()
+        torch.npu.synchronize()
+
         graph_us = _timed_run(kernel_func, num_runs, repeat_n, graph=graph)
-        eager_us = _timed_run(kernel_func, num_runs, repeat_n)
-        used_graph = graph_us <= eager_us
-        return BenchResult(
-            avg_us=graph_us if used_graph else eager_us,
-            num_runs=num_runs,
-            repeat_n=repeat_n,
-            used_graph=used_graph,
-            graph_us=graph_us,
-            eager_us=eager_us,
-        )
     except Exception as e:
         # Log the real cause once (with traceback at DEBUG) instead of
         # repeating a context-free warning for every single shape.
@@ -170,11 +173,27 @@ def benchmark_npu(
             logger.debug("NPU graph capture traceback:", exc_info=True)
         else:
             logger.debug("NPU graph capture failed again: %s: %s", type(e).__name__, e)
-        eager_us = _timed_run(kernel_func, num_runs, repeat_n)
-        return BenchResult(
-            avg_us=eager_us,
-            num_runs=num_runs,
-            repeat_n=repeat_n,
-            used_graph=False,
-            eager_us=eager_us,
-        )
+        graph_us = 0.0
+
+    # Release the graph — and crucially its private memory pool — BEFORE timing
+    # the eager path. A captured graph sequesters intermediate tensors into a
+    # pool that is not always reclaimed when the object is garbage collected;
+    # the NVIDIA collector (collector/helper.py) documents this explicitly and
+    # tears the graph down in a finally block because otherwise scratch memory
+    # accumulates across shapes until the worker OOMs. Keeping the graph alive
+    # while also running eager would additionally double the peak footprint,
+    # which is why large (batch x seq) points used to OOM.
+    if graph is not None:
+        graph = None
+        torch.npu.empty_cache()
+
+    eager_us = _timed_run(kernel_func, num_runs, repeat_n)
+    used_graph = bool(graph_us) and graph_us <= eager_us
+    return BenchResult(
+        avg_us=graph_us if used_graph else eager_us,
+        num_runs=num_runs,
+        repeat_n=repeat_n,
+        used_graph=used_graph,
+        graph_us=graph_us,
+        eager_us=eager_us,
+    )
