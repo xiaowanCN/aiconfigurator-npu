@@ -62,8 +62,13 @@ DEFAULT_GENERATION_SEQ_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 # num_heads = num_attention_heads(128) // tp_size. tp is NOT capped at 8:
 # TaskConfig._widen_gpu_sweep_lists (sdk/task.py) extends tp_list with 16/32/64/...
 # up to --total-gpus, because a <=8-GPU worker cannot hold DeepSeek-V4-Pro
-# (~2.9 TB bf16). With --total-gpus 64 tp reaches 64, hence heads down to 2.
-DEFAULT_NUM_HEADS_LIST = [128, 64, 32, 16, 8, 4, 2]
+# (~2.9 TB bf16).
+#
+# IMPORTANT (Ascend 910B hardware constraint): the SparseAttnSharedkv kernel
+# requires q_head_num to be a multiple of 4. num_heads=2 -> tp=64 therefore
+# fails at the tiling stage ("head num should be multiple of 4, but got 2"),
+# so the smallest rank-local head count we can collect is 4 (=> max tp=32).
+DEFAULT_NUM_HEADS_LIST = [128, 64, 32, 16, 8, 4]
 
 CONTEXT_COLUMNS = [
     "framework", "version", "device", "op_name", "mla_dtype", "kv_cache_dtype",
@@ -286,10 +291,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-graph", action="store_true",
         help=(
-            "Skip NPU-graph capture and time the eager path only. Required for "
-            "--module-source framework: building the DSv4 forward context copies "
-            "a shape tensor host->device, which is illegal during capture "
-            "(aclrtMemcpy error 107030), so capture can never succeed there."
+            "Skip NPU-graph capture and time the eager path only. This is an "
+            "escape hatch: graph mode is the DEFAULT and works for "
+            "--module-source framework because the vLLM forward context is built "
+            "once OUTSIDE the timed closure (a host->device copy during capture "
+            "is illegal: aclrtMemcpy error 107030). Use --no-graph only if graph "
+            "capture still fails for a specific shape."
         ),
     )
     p.add_argument("--resume", action="store_true")
@@ -298,6 +305,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--version", default="0.23.0")
     p.add_argument("--device", default="Ascend 910B")
     return p.parse_args()
+
+
+def _validate_num_heads_list(num_heads_list: list[int]) -> list[int]:
+    """Drop head counts the Ascend 910B attention kernel cannot run.
+
+    The SparseAttnSharedkv kernel requires ``q_head_num`` to be a multiple of
+    4, so ``num_heads=2`` (i.e. tp=64) fails at the tiling stage
+    ("head num should be multiple of 4, but got 2"). Warn and skip those so a
+    full sweep does not abort on every such point.
+    """
+    kept, dropped = [], []
+    for h in num_heads_list:
+        if h % 4 == 0:
+            kept.append(h)
+        else:
+            dropped.append(h)
+    if dropped:
+        logger.warning(
+            "Dropping num_heads=%s: the Ascend 910B attention kernel requires "
+            "q_head_num to be a multiple of 4 (num_heads=2 => tp=64 is "
+            "unsupported). Collecting only %s.",
+            dropped, kept,
+        )
+    return kept
 
 
 def main() -> None:
@@ -313,6 +344,8 @@ def main() -> None:
         args.batch_list = DEFAULT_CONTEXT_BATCH_LIST if is_context else DEFAULT_GENERATION_BATCH_LIST
     if args.seq_len_list is None:
         args.seq_len_list = DEFAULT_CONTEXT_SEQ_LIST if is_context else DEFAULT_GENERATION_SEQ_LIST
+
+    args.num_heads_list = _validate_num_heads_list(args.num_heads_list)
 
     specs: list[Dsv4ModuleSpec] = []
     for op_type in args.op_types:

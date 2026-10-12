@@ -33,7 +33,10 @@
 **两个容易踩的坑（本次修订发现）**：
 
 1. **并行维度会被 `--total-gpus` 扩展**：`tp/dp/moe_ep` 不止 `[1,2,4,8]`，
-   64 卡下会到 **64**。所以 `num_heads` 要采到 **2**、`moe_ep` 要采 **64**（见 §3.2 / §3.6 / F8）。
+   64 卡下 tp 会到 **64**。但是 **Ascend 910B 的稀疏注意力 kernel（`SparseAttnSharedkv`）要求
+   `q_head_num` 为 4 的倍数**，所以 `num_heads=2`（即 `tp=64`）在 kernel 层会失败，
+   实际可采的最小 `num_heads=4`（最大 `tp=32`）。因此 `num_heads` 采到 **4** 即可、
+   `moe_ep` 采到 **64**（见 §3.2 / §3.6 / F8 / F13）。
 2. **64 卡只是"刚好放得下"**：bf16 权重 ≈2894 GiB，只有 `ep=64` 可行，剩余 7~19 GB 给 KV，
    `--ttft 1800 --tpot 100` 很可能无解。建议先按 **128 卡**评估（见 §8.0 / F9）。
 
@@ -226,14 +229,25 @@ config.json architectures[0] = "DeepseekV4ForCausalLM"
 再补上 16 / 32 / 64 / 128 / 256 中所有 `<= --total-gpus` 的档位**——因为
 bf16 权重约 **2894 GiB（≈3.1 TB）**，任何 ≤8 卡的 worker 都放不下。
 
-因此 `--total-gpus 64` 时：
+因此 `--total-gpus 64` 时 tp 搜索空间会到 64。但 **Ascend 910B 的稀疏注意力 kernel
+（`SparseAttnSharedkv`）要求 `q_head_num` 为 4 的倍数**，所以 `num_heads=2`（tp=64）在 kernel
+层会直接 tiling 失败（`head num should be multiple of 4, but got 2`），无法采集。
 
-```
-tp ∈ {1,2,4,8,16,32,64}   →   num_heads = 128 // tp ∈ {128,64,32,16,8,4,2}
-```
+> ⚠️ **Ascend 910B 上 attention 最大 tp=32（num_heads 最低 4）**
+>
+> `heads=2 ↔ tp=64` 在 910B 上不可行。采集矩阵里 `num_heads` 实际可采到 **4** 为止：
+>
+> ```
+> tp ∈ {1,2,4,8,16,32}      →   num_heads = 128 // tp ∈ {128,64,32,16,8,4}
+> tp = 64（num_heads=2）     →   Ascend kernel 不支持，跳过
+> ```
+>
+> **六个值都要采集**（缺一个，对应 tp 的配置就回落 SOL）。
+> 上游/旧文档写的 `128/64/32/16` 是**未考虑维度扩展**的错误结论；`128…4` 才覆盖
+> Ascend 910B 上全部可行的 tp。
 
-**七个值都要采集**（缺一个，对应 tp 的配置就回落 SOL）。
-上游/旧文档写的 `128/64/32/16` 是**未考虑维度扩展**的错误结论。
+NVIDIA 侧（A100/H100）无此 4 倍数约束，`heads=2` 可正常采集；本适配文档仅针对
+`ascend_910b`，故采集命令统一不含 `2`。
 
 ### 3.3 context 表（`data[fmha][kv][gemm][num_heads][s][b]`）
 
@@ -443,7 +457,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds hca \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 \
+  --num-heads-list 128 64 32 16 8 4 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_hca_ctx_v2 --resume
@@ -456,7 +470,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds hca \
   --batch-list 1 2 4 8 16 32 64 128 256 384 512 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 \
+  --num-heads-list 128 64 32 16 8 4 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_hca_gen_v2 --resume
@@ -475,7 +489,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 --module-source framework \
+  --num-heads-list 128 64 32 16 8 4 --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_csa_ctx_v2 --resume
 
@@ -487,7 +501,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 64 128 256 384 512 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 --module-source framework \
+  --num-heads-list 128 64 32 16 8 4 --module-source framework \
   --output-dir ./data/dsv4_csa_gen_v2 --resume
 ```
 
@@ -698,11 +712,12 @@ python tools/check_dsv4_data.py --isl 4096 --osl 1024
 | **F5** | 无落位后校验手段，缺表/缺 key 只能等 `default` 跑到一半才发现 | 排查成本高 | 新增 `tools/check_dsv4_data.py`（§7） | ✅ 已修复 |
 | **F6** | 文档 §D1 称「`distribution` 固定 `power_law_1.2`，与现有 V3 行一致」——错误 | 误导落位 | 本文档 §3.6 / §4.4 已更正 | ✅ 已修复 |
 | **F7** | `0.23.0` 目录当前**一张** dsv4 / mhc 表都没有，采集结果尚未落位 | 全链路仍走 SOL | 按 §4.5 落位 + §4.6 校验 | ⬜ 待执行 |
-| **F8** | 采集矩阵按「tp/ep ≤ 8」制定，但 `TaskConfig._widen_gpu_sweep_lists`（`sdk/task.py:31-53`）会把 tp/dp/moe_ep 扩展到 16/32/64…≤ `--total-gpus`。64 卡下 tp 到 64、ep 到 64 | `num_heads` 缺 8/4/2、`moe_ep` 缺 16/32/64 → 全部可行配置都回落 SOL | `collect_dsv4_attn.py` 默认 heads 补 `8 4 2`；`collect_moe.py` 补 `ep64/ep32/ep16`；文档 §3.2/§3.6 更正 | ✅ 已修复 |
+| **F8** | 采集矩阵按「tp/ep ≤ 8」制定，但 `TaskConfig._widen_gpu_sweep_lists`（`sdk/task.py:31-53`）会把 tp/dp/moe_ep 扩展到 16/32/64…≤ `--total-gpus`。64 卡下 tp 到 64、ep 到 64 | `num_heads` 缺 8/4、`moe_ep` 缺 16/32/64 → 全部可行配置都回落 SOL | `collect_dsv4_attn.py` 默认 heads 补 `8 4`（含 16/32/64）；`collect_moe.py` 补 `ep64/ep32/ep16`；文档 §3.2/§3.6 更正 | ✅ 已修复 |
 | **F9** | 未评估规模可行性：bf16 权重 ≈2894 GiB，64 GB 卡只有 `ep=64` 放得下，剩余 7~19 GB | 64 卡 + 严 SLA 可能无解，容易被误判为"数据缺失" | 新增 §8.0 规模分析；建议按 128 卡评估 | ✅ 已澄清（待确认业务规模） |
 | **F10** | 落位只有 PowerShell 片段，且 MoE 与另外 5 张表的处理方式混在一起说明，容易把 `moe_perf.txt` 整体 `cp` 覆盖掉现有 234 行 | 丢失 V3/R1 等模型的 MoE 硅数据 | §4.4/§4.5 改为 bash 为主；转换器新增 `--append`（自动补尾换行）；明确「5 张新表 cp + MoE 追加」 | ✅ 已修复 |
 | **F11** | **网格退化**：每个 `num_heads` 下 `(s, b)` 轴只有 1 个取值时，`_interp_2d_1d` 的二维三次插值抛 `QhullError`，**整张表不可用**（连存在的那个 b 也查不出来），而不是"缺哪个点回落哪个点" | 已采集的表 100% 白采 | §3.3 加了醒目说明；`check_dsv4_data.py` 新增网格退化诊断（逐 heads 报 b/s 取值数、单 s 单元数、够不到目标 s 的单元数） | ✅ 已修复（数据侧待重采） |
 | **F12** | `--append` 不幂等，落位脚本被重复执行 → `moe_perf.txt` 里同一 key 出现多份（`load_moe_data` 只保留先到的那条且仅 debug 日志） | 表膨胀、难以人工核对 | `check_dsv4_data.py` 新增重复行检测（warning）；§4.4 明确"重跑前先 `git checkout`" | ✅ 已修复（数据侧待清理） |
+| **F13** | **Ascend 910B 硬件约束**：稀疏注意力 kernel（`SparseAttnSharedkv`）要求 `q_head_num` 为 4 的倍数，`num_heads=2`（即 tp=64）在 tiling 阶段直接失败（`head num should be multiple of 4, but got 2`）。NPU graph 模式下还会先报 `Memory_Allocation_Failure` 再暴露该错 | 所有 `heads=2` 的采集点 FAILED（context/generation 都中招）；aic-npu 搜索 tp=64 时硅数据缺失 → 回落 SOL | `collect_dsv4_attn.py` 默认 heads 改 `[128,64,32,16,8,4]`，新增 `_validate_num_heads_list` 对 4 非倍数自动 warn+跳过；`check_dsv4_data.py` 默认列表同步；文档 §3.2/§8.0 标注 Ascend 最大 tp=32；采集命令去掉 `2` | ✅ 已修复（代码/文档）；已采的 `heads=2` 行作废需重跑 |
 
 ### F2 详细说明（实测证据）
 
@@ -808,7 +823,7 @@ python tools/check_dsv4_data.py --systems-path /workspace/staging_systems --isl 
 
 1. **表是否加载**：5 张表（csa/hca × ctx/gen + mhc）是否存在且非空；
 2. **CSA/HCA context**：`(fmha=float16, kv=float16, gemm=float16)` ×
-   `num_heads ∈ {128,64,32,16,8,4,2}` × `b ∈ {1,2,4,8,16,32}` × `s = isl` 的探针；
+   `num_heads ∈ {128,64,32,16,8,4}` × `b ∈ {1,2,4,8,16,32}` × `s = isl` 的探针；
 3. **CSA/HCA generation**：同上 key × `b ∈ {1,8,64,128,256,512}` × `s = isl + osl`；
 4. **mHC**：`op ∈ {pre,post}` × `hc_mult=4` × `hidden=7168`，报告 `num_tokens` 网格上界；
 5. **MoE**：`(float16, power_law_1.01, topk=6, experts=384, hidden=7168, inter=3072, tp=1)`
@@ -835,21 +850,27 @@ CI 或采集流程可以直接用它卡住回归。
 
 每卡常驻 ≈ `11.6/tp + 2882/ep`（GiB）。910B 单卡 64 GB：
 
-| ep | tp=1 | tp=8 | tp=64 | 结论 |
+| ep | tp=1 | tp=8 | tp=32（Ascend 最大可行） | 结论 |
 |----|------|------|-------|------|
 | **64** | 57 | **46** | 45 | ✅ 唯一放得下（剩余 7~19 GB 给 KV + 激活） |
 | 32 | 102 | 92 | 90 | ❌ |
 | 16 | 192 | 182 | 180 | ❌ |
 
+> ⚠️ **Ascend 910B 上 attention 最大 `tp=32`**：稀疏注意力 kernel（`SparseAttnSharedkv`）
+> 要求 `q_head_num` 为 4 的倍数，`num_heads=2`（tp=64）会 tiling 失败，无法采集也无法部署。
+> NVIDIA 侧无此约束，故上表第三列用 tp=32 而非 tp=64。
+
 推论：
 
 1. **可行配置只有 `ep=64`**，即 `num_gpu_per_worker = tp × dp = 64` —— 64 卡刚好是
-   **1 个 64 卡 worker（无副本）**，`tp ∈ {2..64}` → `num_heads ∈ {64,32,16,8,4,2}`。
+   **1 个 64 卡 worker（无副本）**，但 **attention 最大 tp=32**，所以实际
+   `tp ∈ {1,2,4,8,16,32}` → `num_heads ∈ {128,64,32,16,8,4}`。
 2. 剩余显存仅 7~19 GB，KV cache 容量很小 → 并发数受限，
    `--ttft 1800 --tpot 100` 这类较严 SLA **很可能无解**。
 3. 要看到有实际意义的帕累托前沿，建议按 **128 卡**（`ep=64` + 2 副本，或 `ep=128`）跑；
    上游 NVIDIA 侧也是在 ≥128 卡规模上评估 V4-Pro 的。
-4. 无论 64 还是 128 卡，`ep=64` 的 MoE 行和 `num_heads ≤ 64` 的注意力行都是必须的。
+4. 无论 64 还是 128 卡，`ep=64` 的 MoE 行和 `num_heads ∈ {128..4}` 的注意力行都是必须的；
+   `num_heads=2`（tp=64）在 Ascend 上无法采集，对应配置只能回落 SOL。
 
 ### 8.1 支持性检查
 

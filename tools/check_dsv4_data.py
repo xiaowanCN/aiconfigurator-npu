@@ -46,8 +46,10 @@ V4_NUM_EXPERTS = 384
 V4_HC_MULT = 4
 V4_SINKHORN_ITERS = 20
 # num_heads = 128 // tp. tp_list is widened with 16/32/64/... up to --total-gpus
-# (TaskConfig._widen_gpu_sweep_lists), so --total-gpus 64 reaches tp=64.
-DEFAULT_HEADS_LIST = [128, 64, 32, 16, 8, 4, 2]
+# (TaskConfig._widen_gpu_sweep_lists). On Ascend 910B the SparseAttnSharedkv
+# kernel requires q_head_num to be a multiple of 4, so num_heads=2 (tp=64) is
+# unsupported — only 4..128 are collectible.
+DEFAULT_HEADS_LIST = [128, 64, 32, 16, 8, 4]
 # On 64 GB 910B cards only ep=64 fits (~45-57 GiB/card); 16/32 are cheap to
 # collect and kept as tolerated extras, <=8 cannot fit the model at all.
 DEFAULT_MOE_EP_LIST = [16, 32, 64]
