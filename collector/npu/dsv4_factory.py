@@ -332,6 +332,73 @@ def _ensure_distributed_env(vllm_config) -> None:
     _DISTRIBUTED_READY = True
 
 
+def _reset_dsv4_rope_runtime_buffers() -> None:
+    """Drop the process-global DSA RoPE cos/sin runtime buffers.
+
+    vllm_ascend.ops.rope_dsv4 allocates the per-token cos/sin buffers once per
+    (config_key, rope_group), sized by the *first* vllm_config that constructs
+    a ComplexExpRotaryEmbedding, and never resizes them afterwards. In a sweep
+    the first spec may be batch=1 (buffer [1, 1, 1, rotary_dim]); every later
+    larger spec then fails in get_cos_and_sin_dsa with
+
+        "shape of broadcast result should be [N, 1, 1, 64], but self is [1, 1, 1, 64]"
+
+    and silently falls back to the profiling path. Clearing the buffers lets
+    __init__ reallocate them against the current spec's max_num_batched_tokens.
+    The precomputed position tables (full_rope_cache) are position-independent
+    and are kept.
+    """
+    try:
+        from vllm_ascend.ops.rope_dsv4 import _ROPE_STATE
+    except ImportError:
+        return
+    _ROPE_STATE.runtime_buffer.clear()
+    _ROPE_STATE.spec_runtime_buffer.clear()
+
+
+def _reshape_dsv4_woa_weight_3d(module) -> None:
+    """Give ``wo_a`` the 3-D grouped layout the DSA o_proj bmm requires.
+
+    ``AscendDSAImpl._forward_o_proj`` (single-card ``else`` branch) feeds
+    ``npu_transpose_batchmatmul(x1=[T, groups, gh], wo_a.weight,
+    perm_x2=(0, 1, 2))``; the op requires a 3-D x2 of shape
+    ``[n_local_groups, group_hidden_dim, o_lora_rank]``. vLLM's
+    ``ColumnParallelLinear`` creates a 2-D ``[groups * o_lora, gh]``
+    parameter, and the real DSv4-Pro deployment always runs finegrained
+    o_lora TP (``olora_tp_enable()`` -> the ``wo_a(...)`` module-call
+    branch), so the plain branch is never exercised in production and the
+    2-D weight never reaches this op there. The collector benchmarks TP=1,
+    so reshape here: dispatch only depends on shapes (weights are never
+    loaded from a checkpoint), and the grouped bmm has the same FLOPs /
+    memory traffic as the two 2-D GEMMs the SDK models.
+    """
+    wrapper = getattr(module, "dsa_attn", None)
+    if wrapper is None:
+        return
+    wo_a = getattr(wrapper, "wo_a", None)
+    if wo_a is None:
+        return
+    weight = getattr(wo_a, "weight", None)
+    if weight is None or weight.dim() == 3:
+        return
+    groups = getattr(wrapper, "n_local_groups", None)
+    o_lora = getattr(wrapper, "o_lora_rank", None)
+    gh = weight.shape[1]
+    if not groups or not o_lora or weight.shape[0] != groups * o_lora:
+        logger.warning(
+            "wo_a.weight shape %s incompatible with grouped reshape "
+            "(groups=%s, o_lora=%s); leaving as-is",
+            tuple(weight.shape), groups, o_lora,
+        )
+        return
+    # [groups * o_lora, gh] -> [groups, gh, o_lora] (contiguous for the op).
+    wo_a.weight.data = weight.view(groups, o_lora, gh).transpose(1, 2).contiguous()
+    logger.info(
+        "Reshaped wo_a.weight %s -> %s for npu_transpose_batchmatmul",
+        tuple(weight.shape), tuple(wo_a.weight.shape),
+    )
+
+
 def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     """Instantiate vllm-ascend's DSv4 attention module.
 
@@ -367,6 +434,25 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     _ensure_distributed_env(vllm_config)
     hf_config = vllm_config.model_config.hf_config
 
+    # DeepseekV4Attention reads compress_ratios[config_layer_idx] from hf_config
+    # (vllm_ascend.utils.get_dsv4_compress_ratio) and ignores any constructor
+    # kwarg, so the sweep's CSA(4)/HCA(128) choice must be written into the
+    # config *before* the module is constructed. Without this every spec runs
+    # the config's layer-0 ratio (128 for V4-Pro) and the CSA/HCA output columns
+    # would silently measure the same thing.
+    from vllm_ascend.utils import extract_dsv4_layer_index
+
+    ratios = list(getattr(hf_config, "compress_ratios", None) or [])
+    if ratios:
+        layer_idx = extract_dsv4_layer_index(hf_config, "model.layers.0.self_attn")
+        if 0 <= layer_idx < len(ratios):
+            ratios[layer_idx] = spec.compress_ratio
+            hf_config.compress_ratios = ratios
+            logger.debug(
+                "Forced hf_config.compress_ratios[%d]=%d (%s)",
+                layer_idx, spec.compress_ratio, spec.attn_kind,
+            )
+
     # Only forward the kwargs the class actually declares, so this works across
     # vllm-ascend releases with different constructor signatures.
     candidates = dict(
@@ -399,6 +485,7 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     # device". bf16 default dtype matches the MLA collector path.
     from mla_module_factory import _set_default_dtype_ctx
 
+    _reset_dsv4_rope_runtime_buffers()
     with set_current_vllm_config(vllm_config), torch.device(device), _set_default_dtype_ctx(spec.dtype):
         module = cls(**kwargs)
 
@@ -408,6 +495,8 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
         module = module.to(device)
     module.eval()
     module.requires_grad_(False)
+
+    _reshape_dsv4_woa_weight_3d(module)
 
     # Same post-instantiation env setup as the MLA collector: rope cos/sin
     # caches live in module-level globals created on CPU, and the triton
@@ -423,28 +512,340 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _call_get_kv_cache_spec(child, vllm_config):
+    """Invoke a layer's get_kv_cache_spec, passing vllm_config when required.
+
+    All vllm-ascend DSv4 cache layers declare
+    ``get_kv_cache_spec(self, vllm_config)`` — calling without the argument
+    raises TypeError, which must not be mistaken for "spec not available".
+    """
+    get_spec = getattr(child, "get_kv_cache_spec", None)
+    if not callable(get_spec):
+        return None
+    try:
+        n_params = len(inspect.signature(get_spec).parameters)
+    except (TypeError, ValueError):
+        n_params = 1
+    try:
+        return get_spec(vllm_config) if n_params >= 1 else get_spec()
+    except Exception as e:
+        logger.debug(
+            "get_kv_cache_spec on %s failed: %s", type(child).__name__, e
+        )
+        return None
+
+
+def _collect_dsv4_kv_layers(module, vllm_config, attn_layer_name):
+    """Find sub-layers of the DSv4 module that expose a kv_cache_spec.
+
+    ``ops/dsa.py::_build_kv_cache`` reads ``.kv_cache`` off these sub-layers
+    (dsa_attn / swa_cache_layer / compressor.state_cache / indexer.*), so they
+    are exactly the layers that need an allocated cache buffer.
+
+    collected via named_modules() first (deduplicated by identity), then the
+    explicit attribute paths _build_kv_cache indexes are probed as well, in
+    case a build nests those modules differently.
+    """
+    layers = []
+    seen: set[int] = set()
+
+    def _try_add(full_name: str, child) -> None:
+        if child is None or id(child) in seen:
+            return
+        # NOTE: do NOT gate on hasattr(child, "kv_cache") — vLLM assigns
+        # .kv_cache externally (bind_kv_cache), so the attribute does not
+        # exist yet on freshly constructed layers.
+        kv_spec = _call_get_kv_cache_spec(child, vllm_config)
+        if kv_spec is None:
+            return
+        seen.add(id(child))
+        layers.append((full_name, child, kv_spec))
+
+    for rel_name, child in module.named_modules():
+        if not rel_name:
+            continue
+        _try_add(f"{attn_layer_name}.{rel_name}", child)
+
+    # Explicit contract of ops/dsa.py::_build_kv_cache.
+    for rel_path in (
+        "compressor.state_cache",
+        "dsa_attn.swa_cache_layer",
+        "dsa_attn.dsa_attn",
+        "swa_cache_layer",
+        "dsa_attn",
+        "indexer.compressor.state_cache",
+        "indexer.k_cache",
+    ):
+        child = module
+        for part in rel_path.split("."):
+            child = getattr(child, part, None)
+            if child is None:
+                break
+        if child is not None:
+            _try_add(f"{attn_layer_name}.{rel_path}", child)
+
+    return layers
+
+
+def _alloc_dsv4_layer_cache(kv_spec, num_blocks, device):
+    """Allocate one sub-layer's cache buffer, mirroring model_runner_v1's
+    ``use_compress`` branch of _reshape_kv_cache_tensors (l.4382-4435).
+
+    A spec with ``scale_dim != 0`` (the indexer k_cache) gets a ``(k, scale)``
+    tuple so that ``_build_kv_cache``'s ``kv_cache[0][0] / kv_cache[0][1]``
+    indexing works; every other layer gets a single 4-D tensor. The DSv4
+    binding wraps each buffer in a 1-element list (model_runner_v1 l.3937-3948),
+    which ``unfold_kvcache`` unwraps.
+    """
+    from vllm_ascend.attention.dsa_v1 import AscendDSABackend
+
+    shape = AscendDSABackend.get_kv_cache_shape(
+        num_blocks, kv_spec.block_size, kv_spec.num_kv_heads, kv_spec.head_size
+    )
+    scale_dim = getattr(kv_spec, "scale_dim", 0)
+    if scale_dim:
+        scale_shape = AscendDSABackend.get_kv_cache_shape(
+            num_blocks, kv_spec.block_size, kv_spec.num_kv_heads, scale_dim
+        )
+        k = torch.zeros(shape, dtype=kv_spec.dtype, device=device)
+        scale = torch.zeros(scale_shape, dtype=kv_spec.scale_dtype, device=device)
+        return (k, scale)
+    return torch.zeros(shape, dtype=kv_spec.dtype, device=device)
+
+
 def _create_dsv4_kv_cache_and_metadata(
     module, vllm_config, spec, device, attn_layer_name
 ):
     """Build the DSv4 attention metadata (+ KV cache) for one forward pass.
 
-    Returns the attn_metadata mapping expected by set_ascend_forward_context,
-    or None to take dsa_forward's profiling (zero-input) path when the real path
-    cannot be assembled on this vllm-ascend build.
+    Replicates the per-KV-cache-group assembly of
+    ``vllm_ascend/worker/model_runner_v1.py::_build_attention_metadata``:
 
-    The real path needs:
-      * a DSA backend metadata builder (``_get_ascend_dsa_backend().get_builder_cls()``), and
-      * the 6-tuple KV cache that vllm_ascend/ops/dsa.py::_build_kv_cache expects.
-    Both are version-specific and live in the remote vllm-ascend source, so the
-    concrete implementation is filled in once that source is available.
+      1. collect every sub-layer with ``get_kv_cache_spec()`` and group them by
+         cache layout (the DSA groups have different block sizes: 64 / 4 / 16),
+      2. allocate each sub-layer's ``.kv_cache`` buffer (the 6-tuple source
+         that ``ops/dsa.py::_build_kv_cache`` reads),
+      3. build one ``AscendCommonAttentionMetadata`` per group (per-group block
+         table + slot mapping, matching the group's block size),
+      4. run ``AscendDSABackend.get_builder_cls()``'s builder per group with
+         the three shared ``ratio_to_sas_metadata`` dicts (cached across
+         groups exactly like the model runner does),
+      5. register each group's metadata under its full layer names and the
+         main ``attn_layer_name`` that dsa_forward looks up.
+
+    Returns None (profiling fallback) if anything in this version-specific
+    chain fails; the traceback is logged so the gap is visible.
     """
-    # TODO: assemble AscendCommonAttentionMetadata + DSA builder metadata and
-    # bind the 6-tuple KV cache into static_forward_context[attn_layer_name].kv_cache.
-    logger.warning(
-        "DSv4 real attn_metadata not yet built; using dsa_forward profiling path. "
-        "Provide vllm_ascend/ops/dsa.py::_build_kv_cache + DSA backend builder to enable it."
+    try:
+        return _build_dsv4_real_metadata(module, vllm_config, spec, device, attn_layer_name)
+    except Exception:
+        logger.exception(
+            "DSv4 real attn_metadata assembly failed; using dsa_forward profiling path"
+        )
+        return None
+
+
+# named_modules path suffix -> construction-prefix suffix. Checked in order;
+# the indexer entries must precede the bare ".compressor.state_cache" because
+# they share that suffix.
+_DSV4_KEY_SUFFIX_MAP = (
+    (".indexer.compressor.state_cache", ".indexer.compressor.state_cache"),
+    (".indexer.k_cache", ".indexer.k_cache"),
+    (".compressor.state_cache", ".compressor.state_cache"),
+    (".dsa_attn.swa_cache_layer", ".swa_cache"),
+    (".dsa_attn.dsa_attn", ".attn"),
+)
+
+
+def _dsv4_metadata_key(child, full_name: str, attn_layer_name: str) -> str:
+    """Forward-context attn_metadata dict key for one DSv4 kv sub-layer.
+
+    ``vllm_ascend/ops/dsa.py::dsa_forward`` resolves the running layer, then
+    ``filter_metadata`` keeps the dict entries whose key starts with the
+    attention prefix and hands the *values* to
+    ``AscendDSAImpl._forward_prefill``, which unpacks them positionally by
+    ``compress_ratio``:
+
+        ratio 4   -> [attn, compressor.state_cache, indexer.compressor.state_cache,
+                      indexer.k_cache, swa_cache]
+        ratio 128 -> [attn, compressor.state_cache, swa_cache]
+
+    The keys that produce this order are the cache modules' *own*
+    construction prefixes (``.../self_attn.attn``,
+    ``.../self_attn.compressor.state_cache``, ``.../self_attn.indexer.*``,
+    ``.../self_attn.swa_cache``) — NOT their ``named_modules`` paths, which
+    would insert a spurious ``.../self_attn.dsa_attn.dsa_attn`` entry and
+    break the unpack ("too many values to unpack (expected 3)").
+    """
+    for attr in ("layer_name", "prefix", "layername"):
+        value = getattr(child, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    for path_suffix, key_suffix in _DSV4_KEY_SUFFIX_MAP:
+        if full_name.endswith(path_suffix):
+            return attn_layer_name + key_suffix
+    return full_name
+
+
+def _build_dsv4_real_metadata(module, vllm_config, spec, device, attn_layer_name):
+    from vllm_ascend.attention.attention_v1 import AscendAttentionState
+    from vllm_ascend.attention.dsa_v1 import AscendDSABackend
+    from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
+
+    # The DSA metadata builders call vllm-ascend custom ops
+    # (torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata et al.) whose aclnn
+    # implementations live in the vendor custom-op package (libcust_opapi.so).
+    # torch_npu's op loader (FunctionLoader) only resolves those symbols when
+    # the vendor op_api/lib dir is on the loader search path. Plain
+    # bootstrap_custom_op_env() (what platform init runs) only sets
+    # ASCEND_CUSTOM_OPP_PATH; the vendor-lib variant is what the upstream
+    # single-card tests (test_compressor_metadata.py) use before calling these
+    # ops. Without it every op call fails with
+    # "aclnnSparseAttnSharedkvMetadata ... not in libopapi.so".
+    from vllm_ascend.utils import bootstrap_custom_op_env
+
+    bootstrap_custom_op_env(include_vendor_lib=True)
+
+    is_context = spec.op_type == OP_CONTEXT
+    batch, seq_len = spec.batch, spec.seq_len
+    dev = torch.device(device)
+
+    kv_layers = _collect_dsv4_kv_layers(module, vllm_config, attn_layer_name)
+    if not kv_layers:
+        candidates = [
+            f"{rel}:{type(child).__name__}"
+            for rel, child in module.named_modules()
+            if rel and callable(getattr(child, "get_kv_cache_spec", None))
+        ]
+        raise RuntimeError(
+            "no DSv4 sub-layer exposes get_kv_cache_spec(); cannot assemble DSA metadata. "
+            f"Submodules with get_kv_cache_spec returning None: {candidates}"
+        )
+    logger.info(
+        "DSv4 kv-cache sub-layers: %s",
+        [f"{n}({type(s).__name__}, bs={s.block_size})" for n, _, s in kv_layers],
     )
-    return None
+
+    # Group sub-layers by cache layout; the main compressed-MLA group
+    # (compress_ratio > 1, e.g. dsa_attn) must be built first because its
+    # builder populates the shared ratio_to_sas_metadata caches.
+    groups: dict[tuple, list] = {}
+    for full_name, child, kv_spec in kv_layers:
+        key = (type(kv_spec).__name__, kv_spec.block_size)
+        groups.setdefault(key, []).append((full_name, child, kv_spec))
+    ordered = sorted(
+        groups.values(),
+        key=lambda g: getattr(g[0][2], "compress_ratio", 0) <= 1,
+    )
+
+    num_reqs = batch
+    num_tokens = batch * seq_len if is_context else batch
+    max_query_len = seq_len if is_context else 1
+
+    seq_lens_gpu = torch.full((batch,), seq_len, dtype=torch.int32, device=dev)
+    seq_lens_cpu = torch.full((batch,), seq_len, dtype=torch.int32)
+    if is_context:
+        qsl = torch.arange(0, num_tokens + 1, seq_len, dtype=torch.int32, device=dev)
+        qsl_cpu = torch.arange(0, num_tokens + 1, seq_len, dtype=torch.int32)
+        num_computed_cpu = torch.zeros(batch, dtype=torch.int32)
+        is_prefilling = torch.ones(batch, dtype=torch.bool, device=dev)
+        attn_state = AscendAttentionState.PrefillNoCache
+    else:
+        qsl = torch.arange(0, batch + 1, dtype=torch.int32, device=dev)
+        qsl_cpu = torch.arange(0, batch + 1, dtype=torch.int32)
+        num_computed_cpu = torch.full((batch,), seq_len - 1, dtype=torch.int32)
+        is_prefilling = torch.zeros(batch, dtype=torch.bool, device=dev)
+        attn_state = AscendAttentionState.DecodeOnly
+
+    builder_cls = AscendDSABackend.get_builder_cls()
+    prefill_sas: dict = {}
+    decode_sas: dict = {}
+    common_sas: dict = {}
+
+    metadata: dict = {}
+    for group_layers in ordered:
+        kv_spec = group_layers[0][2]
+        bs = kv_spec.block_size
+        blocks_per_req = (seq_len + bs - 1) // bs
+        num_blocks = num_reqs * blocks_per_req + 1
+
+        # Contiguous per-request block table in THIS group's block size.
+        bt = (
+            torch.arange(num_reqs, device=dev, dtype=torch.int32).unsqueeze(1)
+            * blocks_per_req
+            + torch.arange(blocks_per_req, device=dev, dtype=torch.int32)
+        )
+        if is_context:
+            tok = torch.arange(seq_len, device=dev)
+            slot_mapping = (
+                bt[:, tok // bs] * bs + (tok % bs).unsqueeze(0)
+            ).reshape(-1).to(torch.int64)
+            positions = (
+                torch.arange(seq_len, device=dev)
+                .unsqueeze(0)
+                .expand(batch, -1)
+                .reshape(-1)
+                .contiguous()
+            )
+        else:
+            last = seq_len - 1
+            slot_mapping = (bt[:, last // bs] * bs + (last % bs)).to(torch.int64)
+            positions = torch.full((batch,), last, dtype=torch.int64, device=dev)
+
+        cm = AscendCommonAttentionMetadata(
+            query_start_loc=qsl,
+            query_start_loc_cpu=qsl_cpu,
+            seq_lens=seq_lens_gpu,
+            _seq_lens_cpu=seq_lens_cpu,
+            seq_lens_cpu_upper_bound=seq_lens_cpu,
+            seq_lens_cpu=seq_lens_cpu,
+            num_computed_tokens_cpu=num_computed_cpu,
+            num_reqs=num_reqs,
+            num_actual_tokens=num_tokens,
+            max_query_len=max_query_len,
+            max_seq_len=seq_len,
+            block_table_tensor=bt,
+            slot_mapping=slot_mapping,
+            causal=True,
+            is_prefilling=is_prefilling,
+            num_input_tokens=num_tokens,
+            actual_seq_lengths_q=[],
+            positions=positions,
+            positions_cpu=None,
+            attn_state=attn_state,
+            decode_token_per_req=1,
+            prefill_context_parallel_metadata=None,
+        )
+
+        builder = builder_cls(
+            kv_cache_spec=kv_spec,
+            layer_names=[
+                _dsv4_metadata_key(child, full_name, attn_layer_name)
+                for full_name, child, _ in group_layers
+            ],
+            vllm_config=vllm_config,
+            device=dev,
+        )
+        group_metadata = builder.build(
+            common_prefix_len=0,
+            common_attn_metadata=cm,
+            num_reqs_actual=num_reqs,
+            prefill_ratio_to_sas_metadata=prefill_sas,
+            decode_ratio_to_sas_metadata=decode_sas,
+            common_ratio_to_sas_metadata=common_sas,
+            block_size=bs,
+        )
+
+        for full_name, child, layer_spec in group_layers:
+            child.kv_cache = [_alloc_dsv4_layer_cache(layer_spec, num_blocks, dev)]
+            metadata[_dsv4_metadata_key(child, full_name, attn_layer_name)] = group_metadata
+
+    logger.info(
+        "DSv4 real attn_metadata built for %d groups, keys=%s",
+        len(ordered),
+        sorted(metadata),
+    )
+    return metadata
 
 
 def create_dsv4_module_func(

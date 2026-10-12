@@ -34,7 +34,7 @@ DeepSeek-V4-Pro 与 DeepSeek-R1/V3/V3.2 **都不同**：
 | A. 架构登记与配置解析 | 4 | 4 | 否 |
 | B. 算子与建模（SDK） | 6 | 6 | 否 |
 | C. `aic-npu default` / 支持矩阵适配 | 5 | 5 | 否 |
-| D. 性能数据采集 | 2 | 0（脚本已就绪，待硬件采集） | **是** |
+| D. 性能数据采集 | 2 | 0（脚本就绪；framework 路径已在 NPU 上验证跑通，待全量采集） | **是** |
 | E. 本地冒烟验证 | 3 | 3 | 否（无卡也能跑配置搜索） |
 
 ---
@@ -181,7 +181,7 @@ aic-npu 的内存模型是线性的（`kvcache = tokens × kvcache_per_token × 
 | D1 | `gemm_perf.txt` / `custom_allreduce_perf.txt` | ✅ 已有（0.23.0 目录） | 通用表，已覆盖 V4 维度 | 
 | D1 | `moe_perf.txt` | ⚠️ 已有但缺 V4 维度 | 需补采 `384 experts / topk 6 / 7168 / 3072`（见 D1 小节） |
 | D2 | `mhc_module_perf.txt` | ⬜ 待采集 | 脚本 `collector/npu/collect_mhc.py` 已就绪 |
-| D3 | `dsv4_{csa,hca}_{context,generation}_module_perf.txt` | ⬜ 待采集 | 脚本 `collector/npu/collect_dsv4_attn.py` 已就绪 |
+| D3 | `dsv4_{csa,hca}_{context,generation}_module_perf.txt` | ⬜ 待采集 | 脚本 `collector/npu/collect_dsv4_attn.py` 已就绪；framework 路径已在 NPU 上跑通（环境前提与坑位见 D3 小节） |
 
 缺失时的影响（与 DSA 一致）：
 
@@ -297,18 +297,82 @@ checkpoint 文件名共享，同一目录跑两批会互相覆盖已完成记录
 `--num-heads-list` 要覆盖 `128 // tp_size`，即 TP=1/2/4/8 → `128/64/32/16`，且是**精确 key**（不插值）。
 context 表的 `s = isl`，generation 表的 `s = isl + step`（脚本写 step=0）。
 
+##### 运行前提（NPU 环境，2026-10-12 实测踩坑记录）
+
+`--module-source framework` 在 NPU 上跑通真实 metadata 路径需要以下前提，
+均已在 `collector/npu/dsv4_factory.py` 内处理（第 1 条同时需要启动环境配合）：
+
+1. **vendor 自定义算子包必须在加载路径上**。DSA 元数据算子
+   （`torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata`）的 aclnn 实现在
+   vllm-ascend 自带的 custom op 包 `libcust_opapi.so` 里，torch_npu 的
+   FunctionLoader 只在 libopapi.so / libopapi_serv.so 里找符号，**永远找不到**。
+   启动前设置（路径按实际部署调整）：
+
+   ```bash
+   export ASCEND_CUSTOM_OPP_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer
+   export LD_LIBRARY_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_api/lib:$LD_LIBRARY_PATH
+   ```
+
+   `_build_dsv4_real_metadata()` 里也会调
+   `bootstrap_custom_op_env(include_vendor_lib=True)` 做进程内兜底（与上游
+   单卡测试 `test_compressor_metadata.py` 同款姿势；仅
+   `bootstrap_custom_op_env()` 默认档不够）。
+   **缺失症状**：每个 spec 报
+   `aclnnSparseAttnSharedKvMetadata ... not in libopapi.so`，随后全部静默回退
+   到 `dsa_forward` profiling 兜底路径——采集"成功"但数据不真实。
+
+2. **CSA/HCA 的 compress_ratio 必须写进 HF config**。`DeepseekV4Attention` 只从
+   `hf_config.compress_ratios[layer_idx]` 读压缩率（`get_dsv4_compress_ratio`），
+   不认任何构造参数；V4-Pro 配置 layer 0 = 128。factory 在构造模块前把
+   `spec.compress_ratio`（CSA=4 / HCA=128）写入 `compress_ratios[0]`。
+   **缺失症状**：所有 "CSA" 行实际测的是 HCA（ratio 128），输出列名不副实。
+
+3. **attn_metadata dict 的 key 必须是各缓存模块自己的构造 prefix**：
+   `.../self_attn.attn`、`.../self_attn.compressor.state_cache`、
+   `.../self_attn.indexer.{compressor.state_cache,k_cache}`、`.../self_attn.swa_cache`。
+   `ops/dsa.py::dsa_forward` 的 `filter_metadata()` 按 key 排序后把 values 交给
+   `AscendDSAImpl._forward_prefill()` 按 ratio **位置解包**（ratio 128 期望 3 个、
+   ratio 4 期望 5 个）。若按 `named_modules` 路径做 key，会多出一个
+   `.../self_attn.dsa_attn.dsa_attn` 条目。
+   **缺失症状**：`ValueError: too many values to unpack (expected 3)`。
+
+4. **rope 运行时 buffer 必须按 spec 重建**。`rope_dsv4._ROPE_STATE.runtime_buffer`
+   是进程级全局缓存，按**首个** spec 的 `max_num_batched_tokens` 分配后永不扩容；
+   generation 扫描 batch=1 在前会让后续大 batch 在 `get_cos_and_sin_dsa` 里
+   广播失败。factory 每个 spec 构建模块前清空该缓存。
+   **缺失症状**：real 路径每行报
+   `shape of broadcast result should be [N,1,1,64], but self is [1,1,1,64]`。
+
+5. **wo_a 权重需整形为 3-D 分组布局**。单卡路径
+   `_forward_o_proj` 的 `else` 分支用
+   `npu_transpose_batchmatmul(x1=[T, groups, gh], wo_a.weight, perm_x2=(0,1,2))`，
+   要求权重是 3-D `[n_local_groups, gh, o_lora_rank]`；vLLM 的
+   `ColumnParallelLinear` 建出来的是 2-D `[groups×o_lora, gh]`。生产环境跑
+   DSv4-Pro 走 finegrained o_lora TP（`olora_tp_enable()` 分支）从不触发该分支；
+   采集器 TP=1 会触发，故在模块构建后整形（只影响 dispatch 形状，权重本就
+   不加载真实值，分组 bmm 与 SDK 建模的两段 2-D GEMM FLOPs 等价）。
+   **缺失症状**：`IndexError: Dimension out of range (expected to be in range of [-2, 1], but got 2)`。
+
+##### 采集命令
+
 ```bash
 # 1) CSA context
+cd /workspace && \
+ASCEND_CUSTOM_OPP_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer \
+LD_LIBRARY_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_api/lib:$LD_LIBRARY_PATH \
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 \
-  --seq-len-list 128 256 512 1024 2048 4096 8196 16384 \
+  --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
   --num-heads-list 128 64 32 16 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir ./data/dsv4_csa_ctx --resume
+  --output-dir ./data/dsv4_csa_ctx_v2 --resume
 
 # 2) CSA generation
+cd /workspace && \
+ASCEND_CUSTOM_OPP_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer \
+LD_LIBRARY_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_api/lib:$LD_LIBRARY_PATH \
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 64 128 256 \
@@ -316,10 +380,37 @@ python collector/npu/collect_dsv4_attn.py \
   --num-heads-list 128 64 32 16 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir ./data/dsv4_csa_gen --resume
+  --output-dir ./data/dsv4_csa_gen_2 --resume
 
 # 3) / 4) HCA context + generation：把 --attn-kinds 换成 hca，换输出目录
 ```
+
+带环境前提的完整示例（CSA context）：
+
+```bash
+cd /workspace && \
+ASCEND_CUSTOM_OPP_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer \
+LD_LIBRARY_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_api/lib:$LD_LIBRARY_PATH \
+python collector/npu/collect_dsv4_attn.py --op-types dsv4_context --attn-kinds csa \
+  --batch-list 1 2 4 8 16 32 --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
+  --num-heads-list 128 64 32 16 --module-source framework \
+  --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
+  --output-dir ./data/dsv4_csa_ctx_v2
+```
+
+##### 容量限制（实测）
+
+`n_local_heads` 恒为 `num_attention_heads // tp_size`（TP=1 时 128，与
+`--num-heads-list` 无关），context 路径的 `o_proj_input` 形状为
+`[batch×seq, 128, 512]`：`b=16 × s=16384`（262144 tokens）时**单这一项就要
+32 GiB**，910B（64 GB）放不下。这类尾部规格采集器记 FAILED 后继续跑
+（`--resume` 可续采），属单卡容量极限；要采这些点只能缩窄 sweep 或换更大显存。
+
+##### 旧数据作废
+
+2026-10-12 修复前的 `dsv4_*` 输出（profiling 兜底数据、ratio 128 冒充 CSA 的
+数据）**一律不可用**；重新采集务必使用**新的 `--output-dir`**——
+`--resume` 会跳过旧 checkpoint 里已完成的 key。
 
 `--module-source`：
 
@@ -470,13 +561,17 @@ results.print_pareto_table()
    优先用 `mhc_module_perf.txt` 覆盖。
 5. **`expert_dtype: fp4` 不适用**：NPU 侧按 bf16 / W8A8 建模，忽略 FP4 专家。
 6. **MoE 并行约束**：vllm-ascend 不支持同时按 TP 和 EP 切 MoE 权重，搜索空间 `moe_tp_list` 固定 `[1]`。
-7. **采集脚本尚未在硬件上跑过**：`collector/npu/collect_mhc.py` 与
-   `collector/npu/collect_dsv4_attn.py`（+ `dsv4_factory.py`）是照现有 MLA/DSA 采集器的
-   模式写的，输出 schema 与 `perf_database` 的加载器严格对齐，但**没有在 NPU 上验证过**。
-   `collect_dsv4_attn.py --module-source framework` 依赖 vllm-ascend 0.23.0 内部的
-   DSv4 attention 类名，首次在硬件上跑建议先冒烟，必要时用
-   `--attention-cls module.path:ClassName` 或 `--module-source reference` 兜底。
-8. **SWA 层被截断**：HF config 的 `compress_ratios` 有 62 项、末项为 `0`（SWA），
+7. **采集脚本的硬件验证状态（2026-10-12 更新）**：`collect_mhc.py` **尚未**在 NPU 上
+   跑过；`collect_dsv4_attn.py` 的 `--module-source framework` 路径已在 NPU 上
+   跑通真实 metadata 前向（踩坑与环境前提见 D3 小节），`reference` 路径一直可用。
+   framework 路径强依赖 vllm-ascend 0.23.0 的内部布局（KV 子层发现、metadata dict
+   key 约定、vendor 算子包路径），**升级 vllm-ascend 后需按 D3 小节的症状表回归**；
+   换新环境首次跑建议先冒烟（2 个点）再全量。
+8. **DSv4 framework 采集是 TP=1 单模块近似**：生产环境跑 DSv4-Pro 使用 finegrained
+   o_lora TP（`_forward_o_proj` 走 `olora_tp` 分支 + all_to_all），采集器 TP=1 走
+   单卡 `else` 分支（分组 bmm）。两者 FLOPs 等价，但**不含 o_proj 的 TP 通信开销**；
+   SDK 建模同样按两段 GEMM 计，不额外建模该通信，口径一致。
+9. **SWA 层被截断**：HF config 的 `compress_ratios` 有 62 项、末项为 `0`（SWA），
    按 `compress_ratios[:num_hidden_layers]` 截断后只剩 61 项 → Pro 实际建模为
    **30 层 CSA + 31 层 HCA**（与上游行为一致，上游同样 count(0)==0）。
    `get_kvcache_*()` 用的是 `len(compress_ratios)`（61），同样不含 SWA。
