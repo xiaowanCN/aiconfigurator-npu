@@ -453,6 +453,32 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
                 layer_idx, spec.compress_ratio, spec.attn_kind,
             )
 
+    # Rank-local head count has to be forced through the HF config. vLLM's
+    # attention classes derive ``n_local_heads`` from
+    # ``hf_config.num_attention_heads // tp_size`` and IGNORE a ``num_heads``
+    # constructor kwarg, so passing ``num_heads=spec.num_heads`` below is
+    # inert: every spec silently built the same 128-head module. Measured proof —
+    # with num_heads swept 128..2 the latencies inside one (batch, seq) group
+    # differed by < 1.1% (26354 / 51719 / 108518 / 221664 us), while the analytic
+    # model expects ~44% less work at 2 heads. The tables produced that way
+    # over-state every tp > 1 deployment.
+    #
+    # Modelling tp = native_heads // num_heads on a single card therefore means
+    # rewriting the config to the rank-local count (tp_size stays 1).
+    native_heads = int(getattr(hf_config, "num_attention_heads", 0) or 0)
+    if native_heads and spec.num_heads != native_heads:
+        if native_heads % spec.num_heads:
+            raise RuntimeError(
+                f"num_heads={spec.num_heads} does not divide the model's "
+                f"num_attention_heads={native_heads}"
+            )
+        logger.debug(
+            "Simulating tp_size=%d by setting hf_config.num_attention_heads "
+            "%d -> %d (rank-local heads)",
+            native_heads // spec.num_heads, native_heads, spec.num_heads,
+        )
+        hf_config.num_attention_heads = spec.num_heads
+
     # Only forward the kwargs the class actually declares, so this works across
     # vllm-ascend releases with different constructor signatures.
     candidates = dict(
@@ -497,6 +523,22 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     module.requires_grad_(False)
 
     _reshape_dsv4_woa_weight_3d(module)
+
+    # Hard guard: if the head geometry did not take effect, every num_heads in
+    # the sweep measures the same module and the whole table becomes a lie.
+    # Fail loudly (upstream collector/vllm/collect_dsv4_attn.py raises on the
+    # same mismatch) instead of writing plausible-looking garbage.
+    for attr in ("n_local_heads", "num_heads", "num_local_heads"):
+        actual = getattr(module, attr, None)
+        if isinstance(actual, int) and actual:
+            if actual != spec.num_heads:
+                raise RuntimeError(
+                    f"DSv4 head geometry mismatch: module.{attr}={actual} but the spec "
+                    f"asked for num_heads={spec.num_heads}. The sweep would measure the "
+                    f"same module for every --num-heads-list entry; fix the config "
+                    f"override above (or vllm-ascend changed how it derives local heads)."
+                )
+            break
 
     # Same post-instantiation env setup as the MLA collector: rope cos/sin
     # caches live in module-level globals created on CPU, and the triton
