@@ -905,35 +905,49 @@ def create_dsv4_module_func(
         from contextlib import ExitStack
         from vllm.config import set_current_vllm_config
 
+        # Everything below is constant for a given spec, so it is set up ONCE,
+        # outside the timed closure. The benchmark loop calls forward_fn dozens
+        # of times per shape; leaving any of it inside means
+        #   * every iteration pays for vLLM forward-context construction, which
+        #     dominates the measurement (latencies come out ~4 ms and flat in
+        #     num_heads, i.e. pure host overhead instead of kernel time);
+        #   * the host->device copy of num_tokens_across_dp runs *during* NPU
+        #     graph capture, which is illegal — aclrtMemcpy fails with error
+        #     107030 ("operation not permitted when a stream is capturing"), so
+        #     capture can never succeed for this module.
+        stack = ExitStack()
+        stack.enter_context(set_current_vllm_config(vllm_config))
+        try:
+            from vllm_ascend.ascend_forward_context import set_ascend_forward_context
+            from vllm_ascend.ascend_config import WeightPrefetchConfig
+            from vllm_ascend.utils import set_weight_prefetch_method
+
+            set_weight_prefetch_method(WeightPrefetchConfig({}))
+            num_tokens_across_dp = torch.tensor(
+                [num_tokens], dtype=torch.int64, device=device
+            )
+            stack.enter_context(
+                set_ascend_forward_context(
+                    attn_metadata,
+                    vllm_config,
+                    num_tokens=num_tokens,
+                    num_tokens_across_dp=num_tokens_across_dp,
+                )
+            )
+        except ImportError:
+            from vllm.forward_context import set_forward_context
+
+            stack.enter_context(
+                set_forward_context(attn_metadata, vllm_config)
+            )
+
         def forward_fn() -> None:
-            stack = ExitStack()
-            stack.enter_context(set_current_vllm_config(vllm_config))
-            try:
-                from vllm_ascend.ascend_forward_context import set_ascend_forward_context
-                from vllm_ascend.ascend_config import WeightPrefetchConfig
-                from vllm_ascend.utils import set_weight_prefetch_method
-
-                set_weight_prefetch_method(WeightPrefetchConfig({}))
-                num_tokens_across_dp = torch.tensor(
-                    [num_tokens], dtype=torch.int64, device=device
-                )
-                stack.enter_context(
-                    set_ascend_forward_context(
-                        attn_metadata,
-                        vllm_config,
-                        num_tokens=num_tokens,
-                        num_tokens_across_dp=num_tokens_across_dp,
-                    )
-                )
-            except ImportError:
-                from vllm.forward_context import set_forward_context
-
-                stack.enter_context(
-                    set_forward_context(attn_metadata, vllm_config)
-                )
             # vLLM attention modules take (positions, hidden_states, llama_4_scaling).
             module.forward(positions, hidden, None)
-            stack.close()
+
+        # The forward context has to stay live for the whole benchmark, so expose
+        # a closer instead of using a `with` block inside forward_fn.
+        forward_fn.close = stack.close  # type: ignore[attr-defined]
 
     # Dry run so construction/typing failures surface before the timed loop.
     with torch.inference_mode():

@@ -34,7 +34,7 @@ try:
 except ImportError:
     pass
 
-from bench_engine import benchmark_npu
+from bench_engine import benchmark_npu, describe_mode
 from dsv4_factory import (
     CSA,
     HCA,
@@ -152,6 +152,7 @@ def run_benchmark(
     mla_dtype: str,
     kv_cache_dtype: str,
     gemm_type: str,
+    use_graph: bool = True,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     completed: set[str] = _load_checkpoint(output_dir) if resume else set()
@@ -192,13 +193,22 @@ def run_benchmark(
                 "%s %s b=%d s=%d heads=%d", progress, spec.attn_kind, spec.batch, spec.seq_len, spec.num_heads
             )
 
+            forward_fn = None
             try:
                 forward_fn, _meta = create_dsv4_module_func(spec, device="npu:0")
-                result = benchmark_npu(forward_fn, warmup_iters=warmup_iters, num_runs=bench_iters)
+                result = benchmark_npu(
+                    forward_fn,
+                    warmup_iters=warmup_iters,
+                    num_runs=bench_iters,
+                    use_graph=use_graph,
+                )
                 writer.writerow(
                     _make_row(spec, result, framework, version, device, mla_dtype, kv_cache_dtype, gemm_type)
                 )
-                logger.info("%s -> %.2f us (avg of %d runs)", progress, result.avg_us, result.num_runs)
+                logger.info(
+                    "%s -> %.2f us (avg of %d runs, %s)",
+                    progress, result.avg_us, result.num_runs, describe_mode(result),
+                )
             except Exception:
                 logger.exception(
                     "%s FAILED %s b=%d s=%d heads=%d",
@@ -211,6 +221,14 @@ def run_benchmark(
                     torch.npu.synchronize()
                 except RuntimeError:
                     pass
+                # Release the vLLM forward context kept open by the framework
+                # path (the reference path has no such closer).
+                close = getattr(forward_fn, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:
+                        logger.debug("closing forward context failed", exc_info=True)
                 torch.npu.empty_cache()
 
             completed.add(key)
@@ -265,6 +283,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dtype", default="float16", choices=sorted(DTYPE_MAP))
     p.add_argument("--warmup-iters", type=int, default=5)
     p.add_argument("--bench-iters", type=int, default=20)
+    p.add_argument(
+        "--no-graph", action="store_true",
+        help=(
+            "Skip NPU-graph capture and time the eager path only. Required for "
+            "--module-source framework: building the DSv4 forward context copies "
+            "a shape tensor host->device, which is illegal during capture "
+            "(aclrtMemcpy error 107030), so capture can never succeed there."
+        ),
+    )
     p.add_argument("--resume", action="store_true")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     p.add_argument("--framework", default="vllm-ascend")
@@ -338,6 +365,7 @@ def main() -> None:
         mla_dtype=args.mla_dtype,
         kv_cache_dtype=args.kv_cache_dtype,
         gemm_type=args.gemm_type,
+        use_graph=not args.no_graph,
     )
 
 

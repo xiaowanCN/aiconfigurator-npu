@@ -343,6 +343,41 @@ CSA/HCA 采集走 `--module-source framework`（vllm-ascend 自己的 DSv4 atten
    生产环境走 finegrained o_lora TP 从不触发该分支，采集器 TP=1 会触发，故在模块构建后整形。
    **缺失症状**：`IndexError: Dimension out of range (expected to be in range of [-2, 1], but got 2)`。
 
+6. **NPU 图（graph）模式对 framework 路径永远不可能成功 —— 加 `--no-graph`**。
+   `benchmark_npu` 默认先尝试 `torch.npu.NPUGraph()` 捕获再回放（消除 Python 派发开销），
+   失败则回落 eager。而 DSv4 framework 前向里会做**主机→设备的拷贝**（构造
+   `num_tokens_across_dp` 形状张量）并做 vLLM forward context 构造，
+   图捕获期间这是非法的：
+
+   ```
+   NPUGraph: ERROR — capture failed: RuntimeError: copy_between_host_and_device_opapi
+   ... aclrtMemcpy, error code is 107030
+   Not_Supported(EE1016): Synchronizing a stream failed. Stream (stream_id=7)
+   during the capture stage is not supported.
+   ```
+
+   **这正是"正常不应该是图模式吗"的答案**：模块级注意力（含 metadata 计算）**采不到图模式**——
+   vLLM/vllm-ascend 自己也只对**纯 decode** 用 ACL graph，**prefill 永远是 eager**。
+   所以 eager 才是正确口径；图模式只对 GEMM / MoE / mHC 这类纯算子有效
+   （那些采集器不受影响，仍然走图模式）。
+
+   **缺失症状**：每个 spec 刷一遍上面的 `107030` 报错，然后回落 eager（不会中断，但日志被淹没）。
+
+7. **eager 口径下必须把"每轮不变的工作"挪出计时区**。
+   早期实现把 `set_current_vllm_config` / `set_weight_prefetch_method` /
+   `torch.tensor([num_tokens], device=...)` 都写在 `forward_fn` 内部，
+   于是每一次计时迭代都要付一遍 vLLM forward context 的构造成本：
+   实测 `b=1 s=128` 测出 **≈3981 µs**，且 heads=128/64/32/16/8/4 的值几乎一样
+   （3981 / 3961 / 4068 / 3967 / 4002 / 3896 µs）——
+   说明测到的是**固定的主机开销，不是 kernel 时间**，数据不可用。
+
+   现已把这些常量工作提到 `forward_fn` 之外（只构造一次），`forward_fn` 只剩
+   `module.forward(positions, hidden, None)`；forward context 保持打开并暴露
+   `forward_fn.close`，由采集器在 spec 结束时释放。
+
+   **自检方法**：冒烟时看日志里的延迟是否随 `num_heads` / `s` 单调变化。
+   如果不同 `num_heads` 的值几乎相同（差异 < 5%），说明仍然在测主机开销。
+
 > **旧数据作废**：2026-10-12 修复前的 `dsv4_*` 输出（profiling 兜底数据、ratio 128 冒充 CSA 的数据）
 > **一律不可用**；重新采集务必使用**新的 `--output-dir`**——`--resume` 会跳过旧 checkpoint 里已完成的 key。
 
@@ -361,7 +396,7 @@ python collector/npu/collect_dsv4_attn.py \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
   --num-heads-list 128 64 32 16 8 4 2 \
-  --module-source framework \
+  --module-source framework --no-graph \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_hca_ctx_v2 --resume
 
@@ -374,7 +409,7 @@ python collector/npu/collect_dsv4_attn.py \
   --batch-list 1 2 4 8 16 32 64 128 256 384 512 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
   --num-heads-list 128 64 32 16 8 4 2 \
-  --module-source framework \
+  --module-source framework --no-graph \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_hca_gen_v2 --resume
 ```
@@ -392,7 +427,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 --module-source framework \
+  --num-heads-list 128 64 32 16 8 4 2 --module-source framework --no-graph \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir ./data/dsv4_csa_ctx_v2 --resume
 
@@ -404,7 +439,7 @@ python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds csa \
   --batch-list 1 2 4 8 16 32 64 128 256 384 512 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --num-heads-list 128 64 32 16 8 4 2 --module-source framework \
+  --num-heads-list 128 64 32 16 8 4 2 --module-source framework --no-graph \
   --output-dir ./data/dsv4_csa_gen_v2 --resume
 ```
 
@@ -425,7 +460,7 @@ python collector/npu/collect_dsv4_attn.py \
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds hca \
   --batch-list 1 --seq-len-list 128 --num-heads-list 128 \
-  --module-source framework --warmup-iters 1 --bench-iters 3 \
+  --module-source framework --no-graph --warmup-iters 1 --bench-iters 3 \
   --output-dir ./data/dsv4_hca_smoke
 ```
 

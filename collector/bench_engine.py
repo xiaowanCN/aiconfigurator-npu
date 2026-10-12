@@ -35,18 +35,22 @@ class BenchResult:
     used_graph: bool = False
     graph_us: float = 0.0
     eager_us: float = 0.0
+    graph_attempted: bool = True
 
 
 def describe_mode(result: BenchResult) -> str:
     """Human-readable timing mode for a result.
 
-    ``used_graph=False`` is ambiguous: it covers both "capture raised" and
-    "capture worked but replay was not faster than eager". Distinguishing them
-    matters — the former means the graph path is broken, the latter is just a
-    deliberate choice of the faster measurement.
+    ``used_graph=False`` is ambiguous: it covers "graph disabled by the caller",
+    "capture raised" and "capture worked but replay was not faster than eager".
+    Distinguishing them matters — the first two mean the graph path is either
+    intentionally skipped or broken, the last is a deliberate choice of the
+    faster measurement.
     """
     if result.used_graph:
         return "graph"
+    if not result.graph_attempted:
+        return "eager (NPU graph disabled)"
     if result.graph_us:
         return (
             f"eager (graph {result.graph_us:.2f}us "
@@ -86,13 +90,32 @@ def benchmark_npu(
     warmup_iters: int = 20,
     num_runs: int = 100,
     repeat_n: int = 1,
+    use_graph: bool = True,
 ) -> BenchResult:
-    """Warmup + time kernel_func on NPU. Tries NPU graph, falls back to eager."""
+    """Warmup + time kernel_func on NPU. Tries NPU graph, falls back to eager.
+
+    ``use_graph=False`` skips capture entirely. Use it for operators whose
+    forward is *known* to be uncapturable (any host<->device copy, e.g. building
+    a shape tensor inside the timed region, raises
+    ``aclrtMemcpy ... error 107030`` during capture). Retrying a doomed capture
+    per shape only costs time and floods the log.
+    """
     global _GRAPH_CAPTURE_ERROR_LOGGED
 
     for _ in range(warmup_iters):
         kernel_func()
     torch.npu.synchronize()
+
+    if not use_graph:
+        eager_us = _timed_run(kernel_func, num_runs, repeat_n)
+        return BenchResult(
+            avg_us=eager_us,
+            num_runs=num_runs,
+            repeat_n=repeat_n,
+            used_graph=False,
+            eager_us=eager_us,
+            graph_attempted=False,
+        )
 
     try:
         graph = torch.npu.NPUGraph()
