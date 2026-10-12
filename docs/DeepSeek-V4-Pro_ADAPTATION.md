@@ -968,3 +968,68 @@ results.print_pareto_table()
 - 采集脚本：`collector/npu/collect_dsv4_attn.py`、`collect_mhc.py`、`collect_moe.py`、`dsv4_factory.py`
 - 转换脚本：`tools/convert_to_aiconfigurator.py`
 - 校验脚本：`tools/check_dsv4_data.py`
+
+---
+
+## 11. 适配工作总结（附录）
+
+按工作类别汇总 DeepSeek-V4-Pro 适配从零开始完成的任务，并标注状态。
+相关 commit（分支 `feature/deepseek-v4-pro-support`）：
+`0aa988e`（覆盖/落位/校验）、`23d8e89`（图捕获修复）、`83372a6`（图模式默认 + 释放显存池）、
+`24f0233`（真头网格）、`b0dd50f`（去掉 heads=2 / Ascend 4 倍数约束）。
+
+### 11.1 模型架构与算子认知（对标 NVIDIA aiconfigurator 侧）
+
+> 这部分以**架构拆解、key 结构梳理、量化映射对齐**为主；算子本身复用 vllm-ascend 已有模块，未新写 kernel。
+
+- 确认 `DeepSeekV4Model` 共 **61 层 = 30 CSA + 31 HCA**（SWA 折叠进 HCA），架构名 `DeepseekV4ForCausalLM`、模型族 `DEEPSEEKV4`，对标 vLLM 0.24.0。
+- 梳理 **6 张硅数据表**的查询 key 结构（`dsv4_csa_context/generation`、`dsv4_hca_context/generation`、`mhc`、`moe_perf`），标注哪些为「精确 key 不插值」、哪些允许插值。
+- 各算子 GEMM/MLA/fp8 量化映射：MoE `fp8_block`、FMHA/KV cache `fp8`；**mHC 量化固定 bf16**（上游 `deepseek_v4.py` 多处 `GEMMQuantMode.bfloat16`，而 aic-npu 侧 `models.py` 硬编码 `float16` 且无量化列）——已记录为待对齐点。
+- MoE `distribution=_power_law_alpha` 约定：V4/V3/R1 查询 `power_law_1.01`（见 11.3 F2）。
+
+### 11.2 数据充分性审计（对比 NVIDIA 仓库的 `dsv4_*` 表）
+
+- 对照 NVIDIA 侧 `b300_sxm/sparse_attention/vllm/0.24.0` 下其他 `dsv4_*` 表，审计现有 `dsv4_csa_ctx_v2 / dsv4_csa_gen_v2 / dsv4_mhc / moe_v4` 五个文件夹。
+- 结论：**数据不足** —— 缺 HCA context/generation 两表；MoE distribution key 不匹配；CSA context 退化；mHC 缺 `post`。
+- 形成 **F1–F13 缺陷清单**，逐条定位根因与修复方案（见 §6 / 11.3）。
+
+### 11.3 数据采集器（collector）开发与修复
+
+- **F8 维度扩展感知**：`TaskConfig._widen_gpu_sweep_lists`（`sdk/task.py:31-53`）会把 tp/dp/moe_ep 扩展到 16/32/64…≤ `--total-gpus`，因此 num_heads 须采到 4、moe_ep 须到 64。
+- **F2 MoE distribution 解析**：`perf_database._resolve_moe_distribution()` 实现「精确 → 同族 `power_law_*` → `uniform`」三级回退，修复 key 不匹配。
+- **F3 MoE ep 覆盖**：`collect_moe.py` 新增 `deepseek-v4-pro-ep{64,32,16,4,2}` 的 `MODEL_CONFIGS`。
+- **F4 生成 batch 网格**：`DEFAULT_GENERATION_BATCH_LIST` 补 `384 512`（否则 b>256 被边界外推）。
+- **图模式（graph）计时修复**（commit `23d8e89` / `83372a6` / `24f0233`）：
+  - 把 vLLM forward context 构造、weight prefetch、`num_tokens_across_dp` 的 host→device 拷贝**移出计时闭包**（否则 NPU graph 捕获期非法拷贝 → `aclrtMemcpy 107030`）。
+  - NPU graph 设为默认；捕获后**显式释放 graph 私有内存池**（避免大 batch×seq OOM）；`--no-graph` 作为兜底。
+  - 修复「假头网格」：`_build_framework_module` 构造前改写 `hf_config.num_attention_heads` 为 rank-local 头数，构造后硬校验 `n_local_heads == spec.num_heads`。
+- **F13 Ascend 硬件约束**（commit `b0dd50f`，已 push）：`SparseAttnSharedkv` 要求 `q_head_num` 为 4 倍数 → `num_heads=2`（tp=64）tiling 失败；`DEFAULT_NUM_HEADS_LIST` 改为 `[128,64,32,16,8,4]`，新增 `_validate_num_heads_list` 对 4 非倍数自动 warn+跳过；`check_dsv4_data.py` 同步。
+
+### 11.4 落位（Landing）与验证工具
+
+- **新增 `tools/check_dsv4_data.py`**（无 NPU 的 SILICON 探针校验器）：表加载检测、CSA/HCA context+generation 探针、`num_heads∈{128…4}`、`mHC op∈{pre,post}`、MoE distribution/重复行检测、网格退化诊断。
+- 转换器 `convert_to_aiconfigurator.py` 新增 `--moe-distribution {power_law_1.2,power_law_1.01,both}` 与 `--append`（追加不覆盖现有 234 行）。
+- 落位方式固化：**5 张新表 `cp` + MoE 必须 `--append`**（绝不可整体 `cp`，否则覆盖 V3/R1 的 234 行）；提供 Linux/BC-Linux bash 片段。
+- 落位后运行 `aic-npu default ... --database-mode HYBRID/SILICON` 验证命中。
+
+### 11.5 文档
+
+- 本文件 `docs/DeepSeek-V4-Pro_ADAPTATION.md`：TL;DR、架构拆解、§3.x 采集网格、§4 采集命令、§7 校验、§8.0 规模可行性、§9 已知限制、F1–F13 缺陷表。
+- 规模分析：bf16 权重 ≈2894 GiB，64 GB 卡仅 `ep=64` 放得下且 **Ascend attention 最大 tp=32**；建议按 128 卡评估。
+
+### 11.6 日志分析与问题定位（贯穿全程）
+
+- `1012.txt`：`CSA context` 仅 batch=1 → `QhullError` 整表废；`mHC` 缺 `post`；`HCA gen` b≥64 有洞；`MoE` 重复追加 3×。
+- `1012 (1).txt`：NPU graph 捕获失败 `aclrtMemcpy 107030`。
+- 本轮：`heads=2` tiling 失败（`head num should be multiple of 4, but got 2`）+ `Memory_Allocation_Failure`；解释 `wo_a.weight` 第一维恒为 16 是 `o_groups`（非 num_heads）。
+
+### 11.7 状态汇总
+
+| 类别 | 状态 |
+|---|---|
+| 架构/算子认知、审计、文档 | ✅ 已完成 |
+| collector 修复（F2–F13、图模式、头部网格、Ascend 约束） | ✅ 已完成并 push（`b0dd50f`） |
+| `check_dsv4_data.py` 校验器 | ✅ 已完成 |
+| 转换器 `--moe-distribution/--append` | ✅ 已完成 |
+| **实际 NPU 重采数据并落位**（HCA/CSA 四表、mHC post、HCA gen 补洞） | ⬜ 待执行（F7）—— 需在采集机重新跑并重跑落位 |
+| 早期「面向新手的细粒度文档改写」 | ⬜ 曾被取消，未做 |
