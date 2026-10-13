@@ -1302,7 +1302,9 @@ class GDNKernel(Operation):
         - "causal_conv1d_update": Single-step causal conv state update
         - "fused_sigmoid_gating_delta_rule_update": Single-step GDN recurrence
 
-    Uses full (unsharded) dimensions for database lookup; collector data is per-layer.
+    Uses TP-local (sharded) dimensions for database lookup; the collector
+    benchmarks each (tp, local-geometry) separately and writes rows keyed on the
+    local head counts, matching NVIDIA's qwen35.py.
     """
 
     def __init__(

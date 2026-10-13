@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 _SYSTEMS_PATHS: list[str] = [os.fspath(pkg_resources.files("aiconfigurator_npu") / "systems")]
 
+#: Escape hatch for an incomplete MoE sweep. ``1/true/yes/on`` lets
+#: :meth:`PerfDatabase.moe_transfer_slice` price an uncollected ``moe_ep_size``
+#: from the nearest collected one. Off by default: the shipped ascend_910b
+#: sweep collects each expert shape at a SINGLE ep (DeepSeek-V3/R1 at ep=8,
+#: DeepSeek-V4 at ep=16/32/64), so enabling it broadens the search space with
+#: transferred (not measured) numbers. See docs/MODEL_ADAPTATION_AUDIT.md.
+MOE_TRANSFER_ENV = "AIC_NPU_MOE_TRANSFER"
+
+
+def _moe_transfer_enabled() -> bool:
+    return os.getenv(MOE_TRANSFER_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _normalize_systems_paths(raw_paths: str | Iterable[str] | None) -> list[str]:
     default_path = os.fspath(pkg_resources.files("aiconfigurator_npu") / "systems")
@@ -2289,6 +2301,10 @@ class PerfDatabase:
         # Cache for extracted metric data to avoid repeated extraction in _interp_3d
         self._extracted_metrics_cache = {}
 
+        # Opt-in shortening of an incomplete MoE sweep: see moe_transfer_slices().
+        self.moe_transfer = _moe_transfer_enabled()
+        self._moe_transfer_warned: set[tuple] = set()
+
         data_dir = os.path.join(systems_root, self.system_spec["data_dir"], backend, version)
         nccl_data_dir = os.path.join(
             systems_root,
@@ -4444,6 +4460,26 @@ class PerfDatabase:
                 ),
             )
 
+    def mla_heads_grid(self) -> list[int]:
+        """Rank-local ``num_heads`` values actually collected in the MLA table.
+
+        Used to prune attention TP sizes whose shard geometry has no silicon
+        row, instead of letting the whole sweep fail later inside
+        :meth:`_interp_3d`. Returns an empty list when the table is absent.
+        """
+        table = getattr(self, "_context_mla_data", None)
+        if not table:
+            return []
+        heads: set[int] = set()
+        try:
+            for fmha_quant_mode in list(table.keys()):
+                by_kv = table.get(fmha_quant_mode, {}) or {}
+                for kv_quant_mode in list(by_kv.keys()):
+                    heads |= {int(h) for h in (by_kv.get(kv_quant_mode, {}) or {})}
+        except Exception:  # noqa: BLE001 - a broken table just means "no coverage"
+            return []
+        return sorted(heads)
+
     @functools.lru_cache(maxsize=32768)
     def query_generation_mla(
         self,
@@ -5004,7 +5040,55 @@ class PerfDatabase:
             )
 
     @staticmethod
-    def _resolve_moe_distribution(moe_data, quant_mode, workload_distribution: str) -> str:
+    def _moe_shape_key(
+        topk: int,
+        num_experts: int,
+        hidden_size: int,
+        inter_size: int,
+        moe_tp_size: int,
+        moe_ep_size: int,
+    ) -> tuple:
+        """Nested-key path used by the MoE silicon dict for one expert shape.
+
+        Mirrors the nesting built in :meth:`load_moe_data`:
+        ``quant -> distribution -> topk -> num_experts -> hidden -> inter ->
+        moe_tp -> moe_ep -> num_tokens``.
+        """
+        return (topk, num_experts, hidden_size, inter_size, moe_tp_size, moe_ep_size)
+
+    @staticmethod
+    def _moe_has_shape(container, shape_key: tuple) -> bool:
+        """True when ``container[shape_key]`` resolves to a non-empty token dict.
+
+        Walks with ``dict.get`` instead of ``[]`` on purpose: the MoE table is a
+        defaultdict tree, so ``[]`` would silently insert empty branches and
+        corrupt every later coverage check.
+        """
+        node = container
+        for key in shape_key:
+            try:
+                node = node.get(key)
+            except AttributeError:
+                return False
+            if node is None:
+                return False
+        try:
+            return len(node) > 0
+        except TypeError:
+            return bool(node)
+
+    # Guards duplicate warnings from _resolve_moe_distribution (class-level on
+    # purpose: that helper is a classmethod shared by every database instance).
+    _moe_sibling_warned: set = set()
+
+    @classmethod
+    def _resolve_moe_distribution(
+        cls,
+        moe_data,
+        quant_mode,
+        workload_distribution: str,
+        shape_key: tuple | None = None,
+    ) -> str:
         """Pick which ``distribution`` key to read out of a MoE table.
 
         ``distribution`` encodes the model family's ``_power_law_alpha`` and is an
@@ -5019,23 +5103,56 @@ class PerfDatabase:
           2. any sibling of the same family (``power_law_*`` for ``power_law``)
              -- same measurement, different alpha, so it is safe to reuse;
           3. ``uniform`` (legacy behaviour).
+
+        ``shape_key`` makes the search **shape-aware**. The ascend sweeps were
+        not single-alpha: some expert shapes were collected only under
+        ``power_law_1.2`` and others only under ``power_law_1.01``. Picking the
+        exact distribution first therefore used to return an EMPTY token dict
+        even though sibling rows existed, which surfaced downstream as
+        ``IndexError: list index out of range``. With ``shape_key`` given, a
+        candidate distribution is only accepted when it actually carries that
+        expert shape, and the exact request is returned (instead of ``uniform``)
+        when no candidate does, so the caller can report the precise miss.
         """
         try:
-            available = list(moe_data[quant_mode].keys())
+            by_dist = moe_data[quant_mode]
+            available = list(by_dist.keys())
         except Exception:
+            return workload_distribution or "uniform"
+
+        candidates = [workload_distribution]
+        family = str(workload_distribution).split("_")[0]
+        candidates += [k for k in available if str(k).startswith(f"{family}_") and k != workload_distribution]
+        if shape_key is None:  # legacy behaviour: never cross into other families
+            for key in candidates:
+                if key in available:
+                    if key != workload_distribution:
+                        logger.debug(
+                            f"MoE distribution '{workload_distribution}' not found, using same-family '{key}' instead"
+                        )
+                    return key
             return "uniform"
 
-        if workload_distribution in available:
-            return workload_distribution
-
-        family = str(workload_distribution).split("_")[0]
-        for key in available:
-            if family and str(key).startswith(f"{family}_"):
-                logger.debug(
-                    f"MoE distribution '{workload_distribution}' not found, using same-family '{key}' instead"
-                )
+        for key in candidates:
+            if cls._moe_has_shape(by_dist.get(key, {}), shape_key):
+                if key != workload_distribution:
+                    # Warn (once per pair): reusing another alpha's label is what makes
+                    # DeepSeek affordable today, but it is a workaround for a sweep that
+                    # should have written both keys. See the P0-2 note in
+                    # docs/DATA_COLLECTION_PLAN.md.
+                    warn_key = (workload_distribution, key, shape_key)
+                    if warn_key not in cls._moe_sibling_warned:
+                        cls._moe_sibling_warned.add(warn_key)
+                        logger.warning(
+                            "MoE shape %s is absent under distribution '%s'; reusing sibling '%s' "
+                            "(same measurement, different power-law alpha). Write both distribution "
+                            "keys with --moe-distribution both when collecting, to remove this reuse.",
+                            shape_key,
+                            workload_distribution,
+                            key,
+                        )
                 return key
-        return "uniform"
+        return workload_distribution
 
     @functools.lru_cache(maxsize=32768)
     def query_moe(
@@ -5248,6 +5365,116 @@ class PerfDatabase:
             return PerformanceResult(emp_latency, energy=0.0)
         else:
             # SILICON or HYBRID mode - use database
+            moe_shape_key = self._moe_shape_key(
+                topk, num_experts, hidden_size, inter_size, moe_tp_size, moe_ep_size
+            )
+
+            def require_moe_slice(moe_dict, table_name: str) -> None:
+                """Fail loudly with the MISSING DIMENSION instead of IndexError.
+
+                Every MoE level is a defaultdict, so an uncollected shape used
+                to resolve to an empty dict and blow up later at
+                ``token_points[-1]`` with an opaque ``IndexError``. Report which
+                part of the grid is missing so the fix is actionable (recollect
+                the sweep vs. change the parallel strategy).
+                """
+                if moe_dict:
+                    return
+                raise PerfDataNotAvailableError(
+                    f"MoE silicon data has no row for this expert shape in {table_name}: "
+                    f"num_experts={num_experts}, topk={topk}, hidden_size={hidden_size}, "
+                    f"inter_size={inter_size}, moe_tp_size={moe_tp_size}, moe_ep_size={moe_ep_size}, "
+                    f"quant_mode={quant_mode}, distribution={workload_distribution} "
+                    f"(system='{self.system}', backend='{self.backend}', version='{self.version}'). "
+                    "Recollect moe_perf.txt covering this (num_experts x ep) grid, or evaluate this "
+                    "parallel strategy in HYBRID/EMPIRICAL mode."
+                )
+
+            def moe_transfer_slice(moe_data, used_dist):
+                """Price an uncollected ``moe_ep_size`` from the nearest collected one.
+
+                The ascend_910b sweep collected each expert shape at ONE ep
+                value (DeepSeek-V3/R1 at ep=8, DeepSeek-V4 at ep=16/32/64), and
+                ``dp*tp == moe_tp*moe_ep`` ties ``ep`` to the worker width, so
+                every other worker width is unpriceable in SILICON mode. Scaling
+                the nearest measurement by the SOL ratio preserves the measured
+                MFU -- the same trick ``_estimate_overflow_with_last_token_util``
+                already applies along the token axis. Only active when
+                ``AIC_NPU_MOE_TRANSFER`` is set, because the result is an
+                ESTIMATE rather than a measurement.
+                """
+                if not self.moe_transfer:
+                    return None
+
+                def _collect_slices(moe_data):
+                    """Every (distribution, ep) curve collected for THIS expert shape."""
+                    found = []
+                    by_dist = moe_data.get(quant_mode, {})
+                    for dist_index, dist in enumerate(list(by_dist.keys())):
+                        node = by_dist.get(dist)
+                        # Keep other dims of the shape fixed; only ep may differ.
+                        for fixed_key in (topk, num_experts, hidden_size, inter_size, moe_tp_size):
+                            if node is None:
+                                break
+                            node = node.get(fixed_key)
+                        if not node:
+                            continue
+                        for ep, curve in node.items():
+                            if curve:
+                                found.append((ep, dist_index, dist, curve))
+                    return found
+
+                # Closest worker width wins; ties prefer the requested
+                # distribution, then whatever other alpha was collected. The
+                # ascend sweep mixed power-law alphas across expert shapes, so
+                # the shape we need often sits under a sibling distribution key.
+                candidates = _collect_slices(moe_data)
+                if not candidates:
+                    return None
+                candidates.sort(key=lambda item: (abs(math.log2(item[0]) - math.log2(moe_ep_size)), item[1]))
+                ep_src, _dist_index, dist_src, src_curve = candidates[0]
+                warn_key = (topk, num_experts, hidden_size, inter_size, moe_tp_size, ep_src, moe_ep_size)
+                if warn_key not in self._moe_transfer_warned:
+                    self._moe_transfer_warned.add(warn_key)
+                    logger.warning(
+                        "MoE silicon data has no ep=%s sweep for experts=%s topk=%s; pricing it from the "
+                        "ep=%s measurement via the SOL ratio. Those numbers are an ESTIMATE, not a "
+                        "measurement - recollect moe_perf.txt across the ep grid to remove this.",
+                        moe_ep_size,
+                        num_experts,
+                        topk,
+                        ep_src,
+                    )
+                src_tokens = sorted(src_curve.keys())
+                left, right = self._nearest_1d_point_helper(num_tokens, src_tokens, inner_only=False)
+                lat_src = self._interp_1d([left, right], [src_curve[left], src_curve[right]], num_tokens)
+                lat_src = lat_src["latency"] if isinstance(lat_src, dict) else lat_src
+                sol_src = get_sol(
+                    num_tokens,
+                    hidden_size,
+                    inter_size,
+                    topk,
+                    num_experts,
+                    moe_tp_size,
+                    ep_src,
+                    quant_mode,
+                    workload_distribution,
+                )[0]
+                sol_dst = get_sol(
+                    num_tokens,
+                    hidden_size,
+                    inter_size,
+                    topk,
+                    num_experts,
+                    moe_tp_size,
+                    moe_ep_size,
+                    quant_mode,
+                    workload_distribution,
+                )[0]
+                if sol_src <= 0:
+                    return None
+                return PerformanceResult(lat_src * sol_dst / sol_src, energy=0.0)
+
             def get_silicon():
                 if self.backend == common.BackendName.sglang.value:
                     # deepep_moe is for sglang wideep only
@@ -5317,7 +5544,7 @@ class PerfDatabase:
                     ):
                         try:
                             used_workload_distribution = self._resolve_moe_distribution(
-                                self._moe_low_latency_data, quant_mode, workload_distribution
+                                self._moe_low_latency_data, quant_mode, workload_distribution, moe_shape_key
                             )
                             moe_dict = self._moe_low_latency_data[quant_mode][used_workload_distribution][topk][
                                 num_experts
@@ -5329,18 +5556,23 @@ class PerfDatabase:
                             )
                         except:
                             used_workload_distribution = self._resolve_moe_distribution(
-                                self._moe_data, quant_mode, workload_distribution
+                                self._moe_data, quant_mode, workload_distribution, moe_shape_key
                             )
                             moe_dict = self._moe_data[quant_mode][used_workload_distribution][topk][num_experts][
                                 hidden_size
                             ][inter_size][moe_tp_size][moe_ep_size]
                     else:
                         used_workload_distribution = self._resolve_moe_distribution(
-                            self._moe_data, quant_mode, workload_distribution
+                            self._moe_data, quant_mode, workload_distribution, moe_shape_key
                         )
                         moe_dict = self._moe_data[quant_mode][used_workload_distribution][topk][num_experts][
                             hidden_size
                         ][inter_size][moe_tp_size][moe_ep_size]
+                        if not moe_dict:
+                            transferred = moe_transfer_slice(self._moe_data, used_workload_distribution)
+                            if transferred is not None:
+                                return transferred
+                        require_moe_slice(moe_dict, "moe_perf.txt")
                     token_points = sorted(moe_dict.keys())
                     if num_tokens > token_points[-1]:
                         return _estimate_overflow_with_last_token_util(
@@ -5375,11 +5607,16 @@ class PerfDatabase:
                 elif self.backend in (common.BackendName.vllm.value, common.BackendName.vllm_ascend.value):
                     self._moe_data.raise_if_not_loaded()
                     used_workload_distribution = self._resolve_moe_distribution(
-                        self._moe_data, quant_mode, workload_distribution
+                        self._moe_data, quant_mode, workload_distribution, moe_shape_key
                     )
                     moe_dict = self._moe_data[quant_mode][used_workload_distribution][topk][num_experts][hidden_size][
                         inter_size
                     ][moe_tp_size][moe_ep_size]
+                    if not moe_dict:
+                        transferred = moe_transfer_slice(self._moe_data, used_workload_distribution)
+                        if transferred is not None:
+                            return transferred
+                    require_moe_slice(moe_dict, "moe_perf.txt")
                     token_points = sorted(moe_dict.keys())
                     if num_tokens > token_points[-1]:
                         return _estimate_overflow_with_last_token_util(

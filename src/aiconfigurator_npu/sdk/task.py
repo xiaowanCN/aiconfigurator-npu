@@ -53,6 +53,67 @@ def _widen_gpu_sweep_lists(worker_cfg: DefaultMunch, total_gpus: int) -> None:
         worker_cfg[key] = sorted({int(n) for n in existing} | set(extra))
 
 
+# Model families whose attention is served by the MLA op, i.e. whose
+# rank-local head count is priced from ``context_mla_perf.txt``.
+_MLA_FAMILIES = frozenset({"DEEPSEEK", "DEEPSEEKV32", "DEEPSEEKV4"})
+
+
+def prune_parallel_configs_by_silicon_coverage(
+    parallel_config_list: list[list[int]],
+    model_path: str,
+    database,
+    role: str = "worker",
+) -> list[list[int]]:
+    """Drop attention TP sizes the ascent_910b silicon sweep cannot price.
+
+    ``BaseModel`` asserts ``num_heads % tp_size == 0``, so a tp that does not
+    divide the model's heads aborts the whole parallel config. Beyond that, the
+    MLA sweep only covers rank-local head counts down to 16, so tp >= 16 on a
+    128-head model (tp=16 -> 8 heads, tp=64 -> 2 heads) has no silicon row and
+    every such config ends up skipped with an opaque interpolation error.
+
+    Pruning up front keeps the search fast and, crucially, keeps it from being
+    vacuous: previously a single unsupported tp could make every config fail and
+    the entire run report "no results". Nothing here invents numbers - configs
+    the data cannot support are simply not offered.
+    """
+    if not parallel_config_list:
+        return parallel_config_list
+
+    try:
+        model_info = get_model_config_from_model_path(model_path)
+        num_heads = int(model_info["n"])
+        family = get_model_family(model_path)
+    except Exception:  # noqa: BLE001 - without heads/family we cannot prune
+        return parallel_config_list
+
+    mla_heads = sorted(database.mla_heads_grid()) if family in _MLA_FAMILIES else []
+
+    kept, dropped = [], []
+    for parallel_config in parallel_config_list:
+        tp = int(parallel_config[0])
+        if tp <= 0 or num_heads % tp != 0:
+            dropped.append((tp, f"tp={tp} does not divide num_heads={num_heads}"))
+            continue
+        if mla_heads and (num_heads // tp) not in mla_heads:
+            dropped.append(
+                (tp, f"MLA silicon has no num_heads={num_heads // tp} (collected: {mla_heads})")
+            )
+            continue
+        kept.append(parallel_config)
+
+    if dropped:
+        reasons = "; ".join(sorted({reason for _tp, reason in dropped}))
+        logger.info(
+            "Pruned %d/%d %s parallel configs without silicon attention coverage: %s",
+            len(dropped),
+            len(parallel_config_list),
+            role,
+            reasons,
+        )
+    return kept
+
+
 @dataclass(frozen=True)
 class ConfigLayer:
     name: str
@@ -1162,6 +1223,9 @@ class TaskRunner:
                 backend=common.BackendName(task_config.worker_config.backend_name),
                 enable_wideep=task_config.enable_wideep,
             )
+            parallel_config_list = prune_parallel_configs_by_silicon_coverage(
+                parallel_config_list, task_config.model_path, database, role="worker"
+            )
         except Exception:  # pragma: no cover
             logger.exception(
                 "Error enumerating parallel config for %s %s %s",
@@ -1268,6 +1332,9 @@ class TaskRunner:
                 backend=common.BackendName(task_config.prefill_worker_config.backend_name),
                 enable_wideep=prefill_enable_wideep,
             )
+            prefill_parallel_config_list = prune_parallel_configs_by_silicon_coverage(
+                prefill_parallel_config_list, task_config.model_path, prefill_database, role="prefill"
+            )
         except Exception:  # pragma: no cover
             logger.exception(
                 "Error enumerating prefill parallel config for %s %s %s",
@@ -1328,6 +1395,9 @@ class TaskRunner:
                 is_moe=check_is_moe(task_config.model_path),
                 backend=common.BackendName(task_config.decode_worker_config.backend_name),
                 enable_wideep=decode_enable_wideep,
+            )
+            decode_parallel_config_list = prune_parallel_configs_by_silicon_coverage(
+                decode_parallel_config_list, task_config.model_path, decode_database, role="decode"
             )
         except Exception:  # pragma: no cover
             logger.exception(

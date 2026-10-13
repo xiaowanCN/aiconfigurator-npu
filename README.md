@@ -181,16 +181,21 @@ python collector/npu/collect_mla_module.py --mode context --quick \
 
 ## Model Support
 
-| Model | Architecture | Family | Attention perf data |
-|-------|--------------|--------|---------------------|
-| `deepseek-ai/DeepSeek-R1` | `DeepseekV3ForCausalLM` | `DEEPSEEK` | `context_mla_perf.txt` / `generation_mla_perf.txt` — pending collection |
-| `deepseek-ai/DeepSeek-V3` | `DeepseekV3ForCausalLM` | `DEEPSEEK` | same as R1 |
-| `zai-org/GLM-5` | `GlmMoeDsaForCausalLM` | `DEEPSEEKV32` | `dsa_*_module_perf.txt` — pending collection |
-| `deepseek-ai/DeepSeek-V4-Pro` | `DeepseekV4ForCausalLM` | `DEEPSEEKV4` | `dsv4_{csa,hca}_{context,generation}_module_perf.txt` + `mhc_module_perf.txt` — pending collection |
-| `Qwen/Qwen3-235B-A22B` | `Qwen3MoeForCausalLM` | `MOE` | ready (`*_attention_perf.txt`) |
+| Model | Architecture | Family | SILICON 可用性 | 缺口 |
+|-------|--------------|--------|----------------|------|
+| `deepseek-ai/DeepSeek-V4-Pro` | `DeepseekV4ForCausalLM` | `DEEPSEEKV4` | agg ✅ / disagg ❌ | MoE 的 V4 形状只有 `ep∈{16,32,64}`，缺 `{1,2,4,8}`；dsv4 生成表少量单元够不到目标序列长度；disagg 因 bf16 权重 ≈2894 GiB 在 64 卡下本就不可行 |
+| `deepseek-ai/DeepSeek-R1` | `DeepseekV3ForCausalLM` | `DEEPSEEK`（MLA） | ❌ | MoE 形状只有 `ep=8`，且挂在 `power_law_1.2` 下（R1 族要 `power_law_1.01`）；MLA / `mla_bmm` 的 `num_heads` 缺 `{4,8}` |
+| `deepseek-ai/DeepSeek-V3` | `DeepseekV3ForCausalLM` | `DEEPSEEK`（MLA） | ❌ | 与 R1 几何一致，缺口相同 |
+| `zai-org/GLM-5` | `GlmMoeDsaForCausalLM` | `DEEPSEEKV32` | ❌ | `dsa_*_module_perf.txt` 未采集；MoE 形状（`experts=256 / hidden=6144 / inter=2048`）无行 |
+| `Qwen/Qwen3-235B-A22B` | `Qwen3MoeForCausalLM` | `MOE` | ❌ | MoE 形状（`experts=128 / topk=8 / hidden=4096 / inter=1536`）无行 |
+| `Qwen3.8-27B` | `Qwen3_5ForConditionalGeneration` | `QWEN35` | ❌ | `gdn_perf.txt` 未采集（无对应采集脚本）；dense attention 缺 `head_dim=256` |
 
-GEMM / MoE / communication tables for `ascend_910b` are already in
-`src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0/`.
+> 上表由 `python tools/check_model_readiness.py` 复核（2026-10-13），与
+> `src/aiconfigurator_npu/systems/support_matrix.csv` 一致。
+
+已经可用于选型的：`gemm` / `attention`（`head_dim=128`）/ 通信（≤8 卡）三张基础表，以及 V4-Pro 的 agg 路径。
+补采计划见 [`docs/DATA_COLLECTION_PLAN.md`](docs/DATA_COLLECTION_PLAN.md)，
+现状审计见 [`docs/MODEL_ADAPTATION_AUDIT.md`](docs/MODEL_ADAPTATION_AUDIT.md)。
 
 DeepSeek-R1 reuses `DeepSeekModel` (same architecture and dimensions as V3), so no
 model code changes are needed — see `docs/DeepSeek-R1_ADAPTATION.md` for the full
@@ -201,8 +206,9 @@ attention plus mHC residual connections, 384 experts, and a grouped low-rank
 output projection. See `docs/DeepSeek-V4-Pro_ADAPTATION.md` for the architecture
 breakdown, collection commands and known limitations.
 
-Until the MLA / DSv4 tables are collected, run the search in HYBRID mode so the
-attention ops fall back to the analytic (SOL) model:
+MLA / DSv4 表已于 0.23.0 落位，但仍有上表列出的网格缺口：触及缺失组合时，
+SILICON 模式会报出缺失的具体维度，HYBRID 模式则静默回落到解析式（SOL）估算。
+因此**推荐先用 HYBRID 跑通全搜索空间，再用 SILICON 复核已覆盖率足够的那条配置**：
 
 ```bash
 aic-npu default --model deepseek-ai/DeepSeek-R1 --system ascend_910b \

@@ -110,6 +110,7 @@ def enumerate_parallel_config(
     is_moe: bool = False,
     backend: common.BackendName = common.BackendName.trtllm,
     enable_wideep: bool = False,
+    moe_backend: str | None = None,
     real_silicon_sweep: bool = False,
     min_num_gpus: int | None = None,
     max_num_gpus: int | None = None,
@@ -130,6 +131,12 @@ def enumerate_parallel_config(
         is_moe: whether to use moe
         backend: backend name enum. Important for moe parallel enumeration as different backends
             have different moe parallel support.
+        enable_wideep: DEPRECATED and ignored. Kept accepted so existing callers keep
+            working; upstream (aic-core utils.enumerate_parallel_config) stopped letting
+            a flag narrow the enumeration, because large-EP applicability is really a
+            property of the perf-data coverage, and using a flag silently dropped valid
+            configs from the sweep. Restrict the search with moe_ep_list instead.
+        moe_backend: SGLang MoE backend name. "megamoe" is EP-only (moe_tp must be 1).
         real_silicon_sweep: when True, exclude PP (force pp_list=[1]) and filter by
             min_num_gpus/max_num_gpus bounds on total GPUs per config. For MoE models,
             only allows pure TEP, pure DEP, and (optionally) pure TP.
@@ -140,7 +147,18 @@ def enumerate_parallel_config(
             Only effective when real_silicon_sweep=True.
     Returns:
         parallel_config_list: list of parallel configurations
+
+    Divergence from aic-core (deliberate):
+        Upstream gained ``cp_list`` and emits 6-field configs ``[tp, pp, dp, moe_tp,
+        moe_ep, cp]``. Context parallelism needs dedicated perf modeling (CP-aware
+        prefill attention, CP collectives) which this fork does not have, so adding the
+        axis here would only produce plans we cannot price. Keep emitting 5 fields and
+        revisit together with the operator support. With cp=1 the upstream width
+        constraints reduce exactly to the ones below, so nothing else differs.
     """
+    # Accepted for backward compatibility only - see docstring.
+    del enable_wideep
+
     if real_silicon_sweep:
         pp_list = [1]
 
@@ -160,10 +178,8 @@ def enumerate_parallel_config(
                                     continue
                                 # sglang
                                 elif backend == common.BackendName.sglang:
-                                    if (enable_wideep and moe_tp > 1) or (
-                                        not enable_wideep and moe_ep > 1
-                                    ):  # wideep only has ep
-                                        continue
+                                    if moe_backend == "megamoe" and moe_tp > 1:
+                                        continue  # SGLang MegaMoE is EP-only (moe_tp=1).
                                 elif backend in (common.BackendName.vllm, common.BackendName.vllm_ascend):
                                     if moe_tp > 1 and moe_ep > 1:
                                         # vLLM(vllm-ascend) cannot shard MoE weights by both

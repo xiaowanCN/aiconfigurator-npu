@@ -106,8 +106,20 @@ generation: data[KVCacheQuantMode][num_heads][batch][isl + step]
 | C1 | `gemm_perf.txt` | ✅ 已有 | 覆盖 R1 线性层维度 |
 | C2 | `moe_perf.txt` | ✅ 已有 | `GroupedMatmul_MoE_*.csv` 已含 256 experts / topk 8 / 7168 / 2048 |
 | C3 | `custom_allreduce_perf.txt`、`nccl` | ✅ 已有 | 通信 |
-| C4 | `context_mla_perf.txt` / `generation_mla_perf.txt` | ✅ 已采集 | context 224 点 + generation 256 点 |
-| C5 | `mla_bmm_perf.txt` | ⬜ 待采集 | 仅 generation 的 bmm pre/post 使用；采集脚本 `collect_mla_bmm.py` 已就绪，缺失时 HYBRID 走 SOL 估算 |
+| C4 | `context_mla_perf.txt` / `generation_mla_perf.txt` | ✅ 已采集 | 复核（2026-10-13）：167 / 324 行；`num_heads` ∈ {16,32,64,128} —— **缺 {4, 8}**，见下方缺口说明 |
+| C5 | `mla_bmm_perf.txt` | ✅ 已采集 | 复核（2026-10-13）：96 行（`pre`/`post` 两段），`num_heads` ∈ {16,32,64,128} —— 同样**缺 {4, 8}**。采集脚本 `collect_mla_bmm.py` 默认列表已含 `128,64,32,16`（`DEFAULT_NUM_HEADS_LIST`），补 4/8 需显式传 `--num-heads-list` |
+
+### C4 / C5 的残余缺口（2026-10-13 实测）
+
+R1 是 128 头模型，tp 切分后每个 rank 的注意力头数 = `128 / tp`；
+已完成扩容的搜索空间会把 tp 推到 16/32/64，对应 heads = 8/4/2：
+
+| tp | 1 | 2 | 4 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|---|---|
+| rank-local heads | 128 | 64 | 32 | 16 | **8** | **4** | 2 |
+| MLA / mla_bmm 表 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌（Ascend `SparseAttnSharedkv` 要求 4 的倍数，不可实现） |
+
+补采命令见 `docs/DATA_COLLECTION_PLAN.md` §3-A 第三步。
 
 #### C4 采集命令（在 NPU 机器上执行）
 
@@ -384,10 +396,9 @@ results.print_pareto_table()
 2. **MTP 已建模**：`num_nextn_predict_layers=1` 由 `_mtp_scale_factor` 处理，无需额外配置。
 3. **W8A8 在 decode 更慢**：小 M（≤128）时 W8A8 比 BF16 慢约 30%
    （详见 `docs/GLM5_ADAPTATION_DESIGN.md` 8.3）。建议 decode 用 `float16`，prefill 再开 `w8a8_dynamic`。
-4. **`mla_bmm_perf.txt` 尚未采集**：采集脚本 `collector/npu/collect_mla_bmm.py` 已就绪，
-   但还没在硬件上跑过（脚本本身也未经验证）。缺表时 HYBRID 由 SOL 估算
-   （`query_mla_bmm()` 的 `get_empirical` = `SOL / 0.8`），SILICON 模式会报错。
-   采集方式见 **C5**。另外 `--bmm-dtype` 目前只支持 `float16`，W8A8 配置下这两个投影
+4. **`mla_bmm_perf.txt` 已采集（96 行，`pre`/`post` 两段）**，但覆盖面仍未跟上搜索空间：
+   `num_heads` 只到 16，tp=16/32 所需的 heads=8/4 未采（见上方「C4 / C5 的残余缺口」）。
+   另外 `--bmm-dtype` 目前只支持 `float16`，W8A8 配置下这两个投影
    会 fallback 到 bf16 估算。
 5. **MoE 并行约束**：vllm-ascend 不支持同时按 TP 和 EP 切分 MoE 权重
    （`sdk/utils.py:enumerate_parallel_config()`）。vLLM 系后端 MoE 专家权重只按 EP 切分，

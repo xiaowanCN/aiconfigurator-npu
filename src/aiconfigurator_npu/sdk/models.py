@@ -4861,12 +4861,20 @@ class Qwen35Model(BaseModel):
         )
         counts = self._count_layer_types()
 
-        # Unsharded GDN dims (used for kernel lookup)
+        # GDN dims. Kernel lookup uses TP-local head counts: the runtime kernels
+        # execute the sharded geometry, so the collector benchmarks each
+        # (tp, local-geometry) separately and the database is keyed on the local
+        # heads. This matches NVIDIA's qwen35.py (gdn_nk_per_tp / gdn_nv_per_tp).
         nk = cfg.linear_num_key_heads
         hk = cfg.linear_key_head_dim
         nv = cfg.linear_num_value_heads
         hv = cfg.linear_value_head_dim
         d_conv = cfg.linear_conv_kernel_dim
+        gdn_nk_per_tp = nk // tp
+        gdn_nv_per_tp = nv // tp
+        assert nk % tp == 0 and nv % tp == 0, (
+            f"Qwen3.5 GDN heads must be divisible by tp: nk={nk}, nv={nv}, tp={tp}"
+        )
 
         # Per-TP sizes
         n_q_per_tp = self._num_heads // tp
@@ -4893,9 +4901,9 @@ class Qwen35Model(BaseModel):
                         "causal_conv1d_fn",
                         "context",
                         h,
-                        nk,
+                        gdn_nk_per_tp,
                         hk,
-                        nv,
+                        gdn_nv_per_tp,
                         hv,
                         d_conv,
                     ),
@@ -4905,9 +4913,9 @@ class Qwen35Model(BaseModel):
                         "chunk_gated_delta_rule",
                         "context",
                         h,
-                        nk,
+                        gdn_nk_per_tp,
                         hk,
-                        nv,
+                        gdn_nv_per_tp,
                         hv,
                         d_conv,
                     ),
@@ -5063,6 +5071,11 @@ class Qwen35Model(BaseModel):
         nv = cfg.linear_num_value_heads
         hv = cfg.linear_value_head_dim
         d_conv = cfg.linear_conv_kernel_dim
+        gdn_nk_per_tp = nk // tp
+        gdn_nv_per_tp = nv // tp
+        assert nk % tp == 0 and nv % tp == 0, (
+            f"Qwen3.5 GDN heads must be divisible by tp: nk={nk}, nv={nv}, tp={tp}"
+        )
 
         n_q_per_tp = self._num_heads // tp
         n_kv_per_tp = (self._num_kv_heads + tp - 1) // tp
@@ -5089,9 +5102,9 @@ class Qwen35Model(BaseModel):
                         "causal_conv1d_update",
                         "generation",
                         h,
-                        nk,
+                        gdn_nk_per_tp,
                         hk,
-                        nv,
+                        gdn_nv_per_tp,
                         hv,
                         d_conv,
                     ),
@@ -5101,9 +5114,9 @@ class Qwen35Model(BaseModel):
                         "fused_sigmoid_gating_delta_rule_update",
                         "generation",
                         h,
-                        nk,
+                        gdn_nk_per_tp,
                         hk,
-                        nv,
+                        gdn_nv_per_tp,
                         hv,
                         d_conv,
                     ),

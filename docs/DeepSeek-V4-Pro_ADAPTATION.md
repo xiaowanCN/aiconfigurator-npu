@@ -711,13 +711,14 @@ python tools/check_dsv4_data.py --isl 4096 --osl 1024
 | **F4** | `collect_dsv4_attn.py` 的 `DEFAULT_GENERATION_BATCH_LIST` 只到 256，运行时 b 可达 512 | b>256 被边界外推 | 默认列表补 `384 512` | ✅ 已修复 |
 | **F5** | 无落位后校验手段，缺表/缺 key 只能等 `default` 跑到一半才发现 | 排查成本高 | 新增 `tools/check_dsv4_data.py`（§7） | ✅ 已修复 |
 | **F6** | 文档 §D1 称「`distribution` 固定 `power_law_1.2`，与现有 V3 行一致」——错误 | 误导落位 | 本文档 §3.6 / §4.4 已更正 | ✅ 已修复 |
-| **F7** | `0.23.0` 目录当前**一张** dsv4 / mhc 表都没有，采集结果尚未落位 | 全链路仍走 SOL | 按 §4.5 落位 + §4.6 校验 | ⬜ 待执行 |
+| **F7** | `0.23.0` 目录当前**一张** dsv4 / mhc 表都没有，采集结果尚未落位 | 全链路仍走 SOL | 按 §4.5 落位 + §4.6 校验 | ✅ **已落位**（2026-10-13 复核）：4 张 dsv4 表 = 262/402/273/485 行，`mhc_module_perf.txt` = 32 行（`hc_mult` 仅 4）。`check_dsv4_data.py --isl 4096 --osl 1024` 现为 **182 命中 / 2 未命中**（详见 F14） |
 | **F8** | 采集矩阵按「tp/ep ≤ 8」制定，但 `TaskConfig._widen_gpu_sweep_lists`（`sdk/task.py:31-53`）会把 tp/dp/moe_ep 扩展到 16/32/64…≤ `--total-gpus`。64 卡下 tp 到 64、ep 到 64 | `num_heads` 缺 8/4、`moe_ep` 缺 16/32/64 → 全部可行配置都回落 SOL | `collect_dsv4_attn.py` 默认 heads 补 `8 4`（含 16/32/64）；`collect_moe.py` 补 `ep64/ep32/ep16`；文档 §3.2/§3.6 更正 | ✅ 已修复 |
 | **F9** | 未评估规模可行性：bf16 权重 ≈2894 GiB，64 GB 卡只有 `ep=64` 放得下，剩余 7~19 GB | 64 卡 + 严 SLA 可能无解，容易被误判为"数据缺失" | 新增 §8.0 规模分析；建议按 128 卡评估 | ✅ 已澄清（待确认业务规模） |
 | **F10** | 落位只有 PowerShell 片段，且 MoE 与另外 5 张表的处理方式混在一起说明，容易把 `moe_perf.txt` 整体 `cp` 覆盖掉现有 234 行 | 丢失 V3/R1 等模型的 MoE 硅数据 | §4.4/§4.5 改为 bash 为主；转换器新增 `--append`（自动补尾换行）；明确「5 张新表 cp + MoE 追加」 | ✅ 已修复 |
 | **F11** | **网格退化**：每个 `num_heads` 下 `(s, b)` 轴只有 1 个取值时，`_interp_2d_1d` 的二维三次插值抛 `QhullError`，**整张表不可用**（连存在的那个 b 也查不出来），而不是"缺哪个点回落哪个点" | 已采集的表 100% 白采 | §3.3 加了醒目说明；`check_dsv4_data.py` 新增网格退化诊断（逐 heads 报 b/s 取值数、单 s 单元数、够不到目标 s 的单元数） | ✅ 已修复（数据侧待重采） |
 | **F12** | `--append` 不幂等，落位脚本被重复执行 → `moe_perf.txt` 里同一 key 出现多份（`load_moe_data` 只保留先到的那条且仅 debug 日志） | 表膨胀、难以人工核对 | `check_dsv4_data.py` 新增重复行检测（warning）；§4.4 明确"重跑前先 `git checkout`" | ✅ 已修复（数据侧待清理） |
 | **F13** | **Ascend 910B 硬件约束**：稀疏注意力 kernel（`SparseAttnSharedkv`）要求 `q_head_num` 为 4 的倍数，`num_heads=2`（即 tp=64）在 tiling 阶段直接失败（`head num should be multiple of 4, but got 2`）。NPU graph 模式下还会先报 `Memory_Allocation_Failure` 再暴露该错 | 所有 `heads=2` 的采集点 FAILED（context/generation 都中招）；aic-npu 搜索 tp=64 时硅数据缺失 → 回落 SOL | `collect_dsv4_attn.py` 默认 heads 改 `[128,64,32,16,8,4]`，新增 `_validate_num_heads_list` 对 4 非倍数自动 warn+跳过；`check_dsv4_data.py` 默认列表同步；文档 §3.2/§8.0 标注 Ascend 最大 tp=32；采集命令去掉 `2` | ✅ 已修复（代码/文档）；已采的 `heads=2` 行作废需重跑 |
+| **F14** | 复核发现的**残余缺口**（`check_dsv4_data.py --isl 4096 --osl 1024`，2026-10-13）：① `dsv4_csa_generation_module_perf.txt` 存在 1 个 `(heads,b)` 单元只有单个 s 取值（例如 `heads=8, b=512` 只有 `s=256`），查别的 s 会抛 `ValueError: x is not equal to the only value in the list`，共 2 个探针未命中；② 多张表有 `(heads,b)` 单元够不到目标序列长度（context 够不到 4096 的最多 3 个单元，generation 够不到 5120 的最多 24 个单元），只能靠外推；③ MoE 的 V4 形状仍只有 `ep ∈ {16,32,64}`，缺 `{1,2,4,8}` —— 64 卡 SILICON 运行时的 60 次查询失败全部集中在这几个 ep | 少量探针回 SOL；SiO 边界被外推；小宽度 worker / PD 分离worker 不可定价 | 见 **`docs/DATA_COLLECTION_PLAN.md` P1-1 与 P1-6**：补采 `deepseek-v4-pro{-ep2,-ep4}` 的 ep=2/4/8，并按够不到的 s 补序列点 | ⬜ 待执行（需 NPU） |
 
 ### F2 详细说明（实测证据）
 
@@ -940,7 +941,9 @@ results.print_pareto_table()
    优先用 `mhc_module_perf.txt` 覆盖。
 4. **`expert_dtype: fp4` 不适用**：NPU 侧按 bf16 / W8A8 建模，忽略 FP4 专家。
 5. **MoE 并行约束**：vllm-ascend 不支持同时按 TP 和 EP 切 MoE 权重，搜索空间 `moe_tp_list` 固定 `[1]`。
-6. **采集脚本的硬件验证状态（2026-10-12）**：`collect_mhc.py` **尚未**在 NPU 上跑过；
+6. **采集脚本的硬件验证状态（复核至 2026-10-13）**：`collect_mhc.py` **已在 NPU 上跑通**，
+   产物 `mhc_module_perf.txt` = 32 行（`op_name` ∈ {pre, post}，`num_tokens` 1..32768，`hc_mult=4`，`hidden=7168`），
+   但采样点偏疏（`DATA_COLLECTION_PLAN.md` P1-6 建议加密）；
    `collect_dsv4_attn.py` 的 `--module-source framework` 路径已在 NPU 上跑通真实 metadata 前向
    （踩坑见 §4.0），`reference` 路径一直可用。framework 路径强依赖 vllm-ascend 0.23.0 的内部布局，
    **升级 vllm-ascend 后需按 §4.0 的症状表回归**。
