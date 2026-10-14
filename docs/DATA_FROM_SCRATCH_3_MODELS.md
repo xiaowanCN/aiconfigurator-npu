@@ -337,7 +337,7 @@ cp "$STG/mla_r1_gen/generation_mla_perf.txt"   "$STG/out/generation_mla_perf.txt
 ```bash
 cd "$REPO" && \
 python collector/npu/collect_mla_bmm.py \
-  --num-tokens-list 1 2 4 8 16 32 64 128 256 512 1024 2048 \
+  --num-tokens-list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 \
   --num-heads-list 128 64 32 16 8 4 \
   --kv-lora-rank 512 --head-dim 128 \
   --op-types pre post \
