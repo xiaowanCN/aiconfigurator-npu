@@ -444,8 +444,9 @@ python collect_attn.py \
   --num-kv-heads-list 4 2 1 \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
-  --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --output-dir "$STG/attn_hd256" --timing-mode graph --resume
+# 注意：collect_attn.py 不接受 --framework/--version/--device。
+# 它输出 TensorCast 格式 CSV（列中无这三项），由下一步转换器写入 _perf.txt。
 ```
 
 转成干净表（两个 CSV 分别转 context / generation）：

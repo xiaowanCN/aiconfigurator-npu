@@ -177,12 +177,12 @@ def run_benchmark(
     warmup_iters: int,
     bench_iters: int,
     resume: bool,
-    timing_mode: str = "auto",
     dtype: torch.dtype,
     framework: str = "vllm-ascend",
     version: str = "0.23.0",
     device: str = "Ascend 910B",
     bmm_dtype: str = "float16",
+    timing_mode: str = "auto",
 ) -> None:
     npu_device = torch.device("npu")
     output_dir.mkdir(parents=True, exist_ok=True)
