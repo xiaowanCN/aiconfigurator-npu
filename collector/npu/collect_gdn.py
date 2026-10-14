@@ -167,6 +167,44 @@ def _save_checkpoint(output_dir: Path, completed: set[str]) -> None:
 _runtime = {}
 
 
+def _free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def _patch_pcp_group() -> None:
+    """Make get_pcp_group() report world_size=1 for single-card benchmarking.
+
+    vllm-ascend's chunk_gated_delta_rule_fwd does `if get_pcp_group().world_size
+    > 1:`; the prefill-context-parallel group is only created on multi-card
+    setups, so standalone (single card) it is None and the call asserts
+    "prefill context parallel group is not initialized". We are not running
+    context parallel, so world_size=1 is the correct value.
+    """
+    import types
+
+    from vllm_ascend.ops.triton.fla import chunk as chunk_mod
+
+    sentinel = types.SimpleNamespace(world_size=1, rank=0)
+
+    def _dummy() -> types.SimpleNamespace:
+        return sentinel
+
+    # chunk.py binds the getter locally via `from ... import get_pcp_group`.
+    if "get_pcp_group" in chunk_mod.__dict__:
+        chunk_mod.get_pcp_group = _dummy
+    # Also patch the source module in case it is referenced indirectly.
+    try:
+        import vllm.distributed.parallel_state as _ps
+
+        _ps.get_pcp_group = _dummy
+    except Exception:
+        pass
+
+
 def _init_runtime(device: str) -> None:
     """Bootstrap the vllm-ascend custom-op package and select the NPU device."""
     torch.npu.set_device(0)
@@ -176,15 +214,56 @@ def _init_runtime(device: str) -> None:
     from vllm.v1.attention.backends.utils import PAD_SLOT_ID
     from vllm_ascend.ops.triton.fla import chunk as chunk_mod
     from vllm_ascend.ops.triton.fla.chunk import chunk_gated_delta_rule
+    from vllm_ascend.ops.triton.fla.utils import prepare_chunk_indices
     from vllm_ascend.utils import bootstrap_custom_op_env, enable_custom_op
 
     bootstrap_custom_op_env(include_vendor_lib=True)
     enable_custom_op()
 
+    # Populate the triton module-level _NUM_AICORE / _NUM_VECTORCORE counters.
+    # In production vllm-ascend's worker calls this during device init
+    # (worker.py); we bypass the worker, so trigger it ourselves. Without it the
+    # chunk scan dies in l2norm_fwd -> get_vectorcore_num() with
+    # "AssertionError: Device properties not initialized."
+    try:
+        from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
+
+        init_device_properties_triton()
+    except Exception as e:
+        logger.warning(
+            "init_device_properties_triton failed (%s: %s); triton kernels "
+            "(chunk_gated_delta_rule) will abort with "
+            "'Device properties not initialized'.",
+            type(e).__name__,
+            e,
+        )
+
+    # The triton chunk scan reads vLLM parallel-state groups (TP for collectives,
+    # PCP for context-parallel). On a real worker these are created at model load;
+    # standalone we set up a single-card (tp=1, pp=1) world and shim PCP.
+    try:
+        import os
+
+        from vllm.distributed import init_distributed_environment
+        from vllm.distributed.parallel_state import ensure_model_parallel_initialized
+
+        os.environ.setdefault("RANK", "0")
+        os.environ.setdefault("WORLD_SIZE", "1")
+        os.environ.setdefault("MASTER_ADDR", "localhost")
+        os.environ.setdefault("MASTER_PORT", str(_free_port()))
+
+        init_distributed_environment()
+        ensure_model_parallel_initialized(1, 1)
+    except Exception as e:
+        logger.warning("vLLM distributed init failed (%s: %s)", type(e).__name__, e)
+
+    _patch_pcp_group()
+
     _runtime.update(
         pad_slot_id=PAD_SLOT_ID,
         chunk_mod=chunk_mod,
         chunk_gated_delta_rule=chunk_gated_delta_rule,
+        prepare_chunk_indices=prepare_chunk_indices,
         device=torch.device("npu"),
     )
 
@@ -219,13 +298,15 @@ def _build_conv_ctx_func(spec: GdnBenchSpec) -> Callable[[], None]:
     seq_len = spec.seq_len
     num_tokens = spec.num_tokens
 
-    x = torch.randn(num_tokens, conv_dim, dtype=DTYPE, device=dev)
-    x_origin = x.transpose(0, 1)  # [conv_dim, num_tokens]
-    weight = torch.randn(conv_dim, d_conv, dtype=DTYPE, device=dev)
-    weight_t = weight.transpose(0, 1)  # [d_conv, conv_dim]
-    # SD-layout conv state (matches vllm-ascend standalone test).
-    conv_state = torch.zeros(batch, d_conv - 1, conv_dim, dtype=DTYPE, device=dev).transpose(-1, -2)
-    out = torch.empty_like(x_origin)
+    # causal_conv1d requires the channel dim (conv_dim) to be the LAST axis of
+    # x / weight / conv_state; otherwise the aclnn tiling rejects it with
+    # "dim must satisfy dim % 16 == 0" or "weight.shape[1] must equal dim".
+    x = torch.randn(num_tokens, conv_dim, dtype=DTYPE, device=dev)  # [tokens, C]
+    x_origin = x
+    weight = torch.randn(d_conv, conv_dim, dtype=DTYPE, device=dev)  # [K, C]
+    weight_t = weight
+    conv_state = torch.zeros(batch, d_conv - 1, conv_dim, dtype=DTYPE, device=dev)  # [b, K-1, C]
+    out = torch.empty_like(x)  # [tokens, C]
     query_start_loc = torch.arange(0, num_tokens + 1, seq_len, dtype=torch.int32, device=dev)
     cache_indices = torch.arange(1, batch + 1, dtype=torch.int32, device=dev)
     has_initial_state = torch.zeros(batch, dtype=torch.bool, device=dev)
@@ -259,15 +340,69 @@ def _build_scan_ctx_func(spec: GdnBenchSpec) -> Callable[[], None]:
     batch = spec.batch_size
     seq_len = spec.seq_len
 
-    q = torch.randn(1, num_tokens, nk, hk, dtype=DTYPE, device=dev)
-    k = torch.randn(1, num_tokens, nk, hk, dtype=DTYPE, device=dev)
-    v = torch.randn(1, num_tokens, nv, hv, dtype=DTYPE, device=dev)
-    g = torch.randn(1, num_tokens, nv, dtype=torch.float32, device=dev)
-    beta = torch.rand(1, num_tokens, nv, dtype=DTYPE, device=dev)
-    initial_state = torch.zeros(batch, nv, hk, hv, dtype=torch.float32, device=dev)
-    cu_seqlens = torch.arange(0, num_tokens + 1, seq_len, dtype=torch.int64, device=dev)
+    # vllm-ascend 0.23.0 chunk_gated_delta_rule (verified against source):
+    #   - q/k/v must share DTYPE and NOT be float32; beta must be 3-D [B,T,H].
+    #   - With cu_seqlens, B must be 1 and inputs flattened via
+    #     rearrange('b t ... -> 1 (b t) ...'): T becomes total_tokens = batch*seq_len,
+    #     and cu_seqlens (length batch+1) marks each sequence boundary.
+    #   - initial_state first dim must equal n_seq = len(cu_seqlens)-1 = batch,
+    #     and the doc example keeps it in DTYPE (bf16) like the other tensors.
+    #   - g MUST be float32: chunk_local_cumsum defaults output_dtype to torch.float,
+    #     so s(g).dtype must equal it or the kernel fails to compile.
+    #   - The AscendC kernel chunk_gated_delta_rule_fwd_h processes tokens in fixed
+    #     64-token chunks and reads a FULL block per chunk index (verified against
+    #     csrc/.../gdn_fwd_h_kernel and the aclnn test which only uses T=128). It
+    #     does NOT handle a partial last chunk, so each sequence length must be a
+    #     multiple of 64 -- otherwise it reads out of bounds (aicore OOB at s=1).
+    #     We pad every sequence up to the next multiple of 64 (matching how vLLM
+    #     pads prefill to chunk boundaries); cu_seqlens marks the padded lengths.
+    CHUNK = 64
+    eff_seq = max(((seq_len + CHUNK - 1) // CHUNK) * CHUNK, CHUNK)
+    total = batch * eff_seq
+    q = torch.randn(1, total, nk, hk, dtype=DTYPE, device=dev)
+    k = torch.randn(1, total, nk, hk, dtype=DTYPE, device=dev)
+    v = torch.randn(1, total, nv, hv, dtype=DTYPE, device=dev)
+    g = torch.randn(1, total, nv, dtype=torch.float32, device=dev)
+    beta = torch.rand(1, total, nv, dtype=DTYPE, device=dev)
+    initial_state = torch.zeros(batch, nv, hk, hv, dtype=DTYPE, device=dev)
+    cu_seqlens = torch.arange(0, total + 1, eff_seq, dtype=torch.int32, device=dev)
     chunk_gated_delta_rule = _runtime["chunk_gated_delta_rule"]
+    prepare_chunk_indices = _runtime["prepare_chunk_indices"]
     scale = 1.0 / math.sqrt(hk)
+
+    # The AscendC kernel chunk_gated_delta_rule_fwd_h is varlen-only for its
+    # chunk indexing: it reads per-chunk token offsets from `chunk_indices`,
+    # which chunk_gated_delta_rule_fwd normally obtains from the attention
+    # backend's prebuilt_meta. We don't run a real model, so we synthesize the
+    # minimal prebuilt_meta the fwd function touches (every attribute it reads
+    # must exist, even if None): cu_seqlens_host (a tuple, fed straight to the
+    # kernel) and chunk_indices_chunk64 (a tensor, turned into the int64 tuple
+    # the kernel expects). keep_meta=None makes cu_seqlens_kern fall back to
+    # cu_seqlens_host, and the all-positive seq lengths need no compaction.
+    class _PrebuiltMeta:
+        def __init__(self, cu_seqlens_host, chunk_indices_chunk64):
+            self.block_indices_cumsum = None
+            self.cu_seqlens_host = cu_seqlens_host
+            self.chunk_indices_chunk64 = chunk_indices_chunk64
+            self.chunk_indices_chunk64_host = None
+            self.chunk_offsets_chunk64 = None
+            self.update_chunk_offsets_chunk64 = None
+            self.final_chunk_indices_chunk64 = None
+            self.chunk_indices_large_block = None
+            self.keep_meta = None
+            self.cu_seqlens_kern = None
+
+    # NOTE: chunk_gated_delta_rule_fwd_h's aclnn signature declares
+    # `cu_seqlens: int[]?` and `chunk_indices: int[]?` -- it accepts ONLY a host
+    # Python list/tuple of ints (NOT a tensor). The op copies these to device at
+    # call time, which is illegal inside a GLOBAL NPU-graph capture (see the
+    # "operation not permitted when a stream is capturing" error). So under
+    # --timing-mode graph the scan capture will fall back to eager; the tuple
+    # form is what the op actually accepts and is required for the eager run.
+    meta = _PrebuiltMeta(
+        cu_seqlens_host=tuple(cu_seqlens.tolist()),
+        chunk_indices_chunk64=prepare_chunk_indices(cu_seqlens, CHUNK),
+    )
 
     def run() -> None:
         with _no_forward_context():
@@ -281,7 +416,7 @@ def _build_scan_ctx_func(spec: GdnBenchSpec) -> Callable[[], None]:
                 initial_state=initial_state,
                 output_final_state=True,
                 cu_seqlens=cu_seqlens,
-                prebuilt_meta=None,
+                prebuilt_meta=meta,
                 head_first=False,
                 use_qk_l2norm_in_kernel=True,
             )
@@ -298,12 +433,13 @@ def _build_conv_gen_func(spec: GdnBenchSpec) -> Callable[[], None]:
     d_conv = spec.d_conv
     batch = spec.batch_size
 
-    x = torch.randn(batch, conv_dim, dtype=DTYPE, device=dev)
-    x_origin = x.transpose(0, 1)  # [conv_dim, batch]
-    weight = torch.randn(conv_dim, d_conv, dtype=DTYPE, device=dev)
-    weight_t = weight.transpose(0, 1)  # [d_conv, conv_dim]
-    conv_state = torch.zeros(batch, d_conv - 1, conv_dim, dtype=DTYPE, device=dev).transpose(-1, -2)
-    out = torch.empty_like(x_origin)
+    # Same axis convention as the context conv: channel dim (conv_dim) last.
+    x = torch.randn(batch, conv_dim, dtype=DTYPE, device=dev)  # [batch, C]
+    x_origin = x
+    weight = torch.randn(d_conv, conv_dim, dtype=DTYPE, device=dev)  # [K, C]
+    weight_t = weight
+    conv_state = torch.zeros(batch, d_conv - 1, conv_dim, dtype=DTYPE, device=dev)  # [b, K-1, C]
+    out = torch.empty_like(x)
     # Each decode sequence contributes exactly one token.
     query_start_loc = torch.arange(0, batch + 1, dtype=torch.int32, device=dev)
     cache_indices = torch.arange(1, batch + 1, dtype=torch.int32, device=dev)
@@ -510,6 +646,7 @@ def run_benchmark(
 
             builder = _KERNEL_BUILDERS[spec.kernel_source]
             func = None
+            failed = False
             try:
                 func = builder(spec)
                 result = benchmark_npu(func, warmup_iters=warmup_iters, num_runs=bench_iters, timing_mode=timing_mode)
@@ -522,14 +659,38 @@ def run_benchmark(
                     spec.batch_size, spec.seq_len,
                 )
                 errors += 1
-                continue
+                failed = True
             finally:
                 del func
                 try:
                     torch.npu.synchronize()
                 except RuntimeError:
                     pass
-                torch.npu.empty_cache()
+                try:
+                    torch.npu.empty_cache()
+                except RuntimeError:
+                    # Device may be in a bad state after a kernel fault; do not
+                    # let cleanup abort the whole run (resume would lose progress).
+                    pass
+
+            if failed:
+                # A runtime aicore fault poisons the NPU device context: every
+                # subsequent synchronize fails with "ACL stream synchronize
+                # failed", cascading into hundreds of false failures. Detect that
+                # and halt so the *root* cause (the FAILED spec above) is visible
+                # instead of being buried under cascade noise. Re-run with
+                # --resume after fixing the root cause; completed specs are kept.
+                try:
+                    torch.npu.synchronize()
+                except RuntimeError:
+                    logger.error(
+                        "NPU device is in a fatal error state after the failure "
+                        "above; halting to avoid cascading false failures. Fix "
+                        "the root cause (the FAILED spec shown above) and re-run "
+                        "with --resume."
+                    )
+                    break
+                continue
 
             completed.add(key)
             if len(completed) % 10 == 0:
