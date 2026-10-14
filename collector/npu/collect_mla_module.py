@@ -276,6 +276,7 @@ def run_dsa_module(
     warmup_iters: int = 10,
     bench_iters: int = 50,
     force_mla: bool = False,
+    timing_mode: str = "auto",
 ) -> float | None:
     """Benchmark one (seq_len, batch_size) point for DSA module on NPU."""
     is_context = mode == "context"
@@ -314,6 +315,7 @@ def run_dsa_module(
             forward_fn,
             warmup_iters=warmup_iters,
             num_runs=bench_iters,
+            timing_mode=timing_mode,
         )
         latency_ms = result.avg_us / 1000.0
     except Exception as e:
@@ -381,6 +383,12 @@ def main():
              "DSA configs while the SparseFlashAttention kernel path is "
              "unstable on synthetic inputs.",
     )
+    parser.add_argument(
+        "--timing-mode", default="auto", choices=["auto", "graph", "eager"],
+        help="Latency source: auto = min(graph, eager); "
+             "graph = prefer NPU graph, fall back to eager on capture failure; "
+             "eager = eager-only (no graph capture).",
+    )
     args = parser.parse_args()
 
     print("Initializing vLLM + Ascend context...")
@@ -389,7 +397,7 @@ def main():
     output_dir = Path(args.output_dir)
 
     if args.quick:
-        run_dsa_module(
+                run_dsa_module(
             seq_len=args.seq_len or 2048,
             batch_size=args.batch_size or 4,
             model_path=args.model,
@@ -399,7 +407,8 @@ def main():
             warmup_iters=args.warmup_iters,
             bench_iters=args.bench_iters,
             force_mla=args.force_mla,
-        )
+            timing_mode=args.timing_mode,
+            )
         return
 
     if args.mode == "context":
@@ -423,6 +432,7 @@ def main():
                 warmup_iters=args.warmup_iters,
                 bench_iters=args.bench_iters,
                 force_mla=args.force_mla,
+                timing_mode=args.timing_mode,
             )
         except Exception as e:
             print(f"  FAILED b={b}, s={s}: {e}")

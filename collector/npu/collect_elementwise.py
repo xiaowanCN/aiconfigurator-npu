@@ -163,6 +163,12 @@ def main():
     parser.add_argument("--warmup-iters", type=int, default=10)
     parser.add_argument("--bench-iters", type=int, default=100)
     parser.add_argument("--output-dir", type=str, default="./elementwise_data")
+    parser.add_argument(
+        "--timing-mode", default="auto", choices=["auto", "graph", "eager"],
+        help="Latency source: auto = min(graph, eager); "
+             "graph = prefer NPU graph, fall back to eager on capture failure; "
+             "eager = eager-only (no graph capture).",
+    )
     args = parser.parse_args()
 
     import torch_npu  # noqa: F401
@@ -232,6 +238,7 @@ def main():
                     warmup_iters=args.warmup_iters,
                     num_runs=args.bench_iters,
                     repeat_n=6,
+                    timing_mode=args.timing_mode,
                 )
                 writer.writerow({
                     "Op Type": op_type,

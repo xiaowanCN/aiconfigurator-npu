@@ -5,7 +5,13 @@ Aligned with AIConfigurator's benchmark_with_power() timing rules:
 - Single Event pair wrapping multiple runs (no per-iteration synchronize)
 - latency = total_elapsed / num_runs / repeat_n
 - Fallback to eager execution if graph capture fails
-- Dual-mode: runs both graph and eager, takes the minimum
+
+Timing modes (selectable via --timing-mode):
+- auto  (default): runs both graph and eager, takes the minimum latency.
+- graph           : prefers NPU graph; uses graph when capture succeeds,
+                    falls back to eager only if capture fails. Mirrors the
+                    upstream AIConfigurator use_cuda_graph=True convention.
+- eager           : never captures; times eager execution only.
 """
 
 import logging
@@ -90,21 +96,24 @@ def benchmark_npu(
     warmup_iters: int = 20,
     num_runs: int = 100,
     repeat_n: int = 1,
-    use_graph: bool = True,
+    timing_mode: str = "auto",
 ) -> BenchResult:
-    """Warmup + time kernel_func on NPU. Tries NPU graph, falls back to eager.
+    """Warmup + time kernel_func on NPU. Timing mode selects graph/eager policy.
 
-    Graph mode is the DEFAULT and is what the NVIDIA collector uses for the
-    same DSv4 module (``collector/vllm/collect_dsv4_attn.py`` calls
-    ``benchmark_with_power(..., use_cuda_graph=True)``). It only works if the
-    timed closure is purely device-side: vLLM metadata and forward context must
-    be built OUTSIDE ``kernel_func``. Anything that copies host->device inside
-    the closure (e.g. building a shape tensor per call) makes capture fail with
-    ``aclrtMemcpy ... error 107030``.
+    ``timing_mode`` controls how the NPU graph and eager paths are combined:
+      - "auto"  (default): capture graph, time both graph and eager, take the
+                 minimum latency. Best achievable device-side latency.
+      - "graph"           : capture graph; use the graph number when capture
+                 succeeds, and fall back to eager only if capture fails.
+                 Mirrors the upstream AIConfigurator
+                 ``benchmark_with_power(..., use_cuda_graph=True)`` convention
+                 (graph is preferred, not compared-and-min'd).
+      - "eager"           : never capture; time eager execution only.
 
-    ``use_graph=False`` skips capture entirely — an escape hatch for forwards
-    that remain uncapturable after hoisting, so a doomed capture is not retried
-    per shape (which costs time and floods the log).
+    Graph capture only works if the timed closure is purely device-side: vLLM
+    metadata and forward context must be built OUTSIDE ``kernel_func``. Anything
+    that copies host->device inside the closure (e.g. building a shape tensor
+    per call) makes capture fail with ``aclrtMemcpy ... error 107030``.
     """
     global _GRAPH_CAPTURE_ERROR_LOGGED
 
@@ -112,7 +121,7 @@ def benchmark_npu(
         kernel_func()
     torch.npu.synchronize()
 
-    if not use_graph:
+    if timing_mode == "eager":
         eager_us = _timed_run(kernel_func, num_runs, repeat_n)
         return BenchResult(
             avg_us=eager_us,
@@ -188,7 +197,13 @@ def benchmark_npu(
         torch.npu.empty_cache()
 
     eager_us = _timed_run(kernel_func, num_runs, repeat_n)
-    used_graph = bool(graph_us) and graph_us <= eager_us
+
+    if timing_mode == "graph":
+        # Prefer graph; fall back to eager only when capture failed.
+        used_graph = bool(graph_us)
+    else:  # "auto": take the faster of the two measurements.
+        used_graph = bool(graph_us) and graph_us <= eager_us
+
     return BenchResult(
         avg_us=graph_us if used_graph else eager_us,
         num_runs=num_runs,

@@ -298,6 +298,7 @@ def run_benchmark(
     warmup_iters: int,
     bench_iters: int,
     resume: bool,
+    timing_mode: str = "auto",
     output_format: str = OUTPUT_FORMAT_TENSORCAST,
     architecture: str = ARCH_GLM5,
     framework: str = "vllm-ascend",
@@ -380,6 +381,7 @@ def run_benchmark(
                 attn_func,
                 warmup_iters=warmup_iters,
                 num_runs=bench_iters,
+                timing_mode=timing_mode,
             )
             if output_format == OUTPUT_FORMAT_TENSORCAST:
                 row = _make_csv_row(spec, result, architecture)
@@ -495,6 +497,12 @@ def parse_args() -> argparse.Namespace:
         "--resume", action="store_true",
     )
     parser.add_argument(
+        "--timing-mode", default="auto", choices=["auto", "graph", "eager"],
+        help="Latency source: auto = min(graph, eager); "
+             "graph = prefer NPU graph, fall back to eager on capture failure; "
+             "eager = eager-only (no graph capture).",
+    )
+    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
@@ -594,6 +602,7 @@ def main() -> None:
         warmup_iters=args.warmup_iters,
         bench_iters=args.bench_iters,
         resume=args.resume,
+        timing_mode=args.timing_mode,
         output_format=args.output_format,
         architecture=args.architecture,
         framework=args.framework,

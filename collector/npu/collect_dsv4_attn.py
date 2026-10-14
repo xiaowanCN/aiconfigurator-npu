@@ -157,7 +157,7 @@ def run_benchmark(
     mla_dtype: str,
     kv_cache_dtype: str,
     gemm_type: str,
-    use_graph: bool = True,
+    timing_mode: str = "auto",
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     completed: set[str] = _load_checkpoint(output_dir) if resume else set()
@@ -205,7 +205,7 @@ def run_benchmark(
                     forward_fn,
                     warmup_iters=warmup_iters,
                     num_runs=bench_iters,
-                    use_graph=use_graph,
+                    timing_mode=timing_mode,
                 )
                 writer.writerow(
                     _make_row(spec, result, framework, version, device, mla_dtype, kv_cache_dtype, gemm_type)
@@ -300,6 +300,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument("--resume", action="store_true")
+    p.add_argument(
+        "--timing-mode", default="auto", choices=["auto", "graph", "eager"],
+        help="Latency source: auto = min(graph, eager); "
+             "graph = prefer NPU graph, fall back to eager on capture failure; "
+             "eager = eager-only (no graph capture).",
+    )
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     p.add_argument("--framework", default="vllm-ascend")
     p.add_argument("--version", default="0.23.0")
@@ -398,7 +404,7 @@ def main() -> None:
         mla_dtype=args.mla_dtype,
         kv_cache_dtype=args.kv_cache_dtype,
         gemm_type=args.gemm_type,
-        use_graph=not args.no_graph,
+        timing_mode="eager" if args.no_graph else args.timing_mode,
     )
 
 

@@ -177,6 +177,7 @@ def run_benchmark(
     warmup_iters: int,
     bench_iters: int,
     resume: bool,
+    timing_mode: str = "auto",
     dtype: torch.dtype,
     framework: str = "vllm-ascend",
     version: str = "0.23.0",
@@ -220,6 +221,7 @@ def run_benchmark(
                     bmm_func,
                     warmup_iters=warmup_iters,
                     num_runs=bench_iters,
+                    timing_mode=timing_mode,
                 )
                 writer.writerow(
                     _make_row(spec, result, framework, version, device, bmm_dtype)
@@ -295,6 +297,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bench-iters", type=int, default=100)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
+        "--timing-mode", default="auto", choices=["auto", "graph", "eager"],
+        help="Latency source: auto = min(graph, eager); "
+             "graph = prefer NPU graph, fall back to eager on capture failure; "
+             "eager = eager-only (no graph capture).",
+    )
+    parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     parser.add_argument("--framework", default="vllm-ascend")
@@ -332,6 +340,7 @@ def main() -> None:
         warmup_iters=args.warmup_iters,
         bench_iters=args.bench_iters,
         resume=args.resume,
+        timing_mode=args.timing_mode,
         dtype=DTYPE_MAP[args.bmm_dtype],
         framework=args.framework,
         version=args.version,

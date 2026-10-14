@@ -69,11 +69,13 @@
 落位前可随意重采、重转，互不污染：
 
 ```bash
+# 公共环境变量（vendor 自定义算子包必须在加载路径上）
+
 REPO=$(pwd)
 DATA_DIR=$REPO/src/aiconfigurator_npu/systems/data/ascend_910b/vllm-ascend/0.23.0
 STG=$REPO/staging
 
-# 公共环境变量（vendor 自定义算子包必须在加载路径上）
+
 export ASCEND_CUSTOM_OPP_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer
 export LD_LIBRARY_PATH=/vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_api/lib:$LD_LIBRARY_PATH
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
@@ -229,7 +231,7 @@ python collector/npu/collect_gemm.py \
   --m-list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 \
   --n-list 2048 3072 4096 5120 7168 8192 12288 16384 17408 \
   --k-list 2048 3072 4096 5120 7168 8192 12288 16384 17408 \
-  --output-dir "$STG/gemm" --resume
+  --output-dir "$STG/gemm" --timing-mode graph --resume
 ```
 
 转成干净表（只含本次维度），再 merge：
@@ -268,7 +270,7 @@ python collector/npu/collect_moe.py \
   --models deepseek-v3 deepseek-v3-ep2 deepseek-v3-ep4 deepseek-v3-ep16 \
           deepseek-v3-ep32 deepseek-v3-ep64 \
   --token-list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 \
-  --quant-types bf16 --output-dir "$STG/moe_r1" --resume
+  --quant-types bf16 --output-dir "$STG/moe_r1" --timing-mode graph --resume
 ```
 
 **V4**：`deepseek-v4-pro` 及 `deepseek-v4-pro-ep{2,4,16,32,64}`（`ep=64` 是唯一可行部署档，必采）：
@@ -279,7 +281,7 @@ python collector/npu/collect_moe.py \
   --models deepseek-v4-pro deepseek-v4-pro-ep2 deepseek-v4-pro-ep4 \
           deepseek-v4-pro-ep16 deepseek-v4-pro-ep32 deepseek-v4-pro-ep64 \
   --token-list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 \
-  --quant-types bf16 --output-dir "$STG/moe_v4" --resume
+  --quant-types bf16 --output-dir "$STG/moe_v4" --timing-mode graph --resume
 ```
 
 转成干净表（`--moe-distribution both` 同时写 `power_law_1.01` 与 `power_law_1.2`，通吃所有族）：
@@ -315,7 +317,7 @@ python collector/npu/collect_mla.py --output-format mla \
   --kv-lora-rank 512 --qk-nope-head-dim 128 --qk-rope-head-dim 64 --v-head-dim 128 \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --mla-dtype float16 --kv-cache-dtype float16 \
-  --output-dir "$STG/mla_r1_ctx" --resume
+  --output-dir "$STG/mla_r1_ctx" --timing-mode graph --resume
 
 python collector/npu/collect_mla.py --output-format mla \
   --architecture DeepseekV3ForCausalLM --model deepseek-ai/DeepSeek-R1 \
@@ -326,7 +328,7 @@ python collector/npu/collect_mla.py --output-format mla \
   --kv-lora-rank 512 --qk-nope-head-dim 128 --qk-rope-head-dim 64 --v-head-dim 128 \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
   --mla-dtype float16 --kv-cache-dtype float16 \
-  --output-dir "$STG/mla_r1_gen" --resume
+  --output-dir "$STG/mla_r1_gen" --timing-mode graph --resume
 # → $STG/mla_r1_ctx/context_mla_perf.txt、 $STG/mla_r1_gen/generation_mla_perf.txt（直接出 txt）
 cp "$STG/mla_r1_ctx/context_mla_perf.txt"      "$STG/out/context_mla_perf.txt"
 cp "$STG/mla_r1_gen/generation_mla_perf.txt"   "$STG/out/generation_mla_perf.txt"
@@ -340,7 +342,7 @@ python collector/npu/collect_mla_bmm.py \
   --kv-lora-rank 512 --head-dim 128 \
   --op-types pre post \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --bmm-dtype float16 --output-dir "$STG/mla_bmm_r1" --resume
+  --bmm-dtype float16 --output-dir "$STG/mla_bmm_r1" --timing-mode graph --resume
 # → $STG/mla_bmm_r1/mla_bmm_perf.txt
 cp "$STG/mla_bmm_r1/mla_bmm_perf.txt" "$STG/out/mla_bmm_perf.txt"
 ```
@@ -358,7 +360,7 @@ python collector/npu/collect_dsv4_attn.py \
   --num-heads-list 128 64 32 16 8 4 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/dsv4_csa_ctx" --resume
+  --output-dir "$STG/dsv4_csa_ctx" --timing-mode graph --resume
 
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds csa \
@@ -367,7 +369,7 @@ python collector/npu/collect_dsv4_attn.py \
   --num-heads-list 128 64 32 16 8 4 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/dsv4_csa_gen" --resume
+  --output-dir "$STG/dsv4_csa_gen" --timing-mode graph --resume
 
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_context --attn-kinds hca \
@@ -376,7 +378,7 @@ python collector/npu/collect_dsv4_attn.py \
   --num-heads-list 128 64 32 16 8 4 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/dsv4_hca_ctx" --resume
+  --output-dir "$STG/dsv4_hca_ctx" --timing-mode graph --resume
 
 python collector/npu/collect_dsv4_attn.py \
   --op-types dsv4_generation --attn-kinds hca \
@@ -385,7 +387,7 @@ python collector/npu/collect_dsv4_attn.py \
   --num-heads-list 128 64 32 16 8 4 \
   --module-source framework \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/dsv4_hca_gen" --resume
+  --output-dir "$STG/dsv4_hca_gen" --timing-mode graph --resume
 ```
 
 转成干净表并落到 staging/out（用转换器"复制"这四个 txt，不污染 0.23.0）：
@@ -422,7 +424,7 @@ python collector/npu/collect_mhc.py \
   --num-tokens-list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 \
   --hc-mult 4 --hidden-size 7168 --sinkhorn-iters 20 \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/mhc" --resume
+  --output-dir "$STG/mhc" --timing-mode graph --resume
 # → $STG/mhc/mhc_module_perf.txt
 cp "$STG/mhc/mhc_module_perf.txt" "$STG/out/mhc_module_perf.txt"
 ```
@@ -443,7 +445,7 @@ python collect_attn.py \
   --batch-list 1 2 4 8 16 32 \
   --seq-len-list 128 256 512 1024 2048 4096 8192 16384 \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/attn_hd256" --resume
+  --output-dir "$STG/attn_hd256" --timing-mode graph --resume
 ```
 
 转成干净表（两个 CSV 分别转 context / generation）：
@@ -457,7 +459,7 @@ python tools/convert_to_aiconfigurator.py \
 ```
 
 > ⚠️ 先冒烟确认 910B FlashInfer attention 支持 `head_dim=256`（部分 FIA 实现上限 128/192）。
-> 冒烟：`collect_attn.py --head-size 256 --num-heads-list 24 --num-kv-heads-list 4 --seq-len-list 4096`。
+> 冒烟：`collect_attn.py --head-size 256 --num-heads-list 24 --num-kv-heads-list 4 --seq-len-list 4096 --timing-mode graph`。
 
 ### 4.8 `gdn_perf.txt`（Qwen3.8-27B，仅 Qwen 用 → merge；**新采集器**）
 
@@ -476,12 +478,12 @@ python collect_gdn.py \
   --tp-sizes 1 2 4 8 \
   --max-context-tokens 1000000 \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \
-  --output-dir "$STG/gdn" --resume
+  --output-dir "$STG/gdn" --timing-mode graph --resume
 # → $STG/gdn/gdn_perf.txt（直接出 txt）
 cp "$STG/gdn/gdn_perf.txt" "$STG/out/gdn_perf.txt"
 ```
 
-> 冒烟（2 个点）：`collect_gdn.py --tp-sizes 1 --warmup-iters 1 --bench-iters 3 --output-dir $STG/gdn_smoke`。
+> 冒烟（2 个点）：`collect_gdn.py --tp-sizes 1 --warmup-iters 1 --bench-iters 3 --timing-mode graph --output-dir $STG/gdn_smoke`。
 > 自检：延迟应随 `seq_len` / `batch_size` / `(nk,nv)` 单调变化；若不同头数的值几乎相同，说明测到的是
 > 主机开销而非 kernel 时间（见 `Qwen3.8-27B_ADAPTATION.md` §4.0）。
 

@@ -18,6 +18,13 @@ Usage:
 
     # Resume from checkpoint
     python collect_gemm.py --output-dir ./gemm_data --resume
+
+    # Latency source: prefer NPU graph (fall back to eager on capture failure),
+    # mirroring the upstream AIConfigurator use_cuda_graph=True convention.
+    python collect_gemm.py --quant-types bf16 --timing-mode graph --output-dir ./gemm_data
+
+    # Eager-only timing (no graph capture), for comparison / debugging.
+    python collect_gemm.py --quant-types bf16 --timing-mode eager --output-dir ./gemm_data
 """
 
 import argparse
@@ -179,6 +186,7 @@ def run_benchmark(
     warmup_iters: int,
     bench_iters: int,
     resume: bool,
+    timing_mode: str = "auto",
 ) -> None:
     """Run GEMM benchmark for all specs, writing results to CSV."""
     device = torch.device("npu")
@@ -226,6 +234,7 @@ def run_benchmark(
                 gemm_func,
                 warmup_iters=warmup_iters,
                 num_runs=bench_iters,
+                timing_mode=timing_mode,
             )
             row = _make_csv_row(spec, result, op_count)
             _, writer = csv_files[spec.quant_type]
@@ -311,6 +320,12 @@ def parse_args() -> argparse.Namespace:
         help="Resume from checkpoint (skip already-completed shapes)",
     )
     parser.add_argument(
+        "--timing-mode", default="auto", choices=["auto", "graph", "eager"],
+        help="Latency source: auto = min(graph, eager); "
+             "graph = prefer NPU graph, fall back to eager on capture failure; "
+             "eager = eager-only (no graph capture).",
+    )
+    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
@@ -344,6 +359,7 @@ def main() -> None:
         warmup_iters=args.warmup_iters,
         bench_iters=args.num_runs,
         resume=args.resume,
+        timing_mode=args.timing_mode,
     )
 
 
