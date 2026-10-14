@@ -311,8 +311,8 @@ cd "$REPO" && \
 python collector/npu/collect_mla.py --output-format mla \
   --architecture DeepseekV3ForCausalLM --model deepseek-ai/DeepSeek-R1 \
   --op-types context \
-  --batch-list 1 2 4 8 16 32 \
-  --seq-len-list 128 256 512 1024 2048 4096 8096 \
+  --batch-list 1 2 4 8 16 32 64 128 256 \
+  --seq-len-list 128 256 512 1024 2048 4096 8192 16384 32768 \
   --num-heads-list 128 64 32 16 8 4 \
   --kv-lora-rank 512 --qk-nope-head-dim 128 --qk-rope-head-dim 64 --v-head-dim 128 \
   --framework vllm-ascend --version 0.23.0 --device "Ascend 910B" \

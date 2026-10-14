@@ -23,6 +23,7 @@ This version benchmarks a bf16 baseline — quant_config=None. The W8A8
 variant is a follow-up once the bf16 path is green end-to-end.
 """
 
+import json
 import math
 import os
 import tempfile
@@ -165,7 +166,25 @@ def _resolve_model_path(model_name: str) -> str:
         config_file = config_dir / config_name
         if config_file.exists():
             tmp_dir = tempfile.mkdtemp(prefix=f"aic_model_{model_name.replace('/', '_')}_")
-            os.symlink(config_file, os.path.join(tmp_dir, "config.json"))
+
+            # Materialise config.json WITHOUT the remote-code hooks. The temp
+            # dir only ever holds config.json (plus an optional quant file) --
+            # never the model repo's configuration_*.py / modeling_*.py. Since
+            # ModelConfig is built with trust_remote_code=True, a lingering
+            # "auto_map" makes AutoConfig.from_pretrained() look for e.g.
+            # configuration_deepseek.py right next to config.json and abort
+            # offline with "The model ... does not appear to have a file named
+            # configuration_deepseek.py". Dropping auto_map lets the config
+            # resolve through vLLM's / transformers' native registry instead --
+            # which is exactly what DeepSeek-V3 (same model_type, no auto_map)
+            # already does.
+            with open(config_file, encoding="utf-8") as f:
+                config_dict = json.load(f)
+            config_dict.pop("auto_map", None)
+            with open(
+                os.path.join(tmp_dir, "config.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump(config_dict, f, indent=2, ensure_ascii=False)
 
             quant_file = config_dir / f"{model_name.replace('/', '--')}_hf_quant_config.json"
             if quant_file.exists():
