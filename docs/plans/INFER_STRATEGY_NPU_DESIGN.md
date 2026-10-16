@@ -394,12 +394,16 @@ COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir -e .
 
 # msmodeling 离线 whl（由源码构建，随仓库提交；*.whl 通配，换版本不用改这里）
+# 构建期必须加 TORCH_DEVICE_BACKEND_AUTOLOAD=0：基础镜像的 torch 会自动加载 torch_npu
+# 后端，而 torch_npu._C 依赖宿主机昇腾驱动库 libascend_hal.so，docker build 环境没有它，
+# 直接 import torch 会报 "Failed to load the backend extension: torch_npu"。
+# 该变量仅作用于这条 RUN，不进 ENV，运行时在 NPU 主机上仍正常自动加载 torch_npu。
 COPY msmodeling_offline_installer/*.whl ./msmodeling_offline_installer/
-RUN python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
+RUN TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
  && cat /tmp/ms-constraints.txt \
  && pip install --no-cache-dir -c /tmp/ms-constraints.txt ./msmodeling_offline_installer/*.whl \
  && rm -f /tmp/ms-constraints.txt \
- && python -c "import torch, transformers, cli.inference.throughput_optimizer, tensor_cast.device, serving_cast.parallel_runner; print('torch', torch.__version__); print('transformers', transformers.__version__)" \
+ && TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import torch, transformers, cli.inference.throughput_optimizer, tensor_cast.device, serving_cast.parallel_runner; import importlib.util as u; print('torch', torch.__version__); print('transformers', transformers.__version__); print('torch_npu', 'present' if u.find_spec('torch_npu') else 'MISSING')" \
  || (echo "msmodeling install/import check failed" && exit 1)
 
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/workspace/collector \

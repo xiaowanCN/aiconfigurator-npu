@@ -28,13 +28,20 @@ RUN pip install --no-cache-dir -e .
 # 因此先生成一条约束把 torch / torchvision 钉在镜像自带版本上：
 #   - 镜像 torch 已满足 >=2.8,<=2.10 → 正常安装，其余依赖照常拉取；
 #   - 镜像 torch 不在该区间 → 解析直接失败并给出明确报错，避免静默装成无 NPU 的 torch。
+#
+# 构建期注意事项：基础镜像的 torch 会按 TORCH_DEVICE_BACKEND_AUTOLOAD 自动加载
+# torch_npu 后端扩展，而 torch_npu._C 依赖昇腾驱动库 libascend_hal.so —— 它只存在于
+# 真实 NPU 主机（运行时由宿主机挂载），docker build 环境里没有，直接 import torch 会报：
+#   RuntimeError: Failed to load the backend extension: torch_npu
+# 因此这两处 python 检查都要加 TORCH_DEVICE_BACKEND_AUTOLOAD=0（仅作用于该条 RUN 命令，
+# 不写进 ENV，镜像在 NPU 主机上运行时仍会正常自动加载 torch_npu）。
 # *.whl 通配，换版本不用改这里；目录里只保留一个 whl
 COPY msmodeling_offline_installer/*.whl ./msmodeling_offline_installer/
-RUN python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
+RUN TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
  && cat /tmp/ms-constraints.txt \
  && pip install --no-cache-dir -c /tmp/ms-constraints.txt ./msmodeling_offline_installer/*.whl \
  && rm -f /tmp/ms-constraints.txt \
- && python -c "import torch, transformers, cli.inference.throughput_optimizer, tensor_cast.device, serving_cast.parallel_runner; print('torch', torch.__version__); print('transformers', transformers.__version__)" \
+ && TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import torch, transformers, cli.inference.throughput_optimizer, tensor_cast.device, serving_cast.parallel_runner; import importlib.util as u; print('torch', torch.__version__); print('transformers', transformers.__version__); print('torch_npu', 'present' if u.find_spec('torch_npu') else 'MISSING')" \
  || (echo "msmodeling install/import check failed" && exit 1)
 
 # 离线：aic-npu 与 msmodeling 的模型配置都在 /workspace/model_configs 下随镜像提供
