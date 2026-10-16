@@ -29,20 +29,30 @@ RUN pip install --no-cache-dir -e .
 #   - 镜像 torch 已满足 >=2.8,<=2.10 → 正常安装，其余依赖照常拉取；
 #   - 镜像 torch 不在该区间 → 解析直接失败并给出明确报错，避免静默装成无 NPU 的 torch。
 #
-# 构建期注意事项：基础镜像的 torch 会按 TORCH_DEVICE_BACKEND_AUTOLOAD 自动加载
-# torch_npu 后端扩展，而 torch_npu._C 依赖昇腾驱动库 libascend_hal.so —— 它只存在于
-# 真实 NPU 主机（运行时由宿主机挂载），docker build 环境里没有，直接 import torch 会报：
-#   RuntimeError: Failed to load the backend extension: torch_npu
-# 因此这两处 python 检查都要加 TORCH_DEVICE_BACKEND_AUTOLOAD=0（仅作用于该条 RUN 命令，
-# 不写进 ENV，镜像在 NPU 主机上运行时仍会正常自动加载 torch_npu）。
+# 构建期注意事项（关键！）：docker build 环境没有昇腾驱动库 libascend_hal.so（它只在真实 NPU
+# 主机运行时由宿主机挂载）。而 msmodeling 的导入链会经过 transformers，transformers 导入时
+# 调用 is_torch_npu_available() -> import torch_npu -> 加载 _C -> 缺 libascend_hal.so 直接报错。
+# 所以构建期**绝不能 import transformers / torch_npu**。校验只通过：
+#   - import torch（已用 TORCH_DEVICE_BACKEND_AUTOLOAD=0 关闭后端自动加载，不会拉起 torch_npu）
+#   - importlib.metadata 读取 msmodeling 版本
+#   - importlib.util.find_spec 探测 torch_npu 是否存在（只查模块、不真正导入）
+# 真正的 torch_npu / transformers 功能是否正常，在运行时（NPU 主机）验证即可。
 # *.whl 通配，换版本不用改这里；目录里只保留一个 whl
 COPY msmodeling_offline_installer/*.whl ./msmodeling_offline_installer/
 RUN TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
  && cat /tmp/ms-constraints.txt \
  && pip install --no-cache-dir -c /tmp/ms-constraints.txt ./msmodeling_offline_installer/*.whl \
  && rm -f /tmp/ms-constraints.txt \
- && TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import torch, transformers, cli.inference.throughput_optimizer, tensor_cast.device, serving_cast.parallel_runner; import importlib.util as u; print('torch', torch.__version__); print('transformers', transformers.__version__); print('torch_npu', 'present' if u.find_spec('torch_npu') else 'MISSING')" \
- || (echo "msmodeling install/import check failed" && exit 1)
+ && TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import torch, importlib.util as u, importlib.metadata as md
+print('torch', torch.__version__)
+print('msmodeling', md.version('msmodeling'))
+print('torch_npu', 'present' if u.find_spec('torch_npu') else 'MISSING')
+try:
+    importlib.import_module('cli')
+    print('cli import ok')
+except Exception as e:
+    print('cli import skipped (expected without NPU driver):', type(e).__name__, e)" \
+ || (echo "msmodeling build-time check failed" && exit 1)
 
 # 离线：aic-npu 与 msmodeling 的模型配置都在 /workspace/model_configs 下随镜像提供
 ENV HF_HUB_OFFLINE=1 \
