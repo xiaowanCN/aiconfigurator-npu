@@ -31,6 +31,7 @@ dev = [
 
 [project.scripts]
 aic-npu = "aiconfigurator_npu.cli.main:main"
+infer-strategy-npu = "infer_strategy_npu.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
