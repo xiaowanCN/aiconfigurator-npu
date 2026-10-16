@@ -440,11 +440,14 @@ CI 会在构建前校验 whl 存在且包含 `cli/registry/`（缺失直接 fail
 
 ### CI
 
-新增 `.github/workflows/build-image-unified.yml`（与既有 `build-image.yml` 同构，手动 `workflow_dispatch`）：
+新增 `.github/workflows/build-image-unified.yml`（与既有 `build-image-dsv4.yml` 同构，手动 `workflow_dispatch`）：
 
-- 入参：仅 `image_tag`
-- 流程：checkout → **校验 whl 存在**（缺失直接 fail）→ QEMU/Buildx → 登录 quay.io
-  → `docker/build-push-action` 以 `docker/Dockerfile.unified` 构建并推送
+- 入参：`image_tag`、`ref`（Git ref to build，默认 `feature/infer-strategy-npu-unified-cli`）
+- **关键机制**：workflow 文件只需注册在 main（Actions UI 里可见），但通过 `ref` 输入
+  `actions/checkout` 任意分支/tag/sha —— 即使 main 还没有合并 feature 分支，
+  也能用该分支的完整构建上下文（`src/`、`model_configs/`、msmodeling whl）构建镜像
+- 流程：checkout 指定 ref → **校验 whl 存在且含 `cli/registry/`**（缺失直接 fail）→ QEMU/Buildx
+  → 登录 quay.io → `docker/build-push-action` 以 `docker/Dockerfile.unified` 构建并推送
   `quay.io/18896723947/aiconfigurator-npu-unified`
 - 平台 `linux/arm64`，与既有镜像保持一致
 

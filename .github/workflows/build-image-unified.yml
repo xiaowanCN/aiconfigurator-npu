@@ -7,6 +7,10 @@ on:
         description: 'Image tag (e.g., v1, latest)'
         required: true
         default: 'latest'
+      ref:
+        description: 'Git ref to build (branch / tag / sha)'
+        required: true
+        default: 'feature/infer-strategy-npu-unified-cli'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}
@@ -25,9 +29,13 @@ jobs:
       contents: read
 
     steps:
+      # 注意：本 workflow 文件可以只注册在 main，而通过上面的 ref 输入
+      # checkout 任意分支（如 feature/infer-strategy-npu-unified-cli），
+      # 用该分支的完整构建上下文（src/、model_configs/、msmodeling whl）构建镜像。
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
           fetch-depth: 0
 
