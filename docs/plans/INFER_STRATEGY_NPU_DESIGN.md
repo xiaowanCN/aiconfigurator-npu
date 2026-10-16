@@ -394,27 +394,19 @@ COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir -e .
 
 # msmodeling 离线 whl（由源码构建，随仓库提交；*.whl 通配，换版本不用改这里）
-# 构建期必须加 TORCH_DEVICE_BACKEND_AUTOLOAD=0，且**绝不能 import transformers / torch_npu**：
-# msmodeling 导入链经过 transformers，transformers 导入时调 is_torch_npu_available()
-# -> import torch_npu -> 加载 _C -> 需要宿主机昇腾驱动库 libascend_hal.so，docker build
-# 环境没有它，直接 ImportError。因此构建期只校验：import torch（autoload 已关）、
-# msmodeling 元数据版本、torch_npu 是否存在（find_spec，不真正导入）。
-# 该变量仅作用于这条 RUN，不进 ENV，运行时在 NPU 主机上仍正常自动加载 torch_npu。
+# 构建期**不 import transformers / torch_npu**（msmodeling 导入链经过 transformers，
+# 而 transformers 导入时调 is_torch_npu_available() -> import torch_npu -> 加载 _C 需要
+# 宿主机昇腾驱动库 libascend_hal.so，docker build 环境没有它，会直接 ImportError）。
+# 因此构建期只做两件事：① 生成 torch 约束（autoload 已关，只是读版本号、不动 torch_npu）
+# ② pip install（带 -c 约束，防止 PyPI 的 torch 覆盖镜像自带的 NPU 补丁版）。
+# 不再做最终的 import 自检——那个 check 既会触发驱动依赖、又容易在 build 环境踩坑；
+# whl 是否含 cli/registry/ 已由 workflow 前置校验兜底，其余功能在运行时（NPU 主机）验证。
+# TORCH_DEVICE_BACKEND_AUTOLOAD=0 仅作用于这条 RUN，不进 ENV，运行时仍正常自动加载 torch_npu。
 COPY msmodeling_offline_installer/*.whl ./msmodeling_offline_installer/
 RUN TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
  && cat /tmp/ms-constraints.txt \
  && pip install --no-cache-dir -c /tmp/ms-constraints.txt ./msmodeling_offline_installer/*.whl \
- && rm -f /tmp/ms-constraints.txt \
- && TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import torch, importlib.util as u, importlib.metadata as md
-print('torch', torch.__version__)
-print('msmodeling', md.version('msmodeling'))
-print('torch_npu', 'present' if u.find_spec('torch_npu') else 'MISSING')
-try:
-    importlib.import_module('cli')
-    print('cli import ok')
-except Exception as e:
-    print('cli import skipped (expected without NPU driver):', type(e).__name__, e)" \
- || (echo "msmodeling build-time check failed" && exit 1)
+ && rm -f /tmp/ms-constraints.txt
 
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/workspace/collector \
     INFER_STRATEGY_LOCAL_MODEL_ROOT=model_configs/msmodeling

@@ -42,17 +42,7 @@ COPY msmodeling_offline_installer/*.whl ./msmodeling_offline_installer/
 RUN TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import importlib.util as u; [print(m + '==' + __import__(m).__version__) for m in ('torch', 'torchvision') if u.find_spec(m)]" > /tmp/ms-constraints.txt \
  && cat /tmp/ms-constraints.txt \
  && pip install --no-cache-dir -c /tmp/ms-constraints.txt ./msmodeling_offline_installer/*.whl \
- && rm -f /tmp/ms-constraints.txt \
- && TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import torch, importlib.util as u, importlib.metadata as md
-print('torch', torch.__version__)
-print('msmodeling', md.version('msmodeling'))
-print('torch_npu', 'present' if u.find_spec('torch_npu') else 'MISSING')
-try:
-    importlib.import_module('cli')
-    print('cli import ok')
-except Exception as e:
-    print('cli import skipped (expected without NPU driver):', type(e).__name__, e)" \
- || (echo "msmodeling build-time check failed" && exit 1)
+ && rm -f /tmp/ms-constraints.txt
 
 # 离线：aic-npu 与 msmodeling 的模型配置都在 /workspace/model_configs 下随镜像提供
 ENV HF_HUB_OFFLINE=1 \
