@@ -10,6 +10,9 @@ from infer_strategy_npu.config import (
     AIC_NPU_DATABASE_MODE,
     FRAMEWORK_AIC_NPU,
     FRAMEWORK_MSMODELING,
+    MS_TP_SIZES_LARGE_MODELS,
+    MS_TP_SIZES_LARGE_START,
+    MS_TP_SIZES_START,
 )
 from infer_strategy_npu.devices import AIC_NPU_SUPPORTED_DEVICES, to_aic_system
 from infer_strategy_npu.models import ModelSpec, aic_npu_model_path, msmodeling_model_source
@@ -106,6 +109,50 @@ def resolve_ms_actions(request: RecommendRequest) -> tuple[str, str]:
     )
 
 
+def _powers_of_two(start: int, limit: int) -> list[int]:
+    """从 ``start`` 起按 2 的幂递增，返回所有 <= limit 的值。"""
+    value = 1
+    while value < start:
+        value *= 2
+    sizes: list[int] = []
+    while value <= limit:
+        sizes.append(value)
+        value *= 2
+    return sizes
+
+
+def resolve_tp_sizes(request: RecommendRequest) -> list[int]:
+    """msmodeling 的 TP 候选（--tp-sizes）。
+
+    显式传入时原样使用；否则按模型 + --num-devices 自动推导：
+    - 大模型（MS_TP_SIZES_LARGE_MODELS）从 32 起跳；
+    - 其余模型从 1 起跳；
+    均为 2 的幂，上限为不超过 --num-devices 的最大 2 的幂。
+    """
+    if request.tp_sizes:
+        return [int(v) for v in request.tp_sizes]
+
+    start = MS_TP_SIZES_LARGE_START if is_large_tp_model(request.model) else MS_TP_SIZES_START
+    sizes = _powers_of_two(start, request.num_devices)
+    if not sizes:
+        # num_devices 小于起始值（例如 32 起跳但只有 8 卡）时退化为从 1 推导，保证有候选
+        sizes = _powers_of_two(MS_TP_SIZES_START, request.num_devices) or [1]
+    return sizes
+
+
+def is_large_tp_model(model_id: str | None) -> bool:
+    """该模型是否属于"TP 需从 32 起跳"的大模型。"""
+    return str(model_id or "").strip().lower() in {m.lower() for m in MS_TP_SIZES_LARGE_MODELS}
+
+
+def tp_size_flags(request: RecommendRequest) -> list[str]:
+    """msmodeling 的 --tp-sizes 参数（始终下发，便于复现）。"""
+    sizes = resolve_tp_sizes(request)
+    if not sizes:
+        return []
+    return ["--tp-sizes", *sizes]
+
+
 def ms_extra_flags(request: RecommendRequest, mode: str) -> list[str]:
     """msmodeling 的量化/投机等附加参数（不含 --disagg 与 SLO）。"""
     linear, attention = resolve_ms_actions(request)
@@ -129,6 +176,7 @@ def ms_extra_flags(request: RecommendRequest, mode: str) -> list[str]:
         extra += ["--jobs", request.jobs]
     if request.max_search_combinations is not None:
         extra += ["--max-search-combinations", request.max_search_combinations]
+    extra += tp_size_flags(request)
     return extra
 
 

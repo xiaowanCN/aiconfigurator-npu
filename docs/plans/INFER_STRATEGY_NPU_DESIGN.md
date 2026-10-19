@@ -46,6 +46,7 @@ infer-strategy-npu -recommend
     [--speculative-method none|dflash|dspark|mtp]   # 默认 dflash（PD分离-Decode）
     [--num-speculative-tokens N] [--acceptance-length F] [--num-draft-layers N]
     [--jobs N] [--max-search-combinations N]        # 透传 msmodeling
+    [--tp-sizes N [N ...]]       # msmodeling TP 候选，默认自动推导（见下）
     [--dry-run]                  # 只打印将要下发的两套框架命令，不执行
     [--quiet] [--verbose]
 ```
@@ -58,6 +59,16 @@ infer-strategy-npu -recommend
 - `--device`：26 个，取自 `tensor_cast/device.py` 的 `DeviceProfile` 注册名（见 §4）。
 - `--num-devices` / `--input-length` / `--output-length` / `--tpot-limit` / `--ttft-limit`：正整数（>0）。
 - `--quantize`：`DISABLE` / `W8A8`（大小写与连字符不敏感，归一化为 `DISABLE` / `W8A8`）。
+- `--tp-sizes`：msmodeling 的 TP 搜索候选（`nargs="+"` 的正整数列表）。**仅在分发到 msmodeling 时生效**，
+  aic-npu 分支不使用。缺省时按模型 + `--num-devices` 自动推导为 2 的幂：
+
+  | 模型 | 起始值 | 示例（`--num-devices 64`） |
+  |---|---|---|
+  | `ZhipuAI/GLM-5.3-Flash`、`deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro`、`moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3` | 32 | `[32, 64]` |
+  | 其余模型（如 `Qwen/Qwen3.8-27B`） | 1 | `[1, 2, 4, 8, 16, 32, 64]` |
+
+  上限为不超过 `--num-devices` 的最大 2 的幂；若起始值已超过 `--num-devices`（例如 32 起跳但只有 16 卡），
+  退化为从 1 推导，保证至少有一个候选。显式传入 `--tp-sizes 3 5` 时原样使用、不做任何推导。
 
 ---
 

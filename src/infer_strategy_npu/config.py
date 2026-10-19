@@ -34,6 +34,21 @@ MS_DEFAULT_NUM_SPECULATIVE_TOKENS = 7
 MS_DEFAULT_ACCEPTANCE_LENGTH = 5
 MS_DEFAULT_NUM_DRAFT_LAYERS = 6
 
+# ---- msmodeling 的 TP 搜索空间（--tp-sizes）默认值 ----
+# 默认从 1 开始按 2 的幂递增，直到不超过 --num-devices 的最大 2 的幂。
+MS_TP_SIZES_START = 1
+# 这些模型参数量/显存占用大，小 TP 必然 OOM，默认直接从 32 起跳（仍按 2 的幂到 num_devices）。
+MS_TP_SIZES_LARGE_START = 32
+MS_TP_SIZES_LARGE_MODELS: frozenset[str] = frozenset(
+    {
+        "ZhipuAI/GLM-5.3-Flash",
+        "deepseek-ai/DeepSeek-R1",
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "moonshotai/Kimi-K3",
+        "MiniMax/MiniMax-M3",
+    }
+)
+
 # ---- 本地模型目录（避免 ModelScope/HF 拉取超时） ----
 # msmodeling 的模型配置统一放在 model_configs/msmodeling/<模型目录>/config.json，
 # 默认使用相对路径（相对 CWD；容器内 CWD=/workspace）。

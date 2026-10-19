@@ -143,6 +143,17 @@ def build_parser() -> argparse.ArgumentParser:
     ms.add_argument("--num-speculative-tokens", type=int, default=MS_DEFAULT_NUM_SPECULATIVE_TOKENS)
     ms.add_argument("--acceptance-length", type=float, default=MS_DEFAULT_ACCEPTANCE_LENGTH)
     ms.add_argument("--num-draft-layers", type=int, default=MS_DEFAULT_NUM_DRAFT_LAYERS)
+    ms.add_argument(
+        "--tp-sizes",
+        type=positive_int,
+        nargs="+",
+        metavar="N",
+        default=None,
+        help=(
+            "msmodeling 搜索的 TP 候选（空格分隔，如 --tp-sizes 32 64）；"
+            "默认按模型与 --num-devices 推导为 2 的幂，大模型从 32 起跳，其余从 1 起跳"
+        ),
+    )
     ms.add_argument("--jobs", type=positive_int, default=None, help="msmodeling 搜索并发度")
     ms.add_argument("--max-search-combinations", type=int, default=None)
     ms.add_argument("--no-compile", action="store_true", help="不向 msmodeling 传 --compile")
@@ -202,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         num_speculative_tokens=args.num_speculative_tokens,
         acceptance_length=args.acceptance_length,
         num_draft_layers=args.num_draft_layers,
+        tp_sizes=args.tp_sizes,
         jobs=args.jobs,
         max_search_combinations=args.max_search_combinations,
         compile_model=not args.no_compile,

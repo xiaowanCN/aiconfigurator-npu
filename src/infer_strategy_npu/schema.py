@@ -181,6 +181,9 @@ class RecommendRequest:
     num_speculative_tokens: int | None = None
     acceptance_length: float | None = None
     num_draft_layers: int | None = None
+    tp_sizes: list[int] | None = None
+    """msmodeling 的 --tp-sizes 候选；为空则按模型与 --num-devices 自动推导。"""
+
     jobs: int | None = None
     max_search_combinations: int | None = None
     compile_model: bool = True
