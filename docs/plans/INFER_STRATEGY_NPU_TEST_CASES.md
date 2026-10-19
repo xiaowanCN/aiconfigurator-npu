@@ -202,3 +202,41 @@ INPUT_LENGTH=2048 OUTPUT_LENGTH=2048 TPOT_LIMIT=40 TTFT_LIMIT=800 JOBS=8 \
 ```
 
 每个用例的独立日志在 `itn-test-results/logs/<id>.log`。
+
+---
+
+## 9. 全量回归脚本（4 模型 × 2 量化 = 8 用例）
+
+`scripts/run_regression_4models_128npu.sh` 固定场景跑一次完整回归：
+
+| 项 | 固定取值 |
+|---|---|
+| 模型（4） | `ZhipuAI/GLM-5.3-Flash`、`Qwen/Qwen3.8-27B`、`deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro` |
+| 量化（2） | `DISABLE`、`W8A8` |
+| 卡数 | 128 |
+| 序列 | 输入 8192 / 输出 1024 |
+| SLO | `--ttft-limit 30000` / `--tpot-limit 200` |
+
+预期路由（用于核对结果）：`DISABLE` 时 GLM-5.3-Flash 走 msmodeling、另外 3 个走 aic-npu；
+`W8A8` 时 4 个全部走 msmodeling —— 即一次回归同时覆盖 aic-npu(3 例) 与 msmodeling(5 例)。
+
+```bash
+# 真实跑 8 个用例（msmodeling 用例需 NPU 主机）
+bash scripts/run_regression_4models_128npu.sh
+
+# 安全预览：只渲染命令不执行
+bash scripts/run_regression_4models_128npu.sh --dry-run
+
+# 挂起后台执行
+nohup bash scripts/run_regression_4models_128npu.sh > itn-regression-128npu/run_all.log 2>&1 &
+tail -f itn-regression-128npu/run_all.log
+
+cat itn-regression-128npu/summary.txt
+```
+
+可覆盖的环境变量：`DEVICE`、`NUM_DEVICES`、`INPUT_LENGTH`、`OUTPUT_LENGTH`、`TTFT_LIMIT`、
+`TPOT_LIMIT`、`OUT_DIR`、`BIN`、`TP_SIZES`（默认留空 → 由 `--model` 与卡数自动推导）、
+`JOBS`、`DRY_RUN`（设 `1` 等价于 `--dry-run`）。
+
+用例 id 为 `<模型缩写>-<量化>`（如 `deepseekR1-W8A8`），日志在
+`itn-regression-128npu/logs/<id>.log`，结果在 `itn-regression-128npu/<id>/`。
