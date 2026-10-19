@@ -48,6 +48,8 @@ infer-strategy-npu -recommend
     [--jobs N] [--max-search-combinations N]        # 透传 msmodeling
     [--tp-sizes N [N ...]]       # msmodeling TP 候选，默认自动推导（见下）
     [--compile]                  # 仅对 msmodeling 生效；不设置则为 False（默认）
+    [--no-pd-balance-search] [--pd-balance-max N]   # xPyD 卡数均衡搜索（默认开启，见 §3.1）
+    [--pd-balance-sizes 1P1D 2P1D 3P1D]             # 显式指定要搜的 xPyD 组合
     [--dry-run]                  # 只打印将要下发的两套框架命令，不执行
     [--quiet] [--verbose]
 ```
@@ -73,6 +75,14 @@ infer-strategy-npu -recommend
 - `--compile`：开关型（set 语义），**仅对分发到 msmodeling 的请求生效**，aic-npu 分支忽略。
   **不设置 = False（默认）**；显式加 `--compile` = True。为 True 时向 msmodeling 子任务命令追加
   `--compile`（开启 FX 图改写/融合，更准但更慢）。
+- `--pd-balance-search`：**默认开启**（`default=True`），**仅对分发到 msmodeling 的请求生效**。
+  开启后 PD 分离按 xPyD 切分总卡数（`P=unit*x`、`D=unit*y`、`unit=floor(total/(x+y))`），
+  而不是 P/D 两侧各用满 `--num-devices`；用 `--no-pd-balance-search` 关闭并退回旧行为。
+- `--pd-balance-max`：xPyD 搜索时 P/D 节点数上限，x、y 取 `1..N`，默认 `3`。详见 §3.1。
+- `--pd-balance-sizes`：显式指定要搜的 xPyD 组合（`nargs="+"`，如 `--pd-balance-sizes 1P1D 2P1D 3P1D`），
+  用法与 `--tp-sizes` 一致。**给定时只搜这些组合，并忽略 `--pd-balance-max`**。
+  写法大小写/空格不敏感（`1p1d` 亦可），节点数须 `>=1`；`x+y > --num-devices` 时 CLI 直接报错，
+  其余卡数不足切分的组合自动跳过。
 
 ---
 
@@ -118,20 +128,25 @@ python -m cli.inference.throughput_optimizer <model> \
   --tpot-limit 50 --ttft-limit 1000
 
 # 2) disagg_prefill（PD分离-Prefill）→ results.disagg.prefill
+#    --num-devices 是该 xPyD 组下 P 侧分到的卡数（以 1P1D / 总 128 卡为例 = 64）
 python -m cli.inference.throughput_optimizer <model> \
-  --device ATLAS_800_A2_376T_64G --num-devices 128 \
+  --device ATLAS_800_A2_376T_64G --num-devices 64 \
   --input-length 4096 --output-length 2048 \
   --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 \
-  --disagg --ttft-limit 1000
+  --tp-sizes 32 64 --disagg --ttft-limit 1000
 
 # 3) disagg_decode（PD分离-Decode）→ results.disagg.decode
+#    --num-devices 是该 xPyD 组下 D 侧分到的卡数（1P1D / 总 128 卡 = 64）
 python -m cli.inference.throughput_optimizer <model> \
-  --device ATLAS_800_A2_376T_64G --num-devices 128 \
+  --device ATLAS_800_A2_376T_64G --num-devices 64 \
   --input-length 4096 --output-length 2048 \
   --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 \
-  --disagg --tpot-limit 50 \
+  --tp-sizes 32 64 --disagg --tpot-limit 50 \
   --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6
 ```
+
+> 上面 2)/3) 的 `--num-devices` 是 **xPyD 拆分后某一侧的卡数**，不是总卡数（见 §3.1）。
+> 关闭 `--pd-balance-search` 时，2)/3) 的 `--num-devices` 才会是总卡数。
 
 > **`--compile` 开关**：统一 CLI 的 `--compile` 默认**不设置（False）**，故上面渲染出的命令默认不含
 > `--compile`。只有显式加了 `--compile`，且该请求**分发到 msmodeling** 时，才会向子任务命令里追加
@@ -167,6 +182,70 @@ SLO 参数口径（依据 `docs/zh/user_guide/msmodeling_throughput_optimizer_us
 > 由于 `arg_parse()` 内部有 tp/ep/dcp 候选归一化与校验，实现上复用
 > `build_argparser(get_spec("throughput_optimizer")) + parse_module_args(spec, parser, argv)`
 > 走同一套声明式 parser，避免自建 Namespace 缺字段。
+
+### 3.1 PD 均衡搜索：`--pd-balance-search`（xPyD）
+
+**问题**：旧行为把 `--num-devices` 原样下发给 PD 分离的两个子任务，等价于
+「P 阶段有 N 卡**且** D 阶段也有 N 卡」，与普遍认知、也与 aic-npu 的口径都不一致。
+通常语义是：**总共只有 N 卡，如何在 P 节点与 D 节点之间分配**。
+
+**修正**：新增开关 `--pd-balance-search`（**默认开启**），仅对分发到 msmodeling 的请求生效
+（aic-npu 分支忽略）。开启后，PD 分离按 xPyD 网格切分总卡数：
+
+```
+unit = floor(total / (x + y))
+P 卡数 = unit * x
+D 卡数 = unit * y
+```
+
+- `x`、`y` 取 `1 .. --pd-balance-max`（默认 3），即默认搜 `1P1D ~ 3P3D`。
+- 向下取整天然保证 `P + D <= total`，**总卡数绝不超 `--num-devices`**。
+- 按 **P:D 的最简比例**去重（`gcd(x, y)` 归一化）：比例相同代表同一种切分意图，只是节点粒度
+  不同，下发给 msmodeling 语义等价，只保留最简的那组（枚举序里最先出现者）。
+  例：`1P1D ≡ 2P2D ≡ 3P3D`（均 1:1）、`1P2D ≡ 2P4D`（均 1:2），因此 `2P2D` / `3P3D` 会被去掉。
+  卡数取整后撞车的组合（不同比例但 P/D 卡数相同）也会一并去掉。
+  9 种 `(x, y)` 去重后剩 **7 组**。
+
+`--num-devices 128` 的实际网格（7 组，`2P2D`、`3P3D` 已按比例去重）：
+
+| xPyD | P 卡数 | D 卡数 | 合计 |  | xPyD | P 卡数 | D 卡数 | 合计 |
+|---|---|---|---|---|---|---|---|---|
+| 1P1D | 64 | 64 | 128 |  | 2P3D | 50 | 75 | 125 |
+| 1P2D | 42 | 84 | 126 |  | 3P1D | 96 | 32 | 128 |
+| 1P3D | 32 | 96 | 128 |  | 3P2D | 75 | 50 | 125 |
+| 2P1D | 84 | 42 | 126 |  | | | | |
+
+**`--tp-sizes` 上限随划分动态调整**：TP 候选上限取**当前子任务实际可用的卡数**
+（agg 用总卡数；PD 分离时 P 侧用 P 卡数、D 侧用 D 卡数），而非总卡数。
+例：128 卡 + 大模型（起跳 32）时，agg 侧 `32 64 128`，而 3P1D 的 D 侧（32 卡）只有 `32`。
+
+**结果与产物**：
+
+- 每组 xPyD 各跑一次 `disagg_prefill`(P 卡数) 与 `disagg_decode`(D 卡数)，
+  结果落在 `msmodeling/<xPyD>/{disagg_prefill,disagg_decode}/`（见 §7）。
+- `run.json` 中 `frameworks[].disagg_variants[]` 为全部变体（含 `label` 与 `pd_balance`
+  明细：x / y / P卡数 / D卡数）；`frameworks[].disagg` 仍保留**吞吐最优的那组**，
+  使既有渲染与推荐逻辑无需感知多组 xPyD。
+- 关闭 `--no-pd-balance-search` 时退回旧行为：P/D 两侧各用满 `--num-devices`，
+  产物落在 `msmodeling/{disagg_prefill,disagg_decode}/`。
+
+**约束搜索范围**（三种方式，优先级从高到低）：
+
+1. `--pd-balance-sizes 1P1D 2P1D 3P1D`：只搜指定的组合（忽略 `--pd-balance-max`）。
+2. `--pd-balance-max N`：`x、y` 取 `1..N`（默认 3，去重后 7 组）。
+3. `--no-pd-balance-search`：完全关闭，退回 P/D 两侧各用满 `--num-devices` 的旧行为。
+
+```bash
+# 只对比 3 种 P 占比
+infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3-Flash \
+  --device ATLAS_800_A2_376T_64G --num-devices 128 \
+  --pd-balance-sizes 1P1D 2P1D 3P1D
+# → 1 + 3×2 = 7 次 msmodeling 搜索
+```
+
+> **执行成本提示**：默认网格在 128 卡下是 1(agg) + 7×2(disagg) = **15 次** msmodeling
+> `ParallelRunner` 搜索，耗时显著。想快速回归可用 `--pd-balance-sizes 1P1D`（共 3 次）、
+> `--pd-balance-max 1`，或 `--no-pd-balance-search`。
 
 ---
 
@@ -278,8 +357,15 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
         "prefill": {CANDIDATE},         // 与 aic-npu disagg 的 (p)* 列对应
         "decode":  {CANDIDATE},         // 与 aic-npu disagg 的 (d)* 列对应
         "best":    {CANDIDATE},         // 整条 disagg 方案（tokens/s/gpu_cluster 最高者）
-        "candidates": [CANDIDATE, ...]
-      }
+        "candidates": [CANDIDATE, ...],
+        "label": "3P1D",                // xPyD 变体标签（非 xPyD 场景为 ""）
+        "pd_balance": {                 // 该变体的卡数划分（非 xPyD 场景为 null）
+          "prefill_nodes": 3, "decode_nodes": 1,
+          "prefill_devices": 96, "decode_devices": 32
+        }
+      },
+      // --pd-balance-search 开启时：每组 xPyD 一个变体；disagg 取其中吞吐最优的一组
+      "disagg_variants": [ { "...": "同上结构，含 label 与 pd_balance" } ]
     }
   ],
   "recommendation": {
@@ -353,14 +439,26 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
 │       ├── agg/{best_config_topn.csv,pareto.csv,exp_config.yaml,topN/generator_config.yaml}
 │       └── disagg/{...}
 └── msmodeling/
-    ├── agg/{summary.csv,summary.json,command.txt}
-    ├── disagg_prefill/{summary.csv,summary.json,command.txt}
-    └── disagg_decode/{summary.csv,summary.json,command.txt}
+    ├── agg/{summary.csv,candidates.json,command.txt}          # PD 混部，始终用总卡数
+    │
+    │   # 开启 --pd-balance-search（默认）时：每个 xPyD 一个子目录
+    ├── 1P1D/
+    │   ├── disagg_prefill/{summary.csv,candidates.json,command.txt}
+    │   └── disagg_decode/{summary.csv,candidates.json,command.txt}
+    ├── 1P2D/{disagg_prefill,disagg_decode}/...
+    ├── 3P1D/{disagg_prefill,disagg_decode}/...
+    └── ...                                                    # 其余 xPyD 组合（共 7 组，见 §3.1）
 ```
 
-- aic-npu 目录名含随机后缀：实现上先创建空目录，运行后取其下唯一子目录（`glob` + mtime 兜底）。
+- aic-npu 目录名含随机后缀：其 `save_results()` 在 `model_path` 为本地文件时会把结果目录
+  拼成绝对路径（写到 `model_path` 同级目录而非 `save_dir`）；因此 runner 不依赖它的落盘布局，
+  改为直接消费 `cli_default()` 返回的 in-memory `best_configs`，再自行写到 `aic_npu/<mode>/`。
 - msmodeling 无落盘能力：直接把 `OptimizerSummary.get_summary_df()` 写 `summary.csv`，
-  把 best 行写 `summary.json`，并额外落一份 `candidates.json`（Top-N）。
+  把候选写 `candidates.json`，并额外落一份 `command.txt`（可复现命令）。
+- **xPyD 子目录**：`--pd-balance-search` 默认开启，PD 分离会按多组 xPyD 分别执行，
+  每组单独一个 `<xPyD>/` 子目录，其下再放 `disagg_prefill` / `disagg_decode`。
+  `agg` 与 xPyD 无关（PD 混部用满总卡数），保持在 `msmodeling/agg/` 不动。
+  关闭 `--pd-balance-search` 时退回旧布局：`msmodeling/{disagg_prefill,disagg_decode}/`。
 
 ---
 

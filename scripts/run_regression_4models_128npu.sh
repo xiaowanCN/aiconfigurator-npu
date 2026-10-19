@@ -34,6 +34,11 @@ BIN="${BIN:-infer-strategy-npu}"
 # TP_SIZES 留空 -> 不传, 由 infer-strategy-npu 按模型与卡数自动推导
 TP_SIZES="${TP_SIZES:-}"
 JOBS="${JOBS:-32}"
+# PD 均衡搜索(xPyD)默认开启; PD_OFF=1 关闭, PD_MAX=N 限制 P/D 节点数上限(默认 3)
+# PD_SIZES 显式指定组合(如 "1P1D 2P1D 3P1D"), 给定时忽略 PD_MAX
+PD_OFF="${PD_OFF:-0}"
+PD_MAX="${PD_MAX:-}"
+PD_SIZES="${PD_SIZES:-}"
 DRY_RUN="${DRY_RUN:-0}"
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
@@ -74,6 +79,9 @@ C="--device $DEVICE --num-devices $NUM_DEVICES"
 X="--input-length $INPUT_LENGTH --output-length $OUTPUT_LENGTH --tpot-limit $TPOT_LIMIT --ttft-limit $TTFT_LIMIT"
 [ -n "$TP_SIZES" ] && X="$X --tp-sizes $TP_SIZES"
 [ -n "$JOBS" ] && X="$X --jobs $JOBS"
+[ "$PD_OFF" -eq 1 ] && X="$X --no-pd-balance-search"
+[ -n "$PD_MAX" ] && X="$X --pd-balance-max $PD_MAX"
+[ -n "$PD_SIZES" ] && X="$X --pd-balance-sizes $PD_SIZES"
 [ "$DRY_RUN" -eq 1 ] && X="$X --dry-run"
 
 echo "================================================================"

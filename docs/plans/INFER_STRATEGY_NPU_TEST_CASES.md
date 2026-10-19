@@ -240,3 +240,21 @@ cat itn-regression-128npu/summary.txt
 
 用例 id 为 `<模型缩写>-<量化>`（如 `deepseekR1-W8A8`），日志在
 `itn-regression-128npu/logs/<id>.log`，结果在 `itn-regression-128npu/<id>/`。
+
+> **PD 分离会按 xPyD 展开**：`--pd-balance-search` 默认开启，凡是路由到 msmodeling 的用例，
+> PD 分离阶段会以 128 卡为总预算枚举 7 组 xPyD（1P1D / 1P2D / 1P3D / 2P1D / 2P3D / 3P1D /
+> 3P2D；比例等价的 2P2D、3P3D 已去重），每组各跑一次 prefill 与 decode。因此单个用例的
+> msmodeling 结果目录下会有多个 `<xPyD>/` 子目录，耗时也显著高于关闭该开关时。
+>
+> 想缩短回归时间 / 固定对比哪几组：
+> ```bash
+> # 只对比 3 组（每用例 1 次 agg + 3×2 次 disagg）
+> PD_SIZES="1P1D 2P1D 3P1D" bash scripts/run_regression_4models_128npu.sh
+>
+> # 只跑 1P1D（每用例 1 次 agg + 2 次 disagg）
+> PD_MAX=1 bash scripts/run_regression_4models_128npu.sh
+>
+> # 完全关闭 xPyD，退回 P/D 两侧各用满 128 卡的旧行为
+> PD_OFF=1 bash scripts/run_regression_4models_128npu.sh
+> ```
+> 脚本已支持 `PD_SIZES` / `PD_MAX` / `PD_OFF`；`PD_SIZES` 给定时忽略 `PD_MAX`。

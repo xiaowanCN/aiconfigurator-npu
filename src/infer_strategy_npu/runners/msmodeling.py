@@ -17,12 +17,14 @@ from infer_strategy_npu.config import (
     MODE_DISAGG_PREFILL,
 )
 from infer_strategy_npu.quantize import to_ms_actions
+from infer_strategy_npu.routing import PdBalance, pd_balance_grid
 from infer_strategy_npu.runners.base import (
     FrameworkRunner,
     RunnerContext,
     capture_stdout,
     meets_slo,
     sanitize_raw,
+    throughput_of,
 )
 from infer_strategy_npu.schema import (
     Candidate,
@@ -39,6 +41,14 @@ MS_SUBTASKS = (
     ("disagg_prefill", MODE_DISAGG_PREFILL),
     ("disagg_decode", MODE_DISAGG_DECODE),
 )
+
+
+def _best_variant(variants: list[ServingModeResult]) -> ServingModeResult | None:
+    """在多组 xPyD 变体里挑吞吐最优的一组（无可用变体时返回 None）。"""
+    usable = [v for v in variants if v.available and v.best is not None]
+    if not usable:
+        return None
+    return max(usable, key=lambda v: throughput_of(v.best.throughput_tokens_per_s, v.best.throughput_tokens_per_s_per_device))
 
 _PARALLEL_RE = {
     "tp": re.compile(r"TP\s*=\s*(\d+)", re.IGNORECASE),
@@ -88,53 +98,168 @@ class MsmodelingRunner(FrameworkRunner):
             run.message = f"failed to import msmodeling (is the msmodeling whl installed?): {exc}"
             return run
 
-        agg = ServingModeResult(mode=MODE_AGG)
-        disagg = ServingModeResult(mode=MODE_DISAGG)
+        request = ctx.request
         failures: list[str] = []
 
-        for task_name, mode in MS_SUBTASKS:
-            log_path = ctx.artifacts.log_path(f"msmodeling_{task_name}")
-            try:
-                candidates, best = self._run_subtask(ctx, task_name, mode, log_path)
-            except SystemExit as exc:
-                failures.append(f"{task_name}: msmodeling argument parsing exited (code={exc.code})")
-                continue
-            except Exception as exc:
-                failures.append(f"{task_name}: {exc}")
-                continue
-
-            if best is None:
-                failures.append(f"{task_name}: no configuration satisfied the SLO filters")
-                continue
-
-            if mode == MODE_AGG:
-                agg.available = True
-                agg.candidates = candidates
-                agg.best = best
-            else:
-                disagg.available = True
-                if mode == MODE_DISAGG_PREFILL:
-                    disagg.prefill = best
-                else:
-                    disagg.decode = best
-
-        # disagg 的整体推荐口径取 decode（端到端吞吐）
-        if disagg.available and disagg.best is None:
-            disagg.best = disagg.decode
-
+        # ---- PD 混部(agg)：与 xPyD 无关，始终用总卡数 ----
+        agg = ServingModeResult(mode=MODE_AGG)
+        agg_candidates, agg_best = self._safe_subtask(
+            ctx,
+            failures,
+            scope="agg",
+            task_name="agg",
+            mode=MODE_AGG,
+            device_count=request.num_devices,
+            rel_dir="agg",
+            log_name="msmodeling_agg",
+        )
+        if agg_best is not None:
+            agg.available = True
+            agg.candidates = agg_candidates
+            agg.best = agg_best
         run.agg = agg
-        run.disagg = disagg
+
+        # ---- PD 分离(disagg)：按 xPyD 分组，每组单独跑 P/D 两侧 ----
+        variants: list[ServingModeResult] = []
+        run.artifacts["pd_balance_search"] = bool(request.pd_balance_search)
+        if request.pd_balance_search:
+            grid = pd_balance_grid(request.num_devices, request.pd_balance_max, request.pd_balance_sizes)
+            run.artifacts["pd_balance_grid"] = [
+                {
+                    "label": combo.label,
+                    "prefill_nodes": combo.prefill_nodes,
+                    "decode_nodes": combo.decode_nodes,
+                    "prefill_devices": combo.prefill_devices,
+                    "decode_devices": combo.decode_devices,
+                }
+                for combo in grid
+            ]
+            if not grid:
+                failures.append(
+                    f"pd-balance-search: num_devices={request.num_devices} 过小, 切分不出任何 xPyD 组合"
+                )
+            for combo in grid:
+                variant = self._run_disagg_variant(ctx, combo, failures)
+                if variant is not None:
+                    variants.append(variant)
+        else:
+            variant = self._run_disagg_variant(ctx, None, failures)
+            if variant is not None:
+                variants.append(variant)
+
+        run.disagg_variants = variants
+        # disagg 保留"最优变体"，使既有渲染/推荐逻辑无需感知多组 xPyD
+        run.disagg = _best_variant(variants)
 
         if failures:
             run.message = " | ".join(failures)
-            if not (agg.available or disagg.available):
+            if not (agg.available or run.disagg is not None):
                 run.status = "failed"
         return run
 
+    # ------------------------------------------------------------------ xPyD
+
+    def _run_disagg_variant(
+        self,
+        ctx: RunnerContext,
+        combo: PdBalance | None,
+        failures: list[str],
+    ) -> ServingModeResult | None:
+        """跑一组 xPyD 的 PD 分离（P 侧 / D 侧各一次），返回该变体；两侧都失败则返回 None。"""
+        request = ctx.request
+        if combo is None:
+            # 关闭 --pd-balance-search 时沿用旧行为：P/D 两侧都用总卡数
+            label = ""
+            prefill_devices = request.num_devices
+            decode_devices = request.num_devices
+        else:
+            label = combo.label
+            prefill_devices = combo.prefill_devices
+            decode_devices = combo.decode_devices
+
+        prefix = f"{label}/" if label else ""
+        scope = f"{label}:" if label else ""
+
+        variant = ServingModeResult(mode=MODE_DISAGG, label=label)
+        if combo is not None:
+            variant.pd_balance = {
+                "prefill_nodes": combo.prefill_nodes,
+                "decode_nodes": combo.decode_nodes,
+                "prefill_devices": prefill_devices,
+                "decode_devices": decode_devices,
+            }
+
+        _, prefill_best = self._safe_subtask(
+            ctx,
+            failures,
+            scope=f"{scope}disagg_prefill",
+            task_name="disagg_prefill",
+            mode=MODE_DISAGG_PREFILL,
+            device_count=prefill_devices,
+            rel_dir=f"{prefix}disagg_prefill",
+            log_name=f"msmodeling_{label}_disagg_prefill" if label else "msmodeling_disagg_prefill",
+        )
+        _, decode_best = self._safe_subtask(
+            ctx,
+            failures,
+            scope=f"{scope}disagg_decode",
+            task_name="disagg_decode",
+            mode=MODE_DISAGG_DECODE,
+            device_count=decode_devices,
+            rel_dir=f"{prefix}disagg_decode",
+            log_name=f"msmodeling_{label}_disagg_decode" if label else "msmodeling_disagg_decode",
+        )
+
+        if prefill_best is not None:
+            variant.prefill = prefill_best
+            variant.available = True
+        if decode_best is not None:
+            variant.decode = decode_best
+            variant.available = True
+
+        # disagg 的整体推荐口径取 decode（端到端吞吐）
+        if variant.available and variant.best is None:
+            variant.best = variant.decode or variant.prefill
+
+        return variant if variant.available else None
+
+    def _safe_subtask(
+        self,
+        ctx: RunnerContext,
+        failures: list[str],
+        *,
+        scope: str,
+        task_name: str,
+        mode: str,
+        device_count: int,
+        rel_dir: str,
+        log_name: str,
+    ) -> tuple[list[Candidate], Candidate | None]:
+        """包一层异常处理，把失败记入 failures 而不是中断整轮搜索。"""
+        try:
+            return self._run_subtask(ctx, task_name, mode, device_count, rel_dir, log_name)
+        except SystemExit as exc:
+            failures.append(f"{scope} msmodeling argument parsing exited (code={exc.code})")
+        except Exception as exc:
+            failures.append(f"{scope} {exc}")
+        return [], None
+
     # ------------------------------------------------------------------ 子任务
 
-    def _run_subtask(self, ctx: RunnerContext, task_name: str, mode: str, log_path):
-        """跑一个 msmodeling 子任务，返回 (candidates, best)。"""
+    def _run_subtask(
+        self,
+        ctx: RunnerContext,
+        task_name: str,
+        mode: str,
+        device_count: int,
+        rel_dir: str,
+        log_name: str,
+    ):
+        """跑一个 msmodeling 子任务，返回 (candidates, best)。
+
+        ``device_count`` 是本子任务实际可用的卡数（PD 分离时为 xPyD 拆分后某一侧的卡数），
+        ``rel_dir`` 是产物在 ``msmodeling/`` 下的相对目录（xPyD 场景带 ``<xPyD>/`` 前缀）。
+        """
         from infer_strategy_npu.routing import ms_extra_flags, slo_flags
 
         request = ctx.request
@@ -143,7 +268,7 @@ class MsmodelingRunner(FrameworkRunner):
             "--device",
             request.device,
             "--num-devices",
-            str(request.num_devices),
+            str(device_count),
             "--input-length",
             str(request.input_length),
             "--output-length",
@@ -151,10 +276,10 @@ class MsmodelingRunner(FrameworkRunner):
         ]
         if request.compile_model:
             argv.append("--compile")
-        argv += [str(x) for x in ms_extra_flags(request, mode)]
+        argv += [str(x) for x in ms_extra_flags(request, mode, device_count)]
         argv += [str(x) for x in slo_flags(request, mode)]
 
-        sub_dir = ctx.artifacts.msmodeling_dir / task_name
+        sub_dir = ctx.artifacts.msmodeling_dir / rel_dir
         sub_dir.mkdir(parents=True, exist_ok=True)
         (sub_dir / "command.txt").write_text(" ".join(argv) + "\n", encoding="utf-8")
 
@@ -173,7 +298,7 @@ class MsmodelingRunner(FrameworkRunner):
 
         from serving_cast.parallel_runner import ParallelRunner
 
-        with capture_stdout(log_path):
+        with capture_stdout(ctx.artifacts.log_path(log_name)):
             runner = ParallelRunner(args)
             summaries = runner.run_agg() if mode == MODE_AGG else runner.run_disagg()
 
@@ -182,7 +307,7 @@ class MsmodelingRunner(FrameworkRunner):
 
         summary = summaries[0]
         df = summary.get_summary_df()
-        ctx.artifacts.write_dataframe(f"msmodeling/{task_name}/summary.csv", df)
+        ctx.artifacts.write_dataframe(f"msmodeling/{rel_dir}/summary.csv", df)
 
         best_row = summary.get_best_result_row()
         if best_row is None:
@@ -193,7 +318,7 @@ class MsmodelingRunner(FrameworkRunner):
         candidates = self._candidates_from_df(ctx, df, mode)
         best = self._candidate_from_row(ctx, best_row, mode)
         ctx.artifacts.write_json(
-            f"msmodeling/{task_name}/candidates.json",
+            f"msmodeling/{rel_dir}/candidates.json",
             {
                 "best": best.to_dict() if best else None,
                 "candidates": [c.to_dict() for c in candidates],

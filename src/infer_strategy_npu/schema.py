@@ -13,6 +13,7 @@ from infer_strategy_npu.config import (
     DEFAULT_TOP_N,
     DEFAULT_TPOT_LIMIT,
     DEFAULT_TTFT_LIMIT,
+    PD_BALANCE_MAX_NODES_DEFAULT,
     SCHEMA_VERSION,
 )
 
@@ -118,6 +119,11 @@ class ServingModeResult:
     decode: Candidate | None = None
     candidates: list[Candidate] = field(default_factory=list)
     source_files: list[str] = field(default_factory=list)
+    label: str = ""
+    """PD 均衡搜索产生的变体标签（如 ``1P1D``）；非 xPyD 场景为空。"""
+
+    pd_balance: dict[str, Any] | None = None
+    """该变体的 xPyD 划分明细（x / y / P卡数 / D卡数）。"""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +134,8 @@ class ServingModeResult:
             "decode": self.decode.to_dict() if self.decode else None,
             "candidates": [c.to_dict() for c in self.candidates],
             "source_files": list(self.source_files),
+            "label": self.label,
+            "pd_balance": dict(self.pd_balance) if self.pd_balance else None,
         }
 
 
@@ -140,6 +148,8 @@ class FrameworkRun:
     artifacts: dict[str, Any] = field(default_factory=dict)
     agg: ServingModeResult | None = None
     disagg: ServingModeResult | None = None
+    disagg_variants: list[ServingModeResult] = field(default_factory=list)
+    """PD 均衡搜索下每组 xPyD 一个变体；``disagg`` 取其中吞吐最优的一组（向后兼容）。"""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,6 +160,7 @@ class FrameworkRun:
             "artifacts": self.artifacts,
             "agg": self.agg.to_dict() if self.agg else None,
             "disagg": self.disagg.to_dict() if self.disagg else None,
+            "disagg_variants": [v.to_dict() for v in self.disagg_variants],
         }
 
 
@@ -188,6 +199,18 @@ class RecommendRequest:
     max_search_combinations: int | None = None
     compile_model: bool = False
     """是否向 msmodeling 传 --compile；仅对分发到 msmodeling 的请求生效（aic-npu 不使用）。"""
+
+    pd_balance_search: bool = True
+    """PD 分离时是否做 xPyD 卡数均衡搜索；仅对分发到 msmodeling 的请求生效。"""
+
+    pd_balance_max: int = PD_BALANCE_MAX_NODES_DEFAULT
+    """xPyD 搜索时 P/D 节点数的上限（x、y 取值 1..pd_balance_max）。"""
+
+    pd_balance_sizes: list[str] | None = None
+    """显式指定要搜的 xPyD 组合（如 ``["1P1D", "2P1D", "3P1D"]``）。
+
+    给定时**只搜这些组合**（忽略 ``pd_balance_max``），与 --tp-sizes 的用法一致。
+    """
     dry_run: bool = False
 
     def to_dict(self) -> dict[str, Any]:

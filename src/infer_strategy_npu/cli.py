@@ -24,6 +24,7 @@ from infer_strategy_npu.config import (
     MS_DEFAULT_NUM_DRAFT_LAYERS,
     MS_DEFAULT_NUM_SPECULATIVE_TOKENS,
     MS_DEFAULT_SPECULATIVE_METHOD,
+    PD_BALANCE_MAX_NODES_DEFAULT,
 )
 from infer_strategy_npu.devices import DEVICES
 from infer_strategy_npu.models import resolve_model, supported_models
@@ -34,7 +35,7 @@ from infer_strategy_npu.quantize import (
     QUANTIZE_CHOICES,
     normalize_quantize,
 )
-from infer_strategy_npu.routing import VALID_FRAMEWORKS
+from infer_strategy_npu.routing import VALID_FRAMEWORKS, parse_pd_balance_label
 from infer_strategy_npu.schema import RecommendRequest
 from infer_strategy_npu.service import recommend
 
@@ -64,6 +65,15 @@ def quantize_type(value: str) -> str:
         return normalize_quantize(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def pd_balance_label(value: str) -> str:
+    """校验 xPyD 写法（如 ``1P1D`` / ``3P1D``），返回规范化后的大写形式。"""
+    try:
+        x, y = parse_pd_balance_label(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return f"{x}P{y}D"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -165,6 +175,41 @@ def build_parser() -> argparse.ArgumentParser:
             "不设置则为 False。仅对分发到 msmodeling 的请求生效，aic-npu 分支忽略该参数"
         ),
     )
+    ms.add_argument(
+        "--pd-balance-search",
+        dest="pd_balance_search",
+        action="store_true",
+        default=True,
+        help=(
+            "PD 分离时做 xPyD 卡数均衡搜索（默认开启）：把 --num-devices 按 x:y 切给 P/D 两侧，"
+            "而非两侧各用满总卡数；仅对分发到 msmodeling 的请求生效，aic-npu 分支忽略"
+        ),
+    )
+    ms.add_argument(
+        "--no-pd-balance-search",
+        dest="pd_balance_search",
+        action="store_false",
+        help="关闭 xPyD 卡数均衡搜索，退回 PD 两侧各用满 --num-devices 的旧行为",
+    )
+    ms.add_argument(
+        "--pd-balance-max",
+        type=positive_int,
+        default=PD_BALANCE_MAX_NODES_DEFAULT,
+        metavar="N",
+        help=f"xPyD 搜索时 P/D 节点数上限，x、y 取 1..N（默认 {PD_BALANCE_MAX_NODES_DEFAULT}）",
+    )
+    ms.add_argument(
+        "--pd-balance-sizes",
+        type=pd_balance_label,
+        nargs="+",
+        metavar="xPyD",
+        default=None,
+        help=(
+            "显式指定要搜的 xPyD 组合（空格分隔，如 --pd-balance-sizes 1P1D 2P1D 3P1D）；"
+            "给定时只搜这些组合并忽略 --pd-balance-max。卡数按各自 x:y 比例切分，"
+            "不够切分的组合会被跳过"
+        ),
+    )
 
     out = parser.add_argument_group("output")
     out.add_argument("--format", choices=("table", "json"), default="table", help="终端输出格式（默认 table）")
@@ -196,6 +241,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # --pd-balance-sizes 的可行性：x+y 超过卡数时 unit=floor(total/(x+y))=0，无法切分
+    if args.pd_balance_sizes:
+        for label in args.pd_balance_sizes:
+            x, y = parse_pd_balance_label(label)
+            if x + y > args.num_devices:
+                parser.error(
+                    f"--pd-balance-sizes {label} needs at least {x + y} devices "
+                    f"(x+y), but --num-devices={args.num_devices}"
+                )
+
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="[%(levelname)s] [%(name)s] %(message)s",
@@ -225,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
         jobs=args.jobs,
         max_search_combinations=args.max_search_combinations,
         compile_model=args.compile,
+        pd_balance_search=args.pd_balance_search,
+        pd_balance_max=args.pd_balance_max,
+        pd_balance_sizes=args.pd_balance_sizes,
         dry_run=args.dry_run,
     )
 

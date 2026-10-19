@@ -169,10 +169,36 @@ def render_summary(result: UnifiedRunResult) -> str:
             lines.append("  PD 混部 (agg):")
             rows = _candidate_rows(fw.agg.candidates or ([fw.agg.best] if fw.agg.best else []), fw.framework, "agg", "agg")
             lines.extend("  " + line for line in _make_table(rows).splitlines())
-        if fw.disagg and fw.disagg.available:
+        variants = list(getattr(fw, "disagg_variants", []) or [])
+        if variants:
+            lines.append("")
+            lines.append(f"  PD 分离 (disagg) - xPyD 变体 {len(variants)} 组:")
+            for variant in variants:
+                balance = variant.pd_balance or {}
+                lines.append("")
+                if balance:
+                    lines.append(
+                        f"    [{variant.label}]  P={balance.get('prefill_devices')} 卡 "
+                        f"({balance.get('prefill_nodes')} 节点)   "
+                        f"D={balance.get('decode_devices')} 卡 ({balance.get('decode_nodes')} 节点)"
+                    )
+                else:
+                    lines.append("    [PD 分离] P/D 两侧均用满总卡数")
+                rows: list[list[str]] = []
+                tag = variant.label or "disagg"
+                if variant.prefill:
+                    rows += _candidate_rows([variant.prefill], fw.framework, "disagg", f"{tag}_prefill")
+                if variant.decode:
+                    rows += _candidate_rows([variant.decode], fw.framework, "disagg", f"{tag}_decode")
+                if variant.best:
+                    rows += _candidate_rows([variant.best], fw.framework, "disagg", f"{tag}_overall")
+                if not rows:
+                    rows = _candidate_rows(variant.candidates, fw.framework, "disagg", tag)
+                lines.extend("    " + line for line in _make_table(rows).splitlines())
+        elif fw.disagg and fw.disagg.available:
             lines.append("")
             lines.append("  PD 分离 (disagg):")
-            rows: list[list[str]] = []
+            rows = []
             if fw.disagg.prefill:
                 rows += _candidate_rows([fw.disagg.prefill], fw.framework, "disagg", "disagg_prefill")
             if fw.disagg.decode:

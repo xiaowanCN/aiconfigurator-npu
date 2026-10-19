@@ -49,6 +49,11 @@ MS_TP_SIZES_LARGE_MODELS: frozenset[str] = frozenset(
     }
 )
 
+# ---- PD 均衡搜索（--pd-balance-search）：xPyD 的 P/D 节点数取值区间 ----
+# 默认只搜 1P1D ~ 3P3D；总卡数按 unit = floor(total/(x+y)) 分配，P=unit*x、D=unit*y。
+PD_BALANCE_MIN_NODES = 1
+PD_BALANCE_MAX_NODES_DEFAULT = 3
+
 # ---- 本地模型目录（避免 ModelScope/HF 拉取超时） ----
 # msmodeling 的模型配置统一放在 model_configs/msmodeling/<模型目录>/config.json，
 # 默认使用相对路径（相对 CWD；容器内 CWD=/workspace）。

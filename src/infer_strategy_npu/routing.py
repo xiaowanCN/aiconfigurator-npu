@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass, field
+from typing import Sequence
 
 from infer_strategy_npu.config import (
     AIC_NPU_BACKEND,
@@ -10,9 +13,13 @@ from infer_strategy_npu.config import (
     AIC_NPU_DATABASE_MODE,
     FRAMEWORK_AIC_NPU,
     FRAMEWORK_MSMODELING,
+    MODE_AGG,
+    MODE_DISAGG_DECODE,
+    MODE_DISAGG_PREFILL,
     MS_TP_SIZES_LARGE_MODELS,
     MS_TP_SIZES_LARGE_START,
     MS_TP_SIZES_START,
+    PD_BALANCE_MIN_NODES,
 )
 from infer_strategy_npu.devices import AIC_NPU_SUPPORTED_DEVICES, to_aic_system
 from infer_strategy_npu.models import ModelSpec, aic_npu_model_path, msmodeling_model_source
@@ -121,22 +128,110 @@ def _powers_of_two(start: int, limit: int) -> list[int]:
     return sizes
 
 
-def resolve_tp_sizes(request: RecommendRequest) -> list[int]:
+@dataclass(frozen=True)
+class PdBalance:
+    """一组 xPyD 的 P/D 卡数划分。
+
+    总卡数按节点数平均切分：``unit = floor(total / (x + y))``，
+    则 ``prefill_devices = unit * x``、``decode_devices = unit * y``，
+    天然满足 ``P + D <= total``（向下取整保证不超总卡数）。
+    """
+
+    prefill_nodes: int
+    decode_nodes: int
+    prefill_devices: int
+    decode_devices: int
+
+    @property
+    def label(self) -> str:
+        """目录名/标签，如 ``1P1D``、``3P1D``。"""
+        return f"{self.prefill_nodes}P{self.decode_nodes}D"
+
+
+_PD_LABEL_RE = re.compile(r"^(\d+)\s*[Pp]\s*(\d+)\s*[Dd]$")
+
+
+def parse_pd_balance_label(value: str) -> tuple[int, int]:
+    """解析 ``1P1D`` / ``3P1D`` 这样的 xPyD 写法，返回 ``(x, y)``。
+
+    大小写与空格不敏感（``1p1d``、``1 P 1 D`` 均可）；x、y 必须 >= 1。
+    """
+    match = _PD_LABEL_RE.match(str(value).strip())
+    if not match:
+        raise ValueError(f"invalid xPyD spec {value!r}; expected like '1P1D' or '3P1D'")
+    x, y = int(match.group(1)), int(match.group(2))
+    if x < PD_BALANCE_MIN_NODES or y < PD_BALANCE_MIN_NODES:
+        raise ValueError(f"invalid xPyD spec {value!r}: P/D 节点数必须 >= {PD_BALANCE_MIN_NODES}")
+    return x, y
+
+
+def pd_balance_grid(
+    total_devices: int,
+    max_nodes: int,
+    labels: Sequence[str] | None = None,
+) -> list[PdBalance]:
+    """生成 xPyD 组合列表。
+
+    - 未给 ``labels``：枚举 ``1 <= x, y <= max_nodes``，并按 **P:D 的最简比例**去重
+      （``1P1D`` / ``2P2D`` / ``3P3D`` 都是 1:1，只保留最先出现的那组），
+      卡数取整后撞车的组合也会去掉。
+    - 给了 ``labels``（对应 ``--pd-balance-sizes 1P1D 2P1D 3P1D``）：**只搜指定的组合**，
+      按用户给定顺序；此时不再按比例去重（不同比例的卡数划分确实不同，如 1P1D=64/64
+      与 3P3D=63/63），但仍会去掉卡数完全相同的重复项，并跳过卡数不够切分的组合。
+    """
+    if labels:
+        pairs = [parse_pd_balance_label(v) for v in labels]
+        dedupe_ratio = False
+    else:
+        pairs = [
+            (x, y)
+            for x in range(PD_BALANCE_MIN_NODES, max_nodes + 1)
+            for y in range(PD_BALANCE_MIN_NODES, max_nodes + 1)
+        ]
+        dedupe_ratio = True
+
+    grid: list[PdBalance] = []
+    seen_ratios: set[tuple[int, int]] = set()
+    seen_devices: set[tuple[int, int]] = set()
+    for x, y in pairs:
+        unit = int(total_devices) // (x + y)
+        if unit <= 0:
+            continue
+        combo = PdBalance(x, y, unit * x, unit * y)
+        devices = (combo.prefill_devices, combo.decode_devices)
+        if devices in seen_devices:
+            continue
+        if dedupe_ratio:
+            gcd = math.gcd(x, y)
+            ratio = (x // gcd, y // gcd)
+            if ratio in seen_ratios:
+                continue
+            seen_ratios.add(ratio)
+        seen_devices.add(devices)
+        grid.append(combo)
+    return grid
+
+
+def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None) -> list[int]:
     """msmodeling 的 TP 候选（--tp-sizes）。
 
-    显式传入时原样使用；否则按模型 + --num-devices 自动推导：
+    显式传入时原样使用；否则按模型 + 可用卡数自动推导：
     - 大模型（MS_TP_SIZES_LARGE_MODELS）从 32 起跳；
     - 其余模型从 1 起跳；
-    均为 2 的幂，上限为不超过 --num-devices 的最大 2 的幂。
+    均为 2 的幂，上限为不超过**当前侧可用卡数**的最大 2 的幂。
+
+    ``device_count`` 为该侧的卡数：PD 混部用总卡数，PD 分离时 P/D 各自用 xPyD
+    拆分后分到的卡数，因此 TP 上限会随划分动态变化。
     """
     if request.tp_sizes:
         return [int(v) for v in request.tp_sizes]
 
+    limit = int(device_count if device_count is not None else request.num_devices)
     start = MS_TP_SIZES_LARGE_START if is_large_tp_model(request.model) else MS_TP_SIZES_START
-    sizes = _powers_of_two(start, request.num_devices)
+    sizes = _powers_of_two(start, limit)
     if not sizes:
-        # num_devices 小于起始值（例如 32 起跳但只有 8 卡）时退化为从 1 推导，保证有候选
-        sizes = _powers_of_two(MS_TP_SIZES_START, request.num_devices) or [1]
+        # 该侧卡数小于起始值（例如 32 起跳但只有 8 卡）时退化为从 1 推导，保证有候选
+        sizes = _powers_of_two(MS_TP_SIZES_START, limit) or [1]
     return sizes
 
 
@@ -145,16 +240,20 @@ def is_large_tp_model(model_id: str | None) -> bool:
     return str(model_id or "").strip().lower() in {m.lower() for m in MS_TP_SIZES_LARGE_MODELS}
 
 
-def tp_size_flags(request: RecommendRequest) -> list[str]:
+def tp_size_flags(request: RecommendRequest, device_count: int | None = None) -> list[str]:
     """msmodeling 的 --tp-sizes 参数（始终下发，便于复现）。"""
-    sizes = resolve_tp_sizes(request)
+    sizes = resolve_tp_sizes(request, device_count)
     if not sizes:
         return []
     return ["--tp-sizes", *sizes]
 
 
-def ms_extra_flags(request: RecommendRequest, mode: str) -> list[str]:
-    """msmodeling 的量化/投机等附加参数（不含 --disagg 与 SLO）。"""
+def ms_extra_flags(request: RecommendRequest, mode: str, device_count: int | None = None) -> list[str]:
+    """msmodeling 的量化/投机等附加参数（不含 --disagg 与 SLO）。
+
+    ``device_count`` 为该子任务实际可用的卡数（PD 分离时是 xPyD 拆分后某一侧的卡数），
+    决定 --tp-sizes 的上限。
+    """
     linear, attention = resolve_ms_actions(request)
     extra = [
         "--quantize-linear-action",
@@ -176,7 +275,7 @@ def ms_extra_flags(request: RecommendRequest, mode: str) -> list[str]:
         extra += ["--jobs", request.jobs]
     if request.max_search_combinations is not None:
         extra += ["--max-search-combinations", request.max_search_combinations]
-    extra += tp_size_flags(request)
+    extra += tp_size_flags(request, device_count)
     return extra
 
 
@@ -195,8 +294,19 @@ def slo_flags(request: RecommendRequest, mode: str) -> list[str]:
     return ["--tpot-limit", request.tpot_limit, "--ttft-limit", request.ttft_limit]
 
 
-def build_msmodeling_command(request: RecommendRequest, model_source: str, *, mode: str) -> str:
-    """等价的 msmodeling 命令（用于 dry-run / run.json 复现）。"""
+def build_msmodeling_command(
+    request: RecommendRequest,
+    model_source: str,
+    *,
+    mode: str,
+    device_count: int | None = None,
+) -> str:
+    """等价的 msmodeling 命令（用于 dry-run / run.json 复现）。
+
+    ``device_count`` 为该子任务实际下发的卡数：PD 混部是总卡数；PD 分离开启
+    --pd-balance-search 后，P/D 各自用 xPyD 拆分到的卡数。
+    """
+    devices = int(device_count if device_count is not None else request.num_devices)
     parts = [
         "python",
         "-m",
@@ -205,7 +315,7 @@ def build_msmodeling_command(request: RecommendRequest, model_source: str, *, mo
         "--device",
         request.device,
         "--num-devices",
-        request.num_devices,
+        devices,
         "--input-length",
         request.input_length,
         "--output-length",
@@ -214,9 +324,36 @@ def build_msmodeling_command(request: RecommendRequest, model_source: str, *, mo
     # --compile 是 msmodeling 专属开关（aic-npu 侧无对应参数，故只在这里下发）
     if request.compile_model:
         parts.append("--compile")
-    parts += ms_extra_flags(request, mode)
+    parts += ms_extra_flags(request, mode, devices)
     parts += slo_flags(request, mode)
     return " ".join(_q(p) for p in parts)
+
+
+def build_msmodeling_commands(request: RecommendRequest, model_source: str) -> list[str]:
+    """一次运行要下发的全部 msmodeling 命令（含 xPyD 各组），用于 dry-run 展示。
+
+    - PD 混部(agg)：始终 1 条，用总卡数。
+    - PD 分离：开启 --pd-balance-search 时，对 xPyD 网格里每组各下发
+      disagg_prefill(P 卡数) + disagg_decode(D 卡数) 两条；关闭时按旧行为
+      两侧都用总卡数各 1 条。
+    """
+    commands = [build_msmodeling_command(request, model_source, mode=MODE_AGG)]
+    if request.pd_balance_search:
+        for combo in pd_balance_grid(request.num_devices, request.pd_balance_max, request.pd_balance_sizes):
+            commands.append(
+                build_msmodeling_command(
+                    request, model_source, mode=MODE_DISAGG_PREFILL, device_count=combo.prefill_devices
+                )
+            )
+            commands.append(
+                build_msmodeling_command(
+                    request, model_source, mode=MODE_DISAGG_DECODE, device_count=combo.decode_devices
+                )
+            )
+    else:
+        commands.append(build_msmodeling_command(request, model_source, mode=MODE_DISAGG_PREFILL))
+        commands.append(build_msmodeling_command(request, model_source, mode=MODE_DISAGG_DECODE))
+    return commands
 
 
 def route(request: RecommendRequest, spec: ModelSpec, *, aic_save_dir: str) -> RoutingDecision:
@@ -279,5 +416,5 @@ def _route_to_msmodeling(request: RecommendRequest, spec: ModelSpec, *, reason: 
         framework=FRAMEWORK_MSMODELING,
         reason=reason,
         ms_model_source=source,
-        commands=[build_msmodeling_command(request, source, mode=m) for m in ("agg", "disagg_prefill", "disagg_decode")],
+        commands=build_msmodeling_commands(request, source),
     )
