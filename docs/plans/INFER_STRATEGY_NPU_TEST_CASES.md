@@ -187,5 +187,18 @@ tail -f itn-test-results/run_all.log        # Ctrl-C 退出 tail, 不影响后�
 cat itn-test-results/summary.txt
 ```
 
-可用环境变量覆盖默认：`DEVICE`、`NUM_DEVICES`、`OUT_DIR`、`BIN`。
+可用环境变量覆盖默认：`DEVICE`、`NUM_DEVICES`、`OUT_DIR`、`BIN`、`WITH_MS`（设 `1` 等价于
+`--with-msmodeling-real`）。此外推荐请求的序列长度/时延约束/并发也可用环境变量覆盖，
+并会自动透传到每条 `-recommend` 命令：
+
+- `INPUT_LENGTH`（默认 1024）、`OUTPUT_LENGTH`（默认 1024）
+- `TPOT_LIMIT`（默认 50，单位 ms）、`TTFT_LIMIT`（默认 1000，单位 ms）
+- `JOBS`（默认空 → 不传 `--jobs`，由 msmodeling 自行决定搜索并发度）
+
+```bash
+# 示例: 自定义序列长度/时延/并发后运行
+INPUT_LENGTH=2048 OUTPUT_LENGTH=2048 TPOT_LIMIT=40 TTFT_LIMIT=800 JOBS=8 \
+  bash scripts/run_infer_strategy_tests.sh --with-msmodeling-real
+```
+
 每个用例的独立日志在 `itn-test-results/logs/<id>.log`。

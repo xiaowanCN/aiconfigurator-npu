@@ -19,6 +19,7 @@ COPY tools/ ./tools/
 COPY model_configs/ ./model_configs/
 COPY src/ ./src/
 COPY pyproject.toml README.md ./
+COPY scripts/ ./scripts/
 
 RUN pip install --no-cache-dir -e .
 

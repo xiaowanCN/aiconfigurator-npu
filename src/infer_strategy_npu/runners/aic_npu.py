@@ -1,8 +1,6 @@
-"""aic-npu Runner：调用 ``aiconfigurator_npu.cli.api.cli_default`` 并解析 agg/disagg CSV。"""
+"""aic-npu Runner：调用 ``aiconfigurator_npu.cli.api.cli_default`` 并解析 agg/disagg 结果。"""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from infer_strategy_npu.config import (
     AIC_NPU_BACKEND,
@@ -19,7 +17,6 @@ from infer_strategy_npu.runners.base import (
     FrameworkRunner,
     RunnerContext,
     capture_stdout,
-    latest_subdir,
     meets_slo,
     sanitize_raw,
     tail_text,
@@ -58,14 +55,12 @@ class AicNpuRunner(FrameworkRunner):
     def run(self, ctx: RunnerContext) -> FrameworkRun:
         request = ctx.request
         decision = ctx.decision
-        save_dir = ctx.artifacts.aic_npu_dir
-        save_dir.mkdir(parents=True, exist_ok=True)
         log_path = ctx.artifacts.log_path("aic_npu")
 
         run = FrameworkRun(
             framework=self.framework,
             commands=list(decision.commands),
-            artifacts={"save_dir": str(save_dir), "log": str(log_path)},
+            artifacts={"log": str(log_path)},
         )
 
         try:
@@ -89,7 +84,7 @@ class AicNpuRunner(FrameworkRunner):
                     ttft=float(request.ttft_limit),
                     tpot=float(request.tpot_limit),
                     top_n=request.top_n,
-                    save_dir=str(save_dir),
+                    save_dir=None,
                 )
         except SystemExit as exc:  # aic-npu 内部 parser.error / 早退
             run.status = "failed"
@@ -100,26 +95,23 @@ class AicNpuRunner(FrameworkRunner):
             run.message = f"aic-npu failed: {exc}"
             return run
 
-        result_dir = latest_subdir(save_dir)
-        if result_dir is None:
-            run.status = "failed"
-            run.message = f"aic-npu produced no result directory under {save_dir}: {tail_text(log_path)}"
-            return run
+        # aiconfigurator_npu 的 save_results 在 model_path 为本地文件时, 会把结果目录
+        # 拼成绝对路径(写到 model_path 同级目录)而非 save_dir; 这里不依赖它的落盘布局,
+        # 直接消费 cli_default 返回的 in-memory best_configs(与落盘 csv 内容一致).
+        best_configs = result.best_configs or {}
 
-        run.artifacts["result_dir"] = str(result_dir)
         run.artifacts["chosen_exp"] = getattr(result, "chosen_exp", None)
         if getattr(result, "best_throughputs", None):
             run.artifacts["best_throughputs"] = {k: to_float(v) for k, v in result.best_throughputs.items()}
 
-        # 同时把 best_configs 写成 json，便于 HTTP/解析直接消费
+        # 把 best_configs 写成 csv, 落到 out_dir/aic_npu/<mode>/, 便于 HTTP/解析直接消费
         for mode in (MODE_AGG, MODE_DISAGG):
-            df = (result.best_configs or {}).get(mode)
-            if df is None:
-                continue
-            ctx.artifacts.write_dataframe(f"aic_npu/{mode}/best_config_topn.csv", df)
+            df = best_configs.get(mode)
+            if df is not None:
+                ctx.artifacts.write_dataframe(f"aic_npu/{mode}/best_config_topn.csv", df)
 
-        run.agg = self._parse_mode(ctx, result_dir, MODE_AGG, result)
-        run.disagg = self._parse_mode(ctx, result_dir, MODE_DISAGG, result)
+        run.agg = self._parse_mode(ctx, best_configs.get(MODE_AGG), MODE_AGG)
+        run.disagg = self._parse_mode(ctx, best_configs.get(MODE_DISAGG), MODE_DISAGG)
 
         if not run.agg.available and not run.disagg.available:
             run.status = "failed"
@@ -128,26 +120,13 @@ class AicNpuRunner(FrameworkRunner):
 
     # ------------------------------------------------------------------ 解析
 
-    def _parse_mode(self, ctx: RunnerContext, result_dir: Path, mode: str, result) -> ServingModeResult:
-        csv_path = result_dir / mode / "best_config_topn.csv"
+    def _parse_mode(self, ctx: RunnerContext, df, mode: str) -> ServingModeResult:
         output = ServingModeResult(mode=mode)
-        if not csv_path.is_file():
-            return output
-
-        try:
-            import pandas as pd
-
-            df = pd.read_csv(csv_path)
-        except Exception as exc:
-            output.source_files.append(str(csv_path))
-            ctx.logger.warning("failed to read %s: %s", csv_path, exc)
-            return output
-
-        if df.empty:
+        if df is None or df.empty:
             return output
 
         output.available = True
-        output.source_files.append(str(csv_path))
+        output.source_files.append("<in-memory best_configs from cli_default>")
         rows = [df.iloc[i] for i in range(len(df))]
 
         if mode == MODE_AGG:
