@@ -156,7 +156,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ms.add_argument("--jobs", type=positive_int, default=None, help="msmodeling 搜索并发度")
     ms.add_argument("--max-search-combinations", type=int, default=None)
-    ms.add_argument("--no-compile", action="store_true", help="不向 msmodeling 传 --compile")
+    ms.add_argument(
+        "--compile",
+        action="store_true",
+        default=False,
+        help=(
+            "向 msmodeling 传 --compile（开启 FX 图改写/融合，结果更准但更慢）；"
+            "不设置则为 False。仅对分发到 msmodeling 的请求生效，aic-npu 分支忽略该参数"
+        ),
+    )
 
     out = parser.add_argument_group("output")
     out.add_argument("--format", choices=("table", "json"), default="table", help="终端输出格式（默认 table）")
@@ -216,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         tp_sizes=args.tp_sizes,
         jobs=args.jobs,
         max_search_combinations=args.max_search_combinations,
-        compile_model=not args.no_compile,
+        compile_model=args.compile,
         dry_run=args.dry_run,
     )
 

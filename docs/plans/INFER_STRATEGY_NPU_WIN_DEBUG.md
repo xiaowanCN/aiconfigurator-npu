@@ -211,7 +211,8 @@ infer-strategy-npu -recommend --model Qwen/Qwen3.8-27B `
 Windows 注意事项：
 
 - `ParallelRunner` 用 `ProcessPoolExecutor`，Windows 是 **spawn**，首次启动较慢；用 `--jobs 1` 降低并发最稳。
-- 如果模型加载/编译报错，加 `--no-compile` 再试。
+- 编译默认是**关闭**的（不传 `--compile` 即为 False），所以模型加载/编译报错通常不是它引起的；
+  需要开启 FX 图改写/融合时才显式加 `--compile`（仅 msmodeling 生效）。
 - 想关掉投机解码：`--speculative-method none`。
 
 ### 5.3 强制指定框架（排障用）

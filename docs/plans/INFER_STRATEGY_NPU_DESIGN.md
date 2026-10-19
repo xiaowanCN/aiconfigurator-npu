@@ -47,6 +47,7 @@ infer-strategy-npu -recommend
     [--num-speculative-tokens N] [--acceptance-length F] [--num-draft-layers N]
     [--jobs N] [--max-search-combinations N]        # 透传 msmodeling
     [--tp-sizes N [N ...]]       # msmodeling TP 候选，默认自动推导（见下）
+    [--compile]                  # 仅对 msmodeling 生效；不设置则为 False（默认）
     [--dry-run]                  # 只打印将要下发的两套框架命令，不执行
     [--quiet] [--verbose]
 ```
@@ -69,6 +70,9 @@ infer-strategy-npu -recommend
 
   上限为不超过 `--num-devices` 的最大 2 的幂；若起始值已超过 `--num-devices`（例如 32 起跳但只有 16 卡），
   退化为从 1 推导，保证至少有一个候选。显式传入 `--tp-sizes 3 5` 时原样使用、不做任何推导。
+- `--compile`：开关型（set 语义），**仅对分发到 msmodeling 的请求生效**，aic-npu 分支忽略。
+  **不设置 = False（默认）**；显式加 `--compile` = True。为 True 时向 msmodeling 子任务命令追加
+  `--compile`（开启 FX 图改写/融合，更准但更慢）。
 
 ---
 
@@ -109,25 +113,30 @@ msmodeling 分支一次运行拆成 3 个子任务（对应统一结果的 3 个
 # 1) agg（PD 混部）→ results.agg
 python -m cli.inference.throughput_optimizer <model> \
   --device ATLAS_800_A2_376T_64G --num-devices 128 \
-  --input-length 4096 --output-length 2048 --compile \
+  --input-length 4096 --output-length 2048 \
   --quantize-linear-action DISABLED --quantize-attention-action DISABLED \
   --tpot-limit 50 --ttft-limit 1000
 
 # 2) disagg_prefill（PD分离-Prefill）→ results.disagg.prefill
 python -m cli.inference.throughput_optimizer <model> \
   --device ATLAS_800_A2_376T_64G --num-devices 128 \
-  --input-length 4096 --output-length 2048 --compile \
+  --input-length 4096 --output-length 2048 \
   --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 \
   --disagg --ttft-limit 1000
 
 # 3) disagg_decode（PD分离-Decode）→ results.disagg.decode
 python -m cli.inference.throughput_optimizer <model> \
   --device ATLAS_800_A2_376T_64G --num-devices 128 \
-  --input-length 4096 --output-length 2048 --compile \
+  --input-length 4096 --output-length 2048 \
   --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 \
   --disagg --tpot-limit 50 \
   --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6
 ```
+
+> **`--compile` 开关**：统一 CLI 的 `--compile` 默认**不设置（False）**，故上面渲染出的命令默认不含
+> `--compile`。只有显式加了 `--compile`，且该请求**分发到 msmodeling** 时，才会向子任务命令里追加
+> `--compile`（aic-npu 分支无此参数，会忽略）。开启后 msmodeling 会做 FX 图改写/融合，
+> 结果更贴近真实但耗时长，建议先粗筛、再对 Top-N 带 `--compile` 复算。
 
 SLO 参数口径（依据 `docs/zh/user_guide/msmodeling_throughput_optimizer_user_guide.md` 第 2 节）：
 

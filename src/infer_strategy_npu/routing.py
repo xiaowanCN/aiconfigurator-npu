@@ -211,6 +211,7 @@ def build_msmodeling_command(request: RecommendRequest, model_source: str, *, mo
         "--output-length",
         request.output_length,
     ]
+    # --compile 是 msmodeling 专属开关（aic-npu 侧无对应参数，故只在这里下发）
     if request.compile_model:
         parts.append("--compile")
     parts += ms_extra_flags(request, mode)

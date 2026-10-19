@@ -186,7 +186,8 @@ class RecommendRequest:
 
     jobs: int | None = None
     max_search_combinations: int | None = None
-    compile_model: bool = True
+    compile_model: bool = False
+    """是否向 msmodeling 传 --compile；仅对分发到 msmodeling 的请求生效（aic-npu 不使用）。"""
     dry_run: bool = False
 
     def to_dict(self) -> dict[str, Any]:
