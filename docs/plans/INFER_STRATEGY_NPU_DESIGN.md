@@ -78,7 +78,8 @@ infer-strategy-npu -recommend
 - `--pd-balance-search`：**默认开启**（`default=True`），**仅对分发到 msmodeling 的请求生效**。
   开启后 PD 分离按 xPyD 切分总卡数（`P=unit*x`、`D=unit*y`、`unit=floor(total/(x+y))`），
   而不是 P/D 两侧各用满 `--num-devices`；用 `--no-pd-balance-search` 关闭并退回旧行为。
-- `--pd-balance-max`：xPyD 搜索时 P/D 节点数上限，x、y 取 `1..N`，默认 `3`。详见 §3.1。
+- `--pd-balance-max`：xPyD 搜索时 P/D 节点数上限，x、y 取 `1..N`，默认 `3`（枚举 `1P1D ~ 3P3D`
+  共 9 种，按比例**去重后 7 组**）。仅在未给 `--pd-balance-sizes` 时生效。详见 §3.1。
 - `--pd-balance-sizes`：显式指定要搜的 xPyD 组合（`nargs="+"`，如 `--pd-balance-sizes 1P1D 2P1D 3P1D`），
   用法与 `--tp-sizes` 一致。**给定时只搜这些组合，并忽略 `--pd-balance-max`**。
   写法大小写/空格不敏感（`1p1d` 亦可），节点数须 `>=1`；`x+y > --num-devices` 时 CLI 直接报错，
@@ -198,7 +199,7 @@ P 卡数 = unit * x
 D 卡数 = unit * y
 ```
 
-- `x`、`y` 取 `1 .. --pd-balance-max`（默认 3），即默认搜 `1P1D ~ 3P3D`。
+- `x`、`y` 取 `1 .. --pd-balance-max`（默认 3），即枚举区间为 `1P1D ~ 3P3D`（共 9 种 `(x, y)`）。
 - 向下取整天然保证 `P + D <= total`，**总卡数绝不超 `--num-devices`**。
 - 按 **P:D 的最简比例**去重（`gcd(x, y)` 归一化）：比例相同代表同一种切分意图，只是节点粒度
   不同，下发给 msmodeling 语义等价，只保留最简的那组（枚举序里最先出现者）。
