@@ -1,0 +1,45 @@
+====================================================================================================
+infer-strategy-npu - recommend summary
+====================================================================================================
+run_id      : 20261019-145256-Qwen-Qwen3.8-27B-ATLAS_800_A2_376T_64G-128
+status      : ok
+model       : Qwen/Qwen3.8-27B
+device      : ATLAS_800_A2_376T_64G  x128
+isl/osl     : 8192/1024   tpot-limit=200 ms   ttft-limit=30000 ms
+quantize    : DISABLE
+framework   : aic-npu  (model Qwen/Qwen3.8-27B is in the aic-npu allowlist and --quantize=DISABLE)
+model-path  : /workspace/model_configs/qwen3_8_27B_config.json
+
+[aic-npu] status=ok
+  $ aic-npu default --model-path /workspace/model_configs/qwen3_8_27B_config.json --total-gpus 128 --system ascend_910b --backend vllm-ascend --backend-version 0.23.0 --database-mode HYBRID --isl 8192 --osl 1024 --ttft 30000 --tpot 200 --top-n 10 --save-dir itn-regression-128npu/qwen38b-DISABLE/20261019-145256-Qwen-Qwen3.8-27B-ATLAS_800_A2_376T_64G-128/aic_npu
+
+  PD 混部 (agg):
+  +-----+-----------+------+----------+--------------+----------+----------+-------+-------+------------------+
+  | Top | Framework | Mode | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s | Conc. |     Parallel     |
+  +-----+-----------+------+----------+--------------+----------+----------+-------+-------+------------------+
+  |  1  |  aic-npu  | agg  |  373.56  |    186.78    | 8721.14  |  65.05   | 0.365 |   28  | tp2pp1dp1etp1ep1 |
+  |  2  |  aic-npu  | agg  |  704.90  |    176.23    | 7453.30  |  108.03  | 0.689 |   80  | tp4pp1dp1etp1ep1 |
+  |  3  |  aic-npu  | agg  | 1072.26  |    134.03    | 4229.67  |  71.53   | 1.048 |   80  | tp8pp1dp1etp1ep1 |
+  |  4  |  aic-npu  | agg  |  93.84   |    93.84     | 4397.97  |  27.70   | 0.092 |   3   | tp1pp1dp1etp1ep1 |
+  +-----+-----------+------+----------+--------------+----------+----------+-------+-------+------------------+
+
+  PD 分离 (disagg):
+  +-----+-----------+----------------+----------+--------------+----------+----------+-------+-------+----------------------------------------------------+
+  | Top | Framework |      Mode      | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s | Conc. |                      Parallel                      |
+  +-----+-----------+----------------+----------+--------------+----------+----------+-------+-------+----------------------------------------------------+
+  |  1  |  aic-npu  | disagg_prefill | 40697.86 |   3391.49    | 4351.09  |    -     | 4.968 |  156  |                  tp1pp1dp1etp1ep1                  |
+  |  1  |  aic-npu  | disagg_decode  | 5234.69  |    436.22    |    -     |  29.82   | 5.112 |  156  |                  tp2pp1dp1etp1ep1                  |
+  |  1  |  aic-npu  | disagg_overall | 4578.51  |    190.77    | 4351.09  |  29.82   | 4.471 |  156  | prefill[tp1pp1dp1etp1ep1]/decode[tp2pp1dp1etp1ep1] |
+  +-----+-----------+----------------+----------+--------------+----------+----------+-------+-------+----------------------------------------------------+
+
+----------------------------------------------------------------------------------------------------
+RECOMMENDATION
+  serving_mode=disagg  mode=disagg  framework=aic-npu
+  throughput=4578.51 tokens/s
+  ttft=4351.09 ms   tpot=29.82 ms
+  parallel=prefill[tp1pp1dp1etp1ep1]/decode[tp2pp1dp1etp1ep1]   backend=vllm-ascend
+  reason=highest throughput (tokens/s) among the agg / disagg best configurations
+
+artifacts   : itn-regression-128npu/qwen38b-DISABLE/20261019-145256-Qwen-Qwen3.8-27B-ATLAS_800_A2_376T_64G-128
+run.json    : None
+====================================================================================================

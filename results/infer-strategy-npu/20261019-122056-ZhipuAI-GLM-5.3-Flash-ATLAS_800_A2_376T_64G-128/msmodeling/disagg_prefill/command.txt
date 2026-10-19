@@ -1,0 +1,1 @@
+model_configs/msmodeling/GLM5.3-Flash --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --compile --quantize-linear-action DISABLED --quantize-attention-action DISABLED --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000
