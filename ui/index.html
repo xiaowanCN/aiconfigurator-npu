@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>推理部署策略寻优 · Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">IS</div>
+      <div>
+        <div class="logo-name">推理部署调优</div>
+        <div class="logo-sub">infer-strategy-npu</div>
+      </div>
+    </div>
+    <nav class="menu">
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        集群总览
+      </div>
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10M6 20v-6M18 20V4"/></svg>
+        调优工作台
+      </div>
+      <div class="menu-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/></svg>
+        推理策略寻优
+      </div>
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+        监控诊断
+      </div>
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v3H4zM4 10h16v3H4zM4 16h16v3H4z"/></svg>
+        文档中心
+      </div>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <span class="crumb" id="crumb"></span>
+      <div class="topbar-right">
+        <span class="src-badge" id="src-badge"></span>
+        <button class="btn-ghost" onclick="location.reload()">刷新</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- 视图一：任务列表 -->
+      <div id="view-list">
+        <div class="page-head">
+          <h1>推理策略寻优工具</h1>
+          <p>面向大模型推理部署的策略搜索与推荐：输入模型与硬件约束，自动在聚合（agg）与 PD 分离（disagg）模式间寻优。</p>
+        </div>
+
+        <div class="card">
+          <div class="filters">
+            <div class="field">
+              <label>模型</label>
+              <select id="f-model"><option value="">全部</option></select>
+            </div>
+            <div class="field">
+              <label>状态</label>
+              <select id="f-status">
+                <option value="">全部</option>
+                <option value="ok">成功</option>
+                <option value="failed">失败</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>run_id 关键字</label>
+              <input id="f-kw" placeholder="如 GLM-5.3-Flash" style="min-width:180px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><span class="bar"></span>任务记录</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>run_id</th><th>模型</th><th>设备 × 卡数</th><th>量化</th>
+                <th>框架</th><th>状态</th><th>创建时间</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="list-body"></tbody>
+          </table>
+          <div class="pager" id="pager"></div>
+        </div>
+      </div>
+
+      <!-- 视图二：任务详情 -->
+      <div id="view-detail" class="hide">
+        <div class="page-head" style="display:flex;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <h1 id="detail-title" style="font-size:18px;"></h1>
+            <p id="detail-sub"></p>
+          </div>
+          <div style="padding-top:4px;">
+            <button class="btn-ghost" onclick="backToList()">← 返回任务记录</button>
+          </div>
+        </div>
+        <div id="detail-body"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- 新建任务弹窗（占位：接入 HTTP 接口后启用） -->
+<div class="mask" id="mask">
+  <div class="modal">
+    <h3>新建任务</h3>
+    <div class="m-desc">Demo 阶段仅展示已有结果。接入 infer-strategy-npu-server 后，此处表单将提交到 <code>POST /api/v1/tasks</code>。</div>
+    <div class="form-foot">
+      <button class="btn-cancel" onclick="closeModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
