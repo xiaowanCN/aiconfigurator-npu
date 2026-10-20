@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from infer_strategy_npu import __version__
@@ -31,6 +32,17 @@ app = FastAPI(
     title="infer-strategy-npu",
     version=__version__,
     description="NPU 推理部署策略推荐（aic-npu / msmodeling）的异步任务服务",
+)
+
+# 前端 demo 通常跑在独立端口（如 vite 的 5173），必须放开跨域，否则浏览器会直接拦掉请求。
+# 可用 INFER_STRATEGY_API_CORS_ORIGINS 指定白名单（逗号分隔），默认 "*"。
+_cors_origins = os.environ.get("INFER_STRATEGY_API_CORS_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()] or ["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

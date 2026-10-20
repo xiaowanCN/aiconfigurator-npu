@@ -353,7 +353,7 @@ infer-strategy-npu-server = "infer_strategy_npu.api.app:main"
 启动：
 
 ```bash
-pip install -e ".[api]"
+pip install -e .          # fastapi/uvicorn/pydantic 已是主依赖，无需 [api] extra
 infer-strategy-npu-server --host 0.0.0.0 --port 8000 \
   --out-dir /workspace/results/infer-strategy-npu \
   --max-concurrent 1 --max-queued 32 --task-timeout 7200
@@ -372,9 +372,11 @@ infer-strategy-npu-server --host 0.0.0.0 --port 8000 \
 | `INFER_STRATEGY_API_MAX_CONCURRENT` | 并发任务数 | `1` |
 | `INFER_STRATEGY_API_MAX_QUEUED` | 队列长度 | `32` |
 | `INFER_STRATEGY_API_TASK_TIMEOUT_SEC` | 单任务超时 | `7200` |
-| `INFER_STRATEGY_API_KEY` | 鉴权 key（为空则不鉴权） | 空 |
+| `INFER_STRATEGY_API_CORS_ORIGINS` | 允许的跨域来源（逗号分隔） | `*`（前端 demo 期全放开） |
 | `INFER_STRATEGY_LOCAL_MODEL_ROOT` | （已有）msmodeling 本地模型根目录 | `model_configs/msmodeling` |
 | `INFER_STRATEGY_PD_BALANCE_GRANULARITY` | （已有）xPyD 卡数粒度 | `16` |
+
+> 鉴权按评审结论**不做**；如需接入网关，再加 `INFER_STRATEGY_API_KEY`。
 
 （Docker 部署：在统一镜像里加 `EXPOSE 8000`，CMD 改为启动 server；msmodeling 需要 NPU → 服务必须跑在 NPU 主机上。）
 

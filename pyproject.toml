@@ -21,6 +21,9 @@ dependencies = [
     "matplotlib>=3.7",
     "plotext>=5.2,<6.0",
     "prettytable>=3.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.5",
 ]
 
 [project.optional-dependencies]
@@ -28,11 +31,7 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.1",
 ]
-api = [
-    "fastapi>=0.110",
-    "uvicorn>=0.27",
-    "pydantic>=2.5",
-]
+
 
 [project.scripts]
 aic-npu = "aiconfigurator_npu.cli.main:main"

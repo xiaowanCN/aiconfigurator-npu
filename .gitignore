@@ -7,3 +7,5 @@ build/
 .eggs/
 checkpoint*.json
 _debug_out/
+
+uv.lock

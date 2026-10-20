@@ -7,6 +7,7 @@ CLI 与未来的 HTTP 服务共用同一套产物：
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,16 @@ from typing import Any
 
 from infer_strategy_npu.config import DEFAULT_OUT_DIR, slugify
 from infer_strategy_npu.schema import Candidate, UnifiedRunResult, to_float
+
+
+def make_run_id(model: str, device: str, num_devices: int) -> str:
+    """生成运行标识：``{时间戳}-{模型}-{设备}-{卡数}-{8 位唯一后缀}``。
+
+    - 时间戳前缀：目录按创建时间自然排序，肉眼可按时间定位
+    - 8 位后缀：避免同一秒发起的同参数任务重名（CLI 与 HTTP 共用此函数）
+    """
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{stamp}-{slugify(model)}-{slugify(device)}-{num_devices}-{uuid.uuid4().hex[:8]}"
 
 
 @dataclass
@@ -44,8 +55,7 @@ class RunArtifacts:
         """
         base = Path(out_dir or DEFAULT_OUT_DIR).expanduser()
         if not run_id:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            run_id = f"{stamp}-{slugify(model)}-{slugify(device)}-{num_devices}"
+            run_id = make_run_id(model, device, num_devices)
         run_dir = base / run_id
         logs_dir = run_dir / "logs"
         aic_dir = run_dir / "aic_npu"

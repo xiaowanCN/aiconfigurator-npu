@@ -18,7 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from infer_strategy_npu.config import DEFAULT_OUT_DIR, slugify
+from infer_strategy_npu.config import DEFAULT_OUT_DIR
+from infer_strategy_npu.output import make_run_id
 
 TERMINAL_STATUSES = ("SUCCESS", "FAILED", "CANCELLED", "TIMEOUT")
 
@@ -160,11 +161,12 @@ class TaskManager:
             self._order.append(rec.task_id)
 
     def _new_task_id(self, request: dict) -> str:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        model = slugify(str(request.get("model") or "unknown"))
-        device = slugify(str(request.get("device") or "unknown"))
-        devices = request.get("num_devices", 0)
-        return f"{stamp}-{model}-{device}-{devices}-{uuid.uuid4().hex[:8]}"
+        # 复用领域的 make_run_id，保证 CLI 与 HTTP 的目录命名规则完全一致
+        return make_run_id(
+            str(request.get("model") or "unknown"),
+            str(request.get("device") or "unknown"),
+            request.get("num_devices", 0),
+        )
 
     def _running(self) -> list[TaskRecord]:
         return [r for r in self._tasks.values() if r.status == "RUNNING"]
