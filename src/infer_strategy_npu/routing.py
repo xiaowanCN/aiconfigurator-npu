@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from dataclasses import dataclass, field
@@ -20,6 +21,8 @@ from infer_strategy_npu.config import (
     MS_TP_SIZES_LARGE_START,
     MS_TP_SIZES_START,
     PD_BALANCE_MIN_NODES,
+    PD_BALANCE_TABLE_MAX,
+    get_pd_balance_granularity,
 )
 from infer_strategy_npu.devices import AIC_NPU_SUPPORTED_DEVICES, to_aic_system
 from infer_strategy_npu.models import ModelSpec, aic_npu_model_path, msmodeling_model_source
@@ -128,13 +131,45 @@ def _powers_of_two(start: int, limit: int) -> list[int]:
     return sizes
 
 
+_ALLOWED_DEVICE_COUNTS: dict[int, tuple[int, ...]] = {}
+
+
+def allowed_device_counts(granularity: int) -> tuple[int, ...]:
+    """预生成"合理卡数"线性表：``granularity`` 的所有倍数（升序，上限 PD_BALANCE_TABLE_MAX）。
+
+    只按 ``granularity`` 缓存一次；因为「常见 TP（8/16/32/64/128）的并集」恰好等于
+    「其中最小值的倍数」，所以这张表就是那次线性筛的结果（8 → 8,16,24,32,...）。
+    超过表上限的取值走 :func:`floor_to_allowed` 里的算术兜底。
+    """
+    cached = _ALLOWED_DEVICE_COUNTS.get(granularity)
+    if cached is None:
+        cached = tuple(range(granularity, PD_BALANCE_TABLE_MAX + 1, granularity))
+        _ALLOWED_DEVICE_COUNTS[granularity] = cached
+    return cached
+
+
+def floor_to_allowed(value: int, granularity: int) -> int:
+    """向下取到最近的"合理卡数"（表中 <= value 的最大值）；无可用值返回 0。
+
+    例：granularity=16 时 113 -> 112、56 -> 48、25 -> 16。
+    """
+    if value <= 0:
+        return 0
+    table = allowed_device_counts(granularity)
+    if value <= table[-1]:
+        idx = bisect.bisect_right(table, value) - 1
+        return table[idx] if idx >= 0 else 0
+    # 超出表上限：直接按算术向下取整，结果与表语义一致
+    return value - (value % granularity)
+
+
 @dataclass(frozen=True)
 class PdBalance:
     """一组 xPyD 的 P/D 卡数划分。
 
-    总卡数按节点数平均切分：``unit = floor(total / (x + y))``，
+    每节点卡数 ``unit`` 先按 :func:`floor_to_allowed` 落到"合理卡数"上，
     则 ``prefill_devices = unit * x``、``decode_devices = unit * y``，
-    天然满足 ``P + D <= total``（向下取整保证不超总卡数）。
+    天然满足 ``P + D <= total``，且两侧都是 ``granularity`` 的倍数、比例严格为 ``x:y``。
     """
 
     prefill_nodes: int
@@ -169,15 +204,20 @@ def pd_balance_grid(
     total_devices: int,
     max_nodes: int,
     labels: Sequence[str] | None = None,
+    granularity: int | None = None,
 ) -> list[PdBalance]:
     """生成 xPyD 组合列表。
+
+    每节点卡数 ``unit = floor_to_allowed(total // (x + y))``，即先按节点数均分，
+    再向下落到"合理卡数"（``granularity`` 的倍数）上。这样即使 ``--num-devices``
+    是 1013 这类基数，也能得到能被常见 TP 整除的 P/D 卡数，只是总用量略小于给定值。
 
     - 未给 ``labels``：枚举 ``1 <= x, y <= max_nodes``，并按 **P:D 的最简比例**去重
       （``1P1D`` / ``2P2D`` / ``3P3D`` 都是 1:1，只保留最先出现的那组），
       卡数取整后撞车的组合也会去掉。
     - 给了 ``labels``（对应 ``--pd-balance-sizes 1P1D 2P1D 3P1D``）：**只搜指定的组合**，
-      按用户给定顺序；此时不再按比例去重（不同比例的卡数划分确实不同，如 1P1D=64/64
-      与 3P3D=63/63），但仍会去掉卡数完全相同的重复项，并跳过卡数不够切分的组合。
+      按用户给定顺序；此时不再按比例去重（不同比例的卡数划分确实不同），但仍会去掉
+      卡数完全相同的重复项，并跳过卡数不够切分的组合。
     """
     if labels:
         pairs = [parse_pd_balance_label(v) for v in labels]
@@ -190,11 +230,12 @@ def pd_balance_grid(
         ]
         dedupe_ratio = True
 
+    gran = get_pd_balance_granularity(granularity)
     grid: list[PdBalance] = []
     seen_ratios: set[tuple[int, int]] = set()
     seen_devices: set[tuple[int, int]] = set()
     for x, y in pairs:
-        unit = int(total_devices) // (x + y)
+        unit = floor_to_allowed(int(total_devices) // (x + y), gran)
         if unit <= 0:
             continue
         combo = PdBalance(x, y, unit * x, unit * y)
@@ -220,6 +261,12 @@ def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None)
     - 其余模型从 1 起跳；
     均为 2 的幂，上限为不超过**当前侧可用卡数**的最大 2 的幂。
 
+    候选还必须是**能整除该侧卡数**的 2 的幂（否则 msmodeling 会因 tp 不整除
+    ``--num-devices`` 报错，如 42 卡配 tp=32）。若按起始值筛完为空，则回退到
+    "能整除该侧卡数的最大 2 的幂"，保证至少有一个候选（例：48 卡 -> tp=16）。
+
+    小模型起始值仍为 1（`[1, 2, 4, ...]`），大模型从 32 起跳，两者都受整除约束。
+
     ``device_count`` 为该侧的卡数：PD 混部用总卡数，PD 分离时 P/D 各自用 xPyD
     拆分后分到的卡数，因此 TP 上限会随划分动态变化。
     """
@@ -227,11 +274,20 @@ def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None)
         return [int(v) for v in request.tp_sizes]
 
     limit = int(device_count if device_count is not None else request.num_devices)
+    if limit <= 0:
+        return [1]
     start = MS_TP_SIZES_LARGE_START if is_large_tp_model(request.model) else MS_TP_SIZES_START
-    sizes = _powers_of_two(start, limit)
+    # max_divisor = 能整除 limit 的最大 2 的幂；所有更小的 2 的幂自然也能整除
+    max_divisor = limit & -limit
+    sizes = []
+    value = 1
+    while value <= max_divisor:
+        if value >= start:
+            sizes.append(value)
+        value *= 2
     if not sizes:
-        # 该侧卡数小于起始值（例如 32 起跳但只有 8 卡）时退化为从 1 推导，保证有候选
-        sizes = _powers_of_two(MS_TP_SIZES_START, limit) or [1]
+        # 起始值超过可整除上限（如大模型 32 起跳但只有 48 卡）-> 回退到最大可整除值
+        sizes = [max_divisor] if max_divisor > 0 else [1]
     return sizes
 
 
