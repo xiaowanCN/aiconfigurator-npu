@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "run_id": "20261019-173141-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256",
+  "generated_at": "2026-10-19T17:31:41+08:00",
+  "status": "failed",
+  "request": {
+    "model": "deepseek-ai/DeepSeek-V4-Pro",
+    "device": "ATLAS_800_A2_376T_64G",
+    "num_devices": 256,
+    "input_length": 8192,
+    "output_length": 1024,
+    "tpot_limit": 200,
+    "ttft_limit": 30000,
+    "quantize": "W8A8",
+    "mode": "recommend",
+    "top_n": 10,
+    "framework": "auto",
+    "local_model_root": "model_configs/msmodeling",
+    "out_dir": "./itn-regression-128npu/deepseekV4-W8A8",
+    "quantize_linear_action": null,
+    "quantize_attention_action": null,
+    "speculative_method": "dflash",
+    "num_speculative_tokens": 7,
+    "acceptance_length": 5,
+    "num_draft_layers": 6,
+    "tp_sizes": null,
+    "jobs": 32,
+    "max_search_combinations": null,
+    "compile_model": false,
+    "pd_balance_search": true,
+    "pd_balance_max": 3,
+    "pd_balance_sizes": null,
+    "dry_run": false
+  },
+  "routing": {
+    "framework": "msmodeling",
+    "reason": "model deepseek-ai/DeepSeek-V4-Pro with quantize=W8A8 is served by msmodeling (aic-npu only covers DeepSeek-R1 / Qwen3.8-27B / DeepSeek-V4-Pro with quantize=DISABLE)",
+    "aic_system": null,
+    "aic_model_path": null,
+    "ms_model_source": "model_configs/msmodeling/DeepSeek-V4-Pro",
+    "commands": [
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 256 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 256 --tpot-limit 200 --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 85 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 64 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 192 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 85 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 153 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 192 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 64 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 153 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+      "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200"
+    ]
+  },
+  "frameworks": [
+    {
+      "framework": "msmodeling",
+      "status": "failed",
+      "message": "1P2D:disagg_prefill msmodeling argument parsing exited (code=2) | 1P2D:disagg_decode msmodeling argument parsing exited (code=2) | 2P1D:disagg_prefill msmodeling argument parsing exited (code=2) | 2P1D:disagg_decode msmodeling argument parsing exited (code=2) | 2P3D:disagg_prefill msmodeling argument parsing exited (code=2) | 2P3D:disagg_decode msmodeling argument parsing exited (code=2) | 3P2D:disagg_prefill msmodeling argument parsing exited (code=2) | 3P2D:disagg_decode msmodeling argument parsing exited (code=2)",
+      "commands": [
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 256 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 256 --tpot-limit 200 --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 85 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 64 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 192 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 85 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 153 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 192 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 64 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 153 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000",
+        "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V4-Pro --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200"
+      ],
+      "artifacts": {
+        "root": "itn-regression-128npu/deepseekV4-W8A8/20261019-173141-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/msmodeling",
+        "pd_balance_search": true,
+        "pd_balance_grid": [
+          {
+            "label": "1P1D",
+            "prefill_nodes": 1,
+            "decode_nodes": 1,
+            "prefill_devices": 128,
+            "decode_devices": 128
+          },
+          {
+            "label": "1P2D",
+            "prefill_nodes": 1,
+            "decode_nodes": 2,
+            "prefill_devices": 85,
+            "decode_devices": 170
+          },
+          {
+            "label": "1P3D",
+            "prefill_nodes": 1,
+            "decode_nodes": 3,
+            "prefill_devices": 64,
+            "decode_devices": 192
+          },
+          {
+            "label": "2P1D",
+            "prefill_nodes": 2,
+            "decode_nodes": 1,
+            "prefill_devices": 170,
+            "decode_devices": 85
+          },
+          {
+            "label": "2P3D",
+            "prefill_nodes": 2,
+            "decode_nodes": 3,
+            "prefill_devices": 102,
+            "decode_devices": 153
+          },
+          {
+            "label": "3P1D",
+            "prefill_nodes": 3,
+            "decode_nodes": 1,
+            "prefill_devices": 192,
+            "decode_devices": 64
+          },
+          {
+            "label": "3P2D",
+            "prefill_nodes": 3,
+            "decode_nodes": 2,
+            "prefill_devices": 153,
+            "decode_devices": 102
+          }
+        ]
+      },
+      "agg": {
+        "mode": "agg",
+        "available": false,
+        "best": null,
+        "prefill": null,
+        "decode": null,
+        "candidates": [],
+        "source_files": [],
+        "label": "",
+        "pd_balance": null
+      },
+      "disagg": null,
+      "disagg_variants": []
+    }
+  ],
+  "recommendation": null,
+  "errors": [
+    "1P2D:disagg_prefill msmodeling argument parsing exited (code=2) | 1P2D:disagg_decode msmodeling argument parsing exited (code=2) | 2P1D:disagg_prefill msmodeling argument parsing exited (code=2) | 2P1D:disagg_decode msmodeling argument parsing exited (code=2) | 2P3D:disagg_prefill msmodeling argument parsing exited (code=2) | 2P3D:disagg_decode msmodeling argument parsing exited (code=2) | 3P2D:disagg_prefill msmodeling argument parsing exited (code=2) | 3P2D:disagg_decode msmodeling argument parsing exited (code=2)"
+  ],
+  "artifacts": {
+    "run_dir": "itn-regression-128npu/deepseekV4-W8A8/20261019-173141-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256",
+    "logs_dir": "itn-regression-128npu/deepseekV4-W8A8/20261019-173141-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/logs"
+  }
+}

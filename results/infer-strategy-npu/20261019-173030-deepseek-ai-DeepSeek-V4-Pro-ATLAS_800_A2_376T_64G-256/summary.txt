@@ -1,0 +1,44 @@
+====================================================================================================
+infer-strategy-npu - recommend summary
+====================================================================================================
+run_id      : 20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256
+status      : ok
+model       : deepseek-ai/DeepSeek-V4-Pro
+device      : ATLAS_800_A2_376T_64G  x256
+isl/osl     : 8192/1024   tpot-limit=200 ms   ttft-limit=30000 ms
+quantize    : DISABLE
+framework   : aic-npu  (model deepseek-ai/DeepSeek-V4-Pro is in the aic-npu allowlist and --quantize=DISABLE)
+model-path  : /workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json
+
+[aic-npu] status=ok
+  $ aic-npu default --model-path /workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json --total-gpus 256 --system ascend_910b --backend vllm-ascend --backend-version 0.23.0 --database-mode HYBRID --isl 8192 --osl 1024 --ttft 30000 --tpot 200 --top-n 10 --save-dir itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/aic_npu
+
+  PD 混部 (agg):
+  +-----+-----------+------+----------+--------------+----------+----------+-------+-------+---------------------+
+  | Top | Framework | Mode | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s | Conc. |       Parallel      |
+  +-----+-----------+------+----------+--------------+----------+----------+-------+-------+---------------------+
+  |  1  |  aic-npu  | agg  |  89.20   |     1.39     | 26448.39 |  187.65  | 0.087 |   20  |  tp16pp1dp4etp1ep64 |
+  |  2  |  aic-npu  | agg  |  55.32   |     0.86     | 21376.21 |  188.11  | 0.054 |   12  |  tp32pp1dp2etp1ep64 |
+  |  3  |  aic-npu  | agg  |  103.09  |     0.81     | 26357.42 |  197.24  | 0.101 |   24  | tp32pp1dp4etp1ep128 |
+  +-----+-----------+------+----------+--------------+----------+----------+-------+-------+---------------------+
+
+  PD 分离 (disagg):
+  +-----+-----------+----------------+----------+--------------+----------+----------+-------+-------+--------------------------------------------------------+
+  | Top | Framework |      Mode      | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s | Conc. |                        Parallel                        |
+  +-----+-----------+----------------+----------+--------------+----------+----------+-------+-------+--------------------------------------------------------+
+  |  1  |  aic-npu  | disagg_prefill | 2367.49  |    36.99     | 24885.33 |    -     | 0.289 |   64  |                   tp16pp1dp4etp1ep64                   |
+  |  1  |  aic-npu  | disagg_decode  |  359.42  |     5.62     |    -     |  178.35  | 0.351 |   64  |                   tp1pp1dp64etp1ep64                   |
+  |  1  |  aic-npu  | disagg_overall |  266.34  |     2.08     | 24885.33 |  178.35  | 0.260 |   64  | prefill[tp16pp1dp4etp1ep64]/decode[tp1pp1dp64etp1ep64] |
+  +-----+-----------+----------------+----------+--------------+----------+----------+-------+-------+--------------------------------------------------------+
+
+----------------------------------------------------------------------------------------------------
+RECOMMENDATION
+  serving_mode=disagg  mode=disagg  framework=aic-npu
+  throughput=266.34 tokens/s
+  ttft=24885.33 ms   tpot=178.35 ms
+  parallel=prefill[tp16pp1dp4etp1ep64]/decode[tp1pp1dp64etp1ep64]   backend=vllm-ascend
+  reason=highest throughput (tokens/s) among the agg / disagg best configurations
+
+artifacts   : itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256
+run.json    : None
+====================================================================================================

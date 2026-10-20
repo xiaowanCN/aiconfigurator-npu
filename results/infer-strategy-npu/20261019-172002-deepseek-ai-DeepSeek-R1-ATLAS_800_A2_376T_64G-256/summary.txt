@@ -1,0 +1,88 @@
+====================================================================================================
+infer-strategy-npu - recommend summary
+====================================================================================================
+run_id      : 20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256
+status      : ok
+model       : deepseek-ai/DeepSeek-R1
+device      : ATLAS_800_A2_376T_64G  x256
+isl/osl     : 8192/1024   tpot-limit=200 ms   ttft-limit=30000 ms
+quantize    : W8A8
+framework   : msmodeling  (model deepseek-ai/DeepSeek-R1 with quantize=W8A8 is served by msmodeling (aic-npu only covers DeepSeek-R1 / Qwen3.8-27B / DeepSeek-V4-Pro with quantize=DISABLE))
+model-source: model_configs/msmodeling/DeepSeek-R1
+
+[msmodeling] status=ok
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 256 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 256 --tpot-limit 200 --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 128 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 85 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 64 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 192 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 85 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 153 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 192 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 64 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 153 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --jobs 32 --tp-sizes 32 64 128 --disagg --ttft-limit 30000
+  $ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200
+  ! 1P2D:disagg_prefill msmodeling argument parsing exited (code=2) | 1P2D:disagg_decode msmodeling argument parsing exited (code=2) | 2P1D:disagg_prefill msmodeling argument parsing exited (code=2) | 2P1D:disagg_decode msmodeling argument parsing exited (code=2) | 2P3D:disagg_prefill msmodeling argument parsing exited (code=2) | 2P3D:disagg_decode msmodeling argument parsing exited (code=2) | 3P2D:disagg_prefill msmodeling argument parsing exited (code=2) | 3P2D:disagg_decode msmodeling argument parsing exited (code=2)
+
+  PD 混部 (agg):
+  +-----+------------+------+----------+--------------+----------+----------+-------+-------+-----------------------------------------------------+
+  | Top | Framework  | Mode | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s | Conc. |                       Parallel                      |
+  +-----+------------+------+----------+--------------+----------+----------+-------+-------+-----------------------------------------------------+
+  |  1  | msmodeling | agg  | 1592.76  |     6.22     | 19010.36 |  80.36   | 1.555 |  128  |  TP=32 | PP=1 | DP=8 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  2  | msmodeling | agg  | 2099.46  |     8.20     | 26614.50 |  91.45   | 2.050 |  192  |  TP=32 | PP=1 | DP=8 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  3  | msmodeling | agg  | 2210.83  |     8.64     | 28370.23 |  94.08   | 2.159 |  208  |  TP=32 | PP=1 | DP=8 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  4  | msmodeling | agg  | 2261.59  |     8.83     | 29361.11 |  95.51   | 2.209 |  216  |  TP=32 | PP=1 | DP=8 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  5  | msmodeling | agg  |  791.98  |     3.09     | 17817.06 |  80.81   | 0.773 |   64  |  TP=64 | PP=1 | DP=4 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  6  | msmodeling | agg  | 1050.04  |     4.10     | 24943.89 |  91.42   | 1.025 |   96  |  TP=64 | PP=1 | DP=4 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  7  | msmodeling | agg  | 1157.83  |     4.52     | 28507.30 |  96.73   | 1.131 |  112  |  TP=64 | PP=1 | DP=4 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  8  | msmodeling | agg  | 1184.03  |     4.62     | 29306.83 |  97.97   | 1.156 |  116  |  TP=64 | PP=1 | DP=4 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  9  | msmodeling | agg  |  383.12  |     1.50     | 17250.04 |  83.52   | 0.374 |   32  | TP=128 | PP=1 | DP=2 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  10 | msmodeling | agg  |  511.11  |     2.00     | 24150.06 |  93.91   | 0.499 |   48  | TP=128 | PP=1 | DP=2 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  11 | msmodeling | agg  |  565.04  |     2.21     | 27600.07 |  99.11   | 0.552 |   56  | TP=128 | PP=1 | DP=2 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  |  12 | msmodeling | agg  |  590.59  |     2.31     | 29210.92 |  101.59  | 0.577 |   60  | TP=128 | PP=1 | DP=2 | EP=256 | MOE-TP=1 | MOE-DP=1 |
+  +-----+------------+------+----------+--------------+----------+----------+-------+-------+-----------------------------------------------------+
+
+  PD 分离 (disagg) - xPyD 变体 3 组:
+
+    [1P1D]  P=128 卡 (1 节点)   D=128 卡 (1 节点)
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+---------------------------------------------------------------------+
+    | Top | Framework  |     Mode     | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s  | Conc. |                               Parallel                              |
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+---------------------------------------------------------------------+
+    |  1  | msmodeling | 1P1D_prefill | 17279.24 |    134.99    | 22756.56 |    -     | 16.874 |   48  |          TP=32 | PP=1 | DP=4 | EP=128 | MOE-TP=1 | MOE-DP=1         |
+    |  1  | msmodeling | 1P1D_decode  | 8521.26  |    66.57     |    -     |  60.09   | 8.322  |  512  | TP=32 | PP=1 | DP=4 | EP=128 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    |  1  | msmodeling | 1P1D_overall | 8521.26  |    66.57     |    -     |  60.09   | 8.322  |  512  | TP=32 | PP=1 | DP=4 | EP=128 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+---------------------------------------------------------------------+
+
+    [1P3D]  P=64 卡 (1 节点)   D=192 卡 (3 节点)
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+---------------------------------------------------------------------+
+    | Top | Framework  |     Mode     | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s  | Conc. |                               Parallel                              |
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+---------------------------------------------------------------------+
+    |  1  | msmodeling | 1P3D_prefill | 8499.26  |    132.80    | 17349.27 |    -     | 8.300  |   18  |          TP=32 | PP=1 | DP=2 | EP=64 | MOE-TP=1 | MOE-DP=1          |
+    |  1  | msmodeling | 1P3D_decode  | 12578.32 |    65.51     |    -     |  68.69   | 12.284 |  864  | TP=32 | PP=1 | DP=6 | EP=192 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    |  1  | msmodeling | 1P3D_overall | 12578.32 |    65.51     |    -     |  68.69   | 12.284 |  864  | TP=32 | PP=1 | DP=6 | EP=192 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+---------------------------------------------------------------------+
+
+    [3P1D]  P=192 卡 (3 节点)   D=64 卡 (1 节点)
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+--------------------------------------------------------------------+
+    | Top | Framework  |     Mode     | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s  | Conc. |                              Parallel                              |
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+--------------------------------------------------------------------+
+    |  1  | msmodeling | 3P1D_prefill | 25896.15 |    134.88    | 18980.43 |    -     | 25.289 |   60  |         TP=32 | PP=1 | DP=6 | EP=192 | MOE-TP=1 | MOE-DP=1         |
+    |  1  | msmodeling | 3P1D_decode  | 3796.41  |    59.32     |    -     |  66.91   | 3.707  |  254  | TP=32 | PP=1 | DP=2 | EP=64 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    |  1  | msmodeling | 3P1D_overall | 3796.41  |    59.32     |    -     |  66.91   | 3.707  |  254  | TP=32 | PP=1 | DP=2 | EP=64 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    +-----+------------+--------------+----------+--------------+----------+----------+--------+-------+--------------------------------------------------------------------+
+
+----------------------------------------------------------------------------------------------------
+RECOMMENDATION
+  serving_mode=disagg  mode=disagg_decode  framework=msmodeling
+  throughput=12578.32 tokens/s
+  ttft=- ms   tpot=68.69 ms
+  parallel=TP=32 | PP=1 | DP=6 | EP=192 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5   backend=msmodeling
+  reason=highest throughput (tokens/s) among the agg / disagg best configurations
+
+artifacts   : itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256
+run.json    : None
+====================================================================================================

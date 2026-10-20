@@ -1,0 +1,1 @@
+model_configs/msmodeling/GLM5.3-Flash --device ATLAS_800_A2_376T_64G --num-devices 170 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 128 --disagg --tpot-limit 200
