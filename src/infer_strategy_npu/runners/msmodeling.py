@@ -134,6 +134,10 @@ class MsmodelingRunner(FrameworkRunner):
         request = ctx.request
         failures: list[str] = []
 
+        # 进度总量：agg 1 个 + 每个 xPyD 组 2 个（prefill/decode）
+        total_steps = 1 + 2 * len(self._pd_grid(ctx))
+        done_steps = 0
+
         # ---- PD 混部(agg)：与 xPyD 无关，始终用总卡数 ----
         agg = ServingModeResult(mode=MODE_AGG)
         agg_candidates, agg_best = self._safe_subtask(
@@ -151,12 +155,14 @@ class MsmodelingRunner(FrameworkRunner):
             agg.candidates = agg_candidates
             agg.best = agg_best
         run.agg = agg
+        done_steps += 1
+        ctx.report_progress("agg", done_steps, total_steps)
 
         # ---- PD 分离(disagg)：按 xPyD 分组，每组单独跑 P/D 两侧 ----
         variants: list[ServingModeResult] = []
         run.artifacts["pd_balance_search"] = bool(request.pd_balance_search)
         if request.pd_balance_search:
-            grid = pd_balance_grid(request.num_devices, request.pd_balance_max, request.pd_balance_sizes)
+            grid = self._pd_grid(ctx)
             run.artifacts["pd_balance_grid"] = [
                 {
                     "label": combo.label,
@@ -173,10 +179,14 @@ class MsmodelingRunner(FrameworkRunner):
                 )
             for combo in grid:
                 variant = self._run_disagg_variant(ctx, combo, failures)
+                done_steps += 2
+                ctx.report_progress(f"{combo.label}/disagg", done_steps, total_steps)
                 if variant is not None:
                     variants.append(variant)
         else:
             variant = self._run_disagg_variant(ctx, None, failures)
+            done_steps += 2
+            ctx.report_progress("disagg", done_steps, total_steps)
             if variant is not None:
                 variants.append(variant)
 
@@ -191,6 +201,13 @@ class MsmodelingRunner(FrameworkRunner):
         return run
 
     # ------------------------------------------------------------------ xPyD
+
+    def _pd_grid(self, ctx: RunnerContext) -> list[PdBalance]:
+        """当前请求的 xPyD 组合列表；关闭 --pd-balance-search 时为空（走单一 disagg）。"""
+        request = ctx.request
+        if not request.pd_balance_search:
+            return []
+        return pd_balance_grid(request.num_devices, request.pd_balance_max, request.pd_balance_sizes)
 
     def _run_disagg_variant(
         self,

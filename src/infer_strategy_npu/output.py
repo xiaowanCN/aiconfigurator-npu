@@ -28,10 +28,24 @@ class RunArtifacts:
     files: list[str] = field(default_factory=list)
 
     @classmethod
-    def create(cls, out_dir: str | None, *, model: str, device: str, num_devices: int) -> RunArtifacts:
+    def create(
+        cls,
+        out_dir: str | None,
+        *,
+        model: str,
+        device: str,
+        num_devices: int,
+        run_id: str | None = None,
+    ) -> RunArtifacts:
+        """创建一次运行的产物目录。
+
+        ``run_id`` 可由调用方（HTTP 服务的 task_id）指定，保证"任务 id == 结果目录名"；
+        不指定时按 ``{时间戳}-{模型}-{设备}-{卡数}`` 自动生成（CLI 行为不变）。
+        """
         base = Path(out_dir or DEFAULT_OUT_DIR).expanduser()
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        run_id = f"{stamp}-{slugify(model)}-{slugify(device)}-{num_devices}"
+        if not run_id:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            run_id = f"{stamp}-{slugify(model)}-{slugify(device)}-{num_devices}"
         run_dir = base / run_id
         logs_dir = run_dir / "logs"
         aic_dir = run_dir / "aic_npu"

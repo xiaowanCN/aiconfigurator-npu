@@ -11,7 +11,7 @@ from infer_strategy_npu.output import RunArtifacts, render_summary
 from infer_strategy_npu.quantize import normalize_quantize
 from infer_strategy_npu.routing import RoutingError, route
 from infer_strategy_npu.runners import AicNpuRunner, MsmodelingRunner
-from infer_strategy_npu.runners.base import RunnerContext, throughput_of
+from infer_strategy_npu.runners.base import ProgressFn, RunnerContext, throughput_of
 from infer_strategy_npu.schema import Candidate, RecommendRequest, UnifiedRunResult
 
 logger = logging.getLogger("infer_strategy_npu")
@@ -42,8 +42,19 @@ def _build_recommendation(frameworks) -> dict | None:
     }
 
 
-def recommend(request: RecommendRequest, *, log: logging.Logger | None = None) -> UnifiedRunResult:
-    """执行一次推荐：路由 -> 下发框架 -> 归一化结果 -> 落盘。"""
+def recommend(
+    request: RecommendRequest,
+    *,
+    log: logging.Logger | None = None,
+    run_id: str | None = None,
+    on_progress: ProgressFn | None = None,
+) -> UnifiedRunResult:
+    """执行一次推荐：路由 -> 下发框架 -> 归一化结果 -> 落盘。
+
+    ``run_id`` 由 HTTP 服务传入（任务 id == 结果目录名）；CLI 不传则自动生成。
+    ``on_progress`` 为可选的进度回调（见 :data:`~.runners.base.ProgressFn`），
+    CLI 下为 None，不影响既有行为。
+    """
     active_logger = log or logger
     result = UnifiedRunResult(
         generated_at=datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -75,6 +86,7 @@ def recommend(request: RecommendRequest, *, log: logging.Logger | None = None) -
         model=model_spec.model_id,
         device=request.device,
         num_devices=request.num_devices,
+        run_id=run_id,
     )
     result.run_id = artifacts.run_id
     result.artifacts = {
@@ -107,6 +119,7 @@ def recommend(request: RecommendRequest, *, log: logging.Logger | None = None) -
         decision=decision,
         artifacts=artifacts,
         logger=active_logger,
+        on_progress=on_progress,
     )
 
     framework_run = runner.run(ctx)

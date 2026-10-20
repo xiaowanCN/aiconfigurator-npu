@@ -28,10 +28,16 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.1",
 ]
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.5",
+]
 
 [project.scripts]
 aic-npu = "aiconfigurator_npu.cli.main:main"
 infer-strategy-npu = "infer_strategy_npu.cli:main"
+infer-strategy-npu-server = "infer_strategy_npu.api.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

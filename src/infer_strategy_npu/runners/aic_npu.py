@@ -116,6 +116,8 @@ class AicNpuRunner(FrameworkRunner):
         if not run.agg.available and not run.disagg.available:
             run.status = "failed"
             run.message = f"aic-npu produced no usable agg/disagg results: {tail_text(log_path)}"
+        # aic-npu 一次调用即产出 agg+disagg，进度按单个步骤上报
+        ctx.report_progress("aic_npu", 1, 1)
         return run
 
     # ------------------------------------------------------------------ 解析

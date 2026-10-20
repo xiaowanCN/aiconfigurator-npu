@@ -358,7 +358,11 @@ infer-strategy-npu-server --host 0.0.0.0 --port 8000 \
   --out-dir /workspace/results/infer-strategy-npu \
   --max-concurrent 1 --max-queued 32 --task-timeout 7200
 # 或 uvicorn infer_strategy_npu.api.app:app --host 0.0.0.0 --port 8000
+# 交互式文档：http://<host>:8000/docs
 ```
+
+落地位置：`src/infer_strategy_npu/api/`（`app.py` 路由 / `schemas.py` 请求模型与响应封装 /
+`tasks.py` 任务管理与子进程 worker）。CLI 路径不导入该包，未装 `.[api]` 也不影响命令行。
 
 环境变量：
 

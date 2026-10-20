@@ -7,6 +7,7 @@ import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from infer_strategy_npu.models import ModelSpec
 from infer_strategy_npu.output import RunArtifacts
@@ -50,6 +51,10 @@ def throughput_of(tokens_per_s: float | None, per_device: float | None) -> float
     return float("-inf")
 
 
+ProgressFn = Callable[[str, int, int], None]
+"""进度回调：``(stage, done, total)``；``stage`` 形如 ``agg`` / ``3P1D/disagg_prefill``。"""
+
+
 @dataclass
 class RunnerContext:
     """Runner 执行上下文。"""
@@ -59,6 +64,17 @@ class RunnerContext:
     decision: RoutingDecision
     artifacts: RunArtifacts
     logger: logging.Logger
+    on_progress: ProgressFn | None = None
+    """可选进度回调；HTTP 服务用它把进度写盘，CLI 下为 None（不影响行为）。"""
+
+    def report_progress(self, stage: str, done: int, total: int) -> None:
+        """上报一个子任务的完成进度（total<=0 时不上报）。"""
+        if self.on_progress is None or total <= 0:
+            return
+        try:
+            self.on_progress(stage, done, total)
+        except Exception:  # pragma: no cover - 进度上报失败不能影响主流程
+            self.logger.debug("progress callback failed for stage=%s", stage, exc_info=True)
 
 
 class FrameworkRunner(abc.ABC):
