@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "run_id": "20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2-1bb821a2",
+  "run_id": "20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2",
   "generated_at": "2026-10-19T17:20:02+08:00",
   "status": "ok",
   "request": {
@@ -79,7 +79,7 @@
         "python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-R1 --device ATLAS_800_A2_376T_64G --num-devices 102 --input-length 8192 --output-length 1024 --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 64 --disagg --tpot-limit 200"
       ],
       "artifacts": {
-        "root": "itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2-1bb821a2/msmodeling",
+        "root": "itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2/msmodeling",
         "pd_balance_search": true,
         "pd_balance_grid": [
           {
@@ -2054,7 +2054,7 @@
   },
   "errors": [],
   "artifacts": {
-    "run_dir": "itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2-1bb821a2",
-    "logs_dir": "itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2-1bb821a2/logs"
+    "run_dir": "itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2",
+    "logs_dir": "itn-regression-128npu/deepseekR1-W8A8/20261019-172002-deepseek-ai-DeepSeek-R1-ATLAS_800_A2_376T_64G-256-1bb821a2/logs"
   }
 }

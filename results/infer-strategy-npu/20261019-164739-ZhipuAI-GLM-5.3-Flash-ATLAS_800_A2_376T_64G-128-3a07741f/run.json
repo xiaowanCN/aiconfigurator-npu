@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "run_id": "20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f-3a07741f",
+  "run_id": "20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f",
   "generated_at": "2026-10-19T16:47:39+08:00",
   "status": "ok",
   "request": {
@@ -79,7 +79,7 @@
         "python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.3-Flash --device ATLAS_800_A2_376T_64G --num-devices 50 --input-length 8192 --output-length 1024 --quantize-linear-action DISABLED --quantize-attention-action DISABLED --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6 --jobs 32 --tp-sizes 32 --disagg --tpot-limit 200"
       ],
       "artifacts": {
-        "root": "itn-regression-128npu/glm53flash-DISABLE/20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f-3a07741f/msmodeling",
+        "root": "itn-regression-128npu/glm53flash-DISABLE/20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f/msmodeling",
         "pd_balance_search": true,
         "pd_balance_grid": [
           {
@@ -1709,7 +1709,7 @@
   },
   "errors": [],
   "artifacts": {
-    "run_dir": "itn-regression-128npu/glm53flash-DISABLE/20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f-3a07741f",
-    "logs_dir": "itn-regression-128npu/glm53flash-DISABLE/20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f-3a07741f/logs"
+    "run_dir": "itn-regression-128npu/glm53flash-DISABLE/20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f",
+    "logs_dir": "itn-regression-128npu/glm53flash-DISABLE/20261019-164739-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-3a07741f/logs"
   }
 }
