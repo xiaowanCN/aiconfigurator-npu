@@ -376,13 +376,6 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
 
 环境变量 `INFER_STRATEGY_LOCAL_MODEL_ROOT` 可覆盖根目录；默认值为相对路径 `model_configs/msmodeling`。
 
-**环境变量汇总**：
-
-| 变量 | 作用 | 默认值 |
-|---|---|---|
-| `INFER_STRATEGY_LOCAL_MODEL_ROOT` | msmodeling 本地模型根目录 | `model_configs/msmodeling` |
-| `INFER_STRATEGY_PD_BALANCE_GRANULARITY` | xPyD 卡数粒度（P/D 卡数须为其倍数） | `16`（见 §3.2） |
-
 ---
 
 ## 6. 统一结果 Schema（`run.json`，schema_version = 1.0）

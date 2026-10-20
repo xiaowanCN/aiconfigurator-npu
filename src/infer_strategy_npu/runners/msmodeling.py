@@ -50,10 +50,14 @@ def _best_variant(variants: list[ServingModeResult]) -> ServingModeResult | None
         return None
     return max(usable, key=lambda v: throughput_of(v.best.throughput_tokens_per_s, v.best.throughput_tokens_per_s_per_device))
 
+# 负向断言 (?<![A-Za-z-]) 用于避免 "MOE-TP=1" / "MOE-DP=1" 被 TP / DP 误匹配
 _PARALLEL_RE = {
-    "tp": re.compile(r"TP\s*=\s*(\d+)", re.IGNORECASE),
-    "pp": re.compile(r"PP\s*=\s*(\d+)", re.IGNORECASE),
-    "dp": re.compile(r"DP\s*=\s*(\d+)", re.IGNORECASE),
+    "tp": re.compile(r"(?<![A-Za-z\-])TP\s*=\s*(\d+)", re.IGNORECASE),
+    "pp": re.compile(r"(?<![A-Za-z\-])PP\s*=\s*(\d+)", re.IGNORECASE),
+    "dp": re.compile(r"(?<![A-Za-z\-])DP\s*=\s*(\d+)", re.IGNORECASE),
+    "ep": re.compile(r"(?<![A-Za-z\-])EP\s*=\s*(\d+)", re.IGNORECASE),
+    "moe_tp": re.compile(r"MOE[-_ ]?TP\s*=\s*(\d+)", re.IGNORECASE),
+    "moe_dp": re.compile(r"MOE[-_ ]?DP\s*=\s*(\d+)", re.IGNORECASE),
 }
 
 
@@ -63,7 +67,11 @@ def _first_int(pattern: re.Pattern[str], text: str) -> int | None:
 
 
 def parse_parallel(value: str | None) -> ParallelConfig:
-    """从 msmodeling 的 ``TP=8 | PP=1 | DP=1`` 串解析并行度。"""
+    """从 msmodeling 的 ``TP=32 | PP=1 | DP=4 | EP=128 | MOE-TP=1 | MOE-DP=1`` 串解析并行度。
+
+    ``EP`` 就是 MoE 专家并行，映射到统一字段 ``moe_ep``；``MOE-TP`` / ``MOE-DP``
+    分别映射到 ``moe_tp`` / ``moe_dp``。
+    """
     if not value:
         return ParallelConfig()
     text = str(value)
@@ -71,6 +79,31 @@ def parse_parallel(value: str | None) -> ParallelConfig:
         tp=_first_int(_PARALLEL_RE["tp"], text),
         pp=_first_int(_PARALLEL_RE["pp"], text),
         dp=_first_int(_PARALLEL_RE["dp"], text),
+        moe_tp=_first_int(_PARALLEL_RE["moe_tp"], text),
+        moe_ep=_first_int(_PARALLEL_RE["ep"], text),
+        moe_dp=_first_int(_PARALLEL_RE["moe_dp"], text),
+    )
+
+
+def _int_or(value: object, fallback: int | None) -> int | None:
+    parsed = to_int(value)
+    return parsed if parsed is not None else fallback
+
+
+def parallel_from_ms_row(row) -> ParallelConfig:
+    """msmodeling 单行的并行度：优先取数值列（更可靠），缺失时回退解析 ``parallel`` 串。
+
+    summary.csv 同时提供了 ``tp_size/pp_size/dp_size/ep_size/moe_dp_size`` 数值列与
+    ``parallel`` 字符串，数值列优先；``moe_tp`` 无独立数值列，只能从串里取。
+    """
+    parsed = parse_parallel(_row_get(row, "parallel"))
+    return ParallelConfig(
+        tp=_int_or(_row_get(row, "tp_size"), parsed.tp),
+        pp=_int_or(_row_get(row, "pp_size"), parsed.pp),
+        dp=_int_or(_row_get(row, "dp_size"), parsed.dp),
+        moe_tp=parsed.moe_tp,
+        moe_ep=_int_or(_row_get(row, "ep_size"), parsed.moe_ep),
+        moe_dp=_int_or(_row_get(row, "moe_dp_size"), parsed.moe_dp),
     )
 
 
@@ -377,7 +410,7 @@ class MsmodelingRunner(FrameworkRunner):
             concurrency=to_int(_row_get(row, "concurrency")),
             batch_size=to_int(_row_get(row, "batch_size")),
             num_devices=to_int(_row_get(row, "num_devices")),
-            parallel=parse_parallel(parallel_str),
+            parallel=parallel_from_ms_row(row),
             parallel_str=parallel_str,
             quantize=QuantizeSpec(
                 linear=_row_get(row, "quantize_linear_action") or default_linear,

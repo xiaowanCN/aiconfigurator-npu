@@ -71,6 +71,10 @@ class ParallelConfig:
     dp: int | None = None
     moe_tp: int | None = None
     moe_ep: int | None = None
+    """MoE 专家并行度（aic-npu: ``moe_ep``；msmodeling: ``ep_size`` / ``EP=``）。"""
+
+    moe_dp: int | None = None
+    """MoE 的数据并行度（msmodeling: ``moe_dp_size`` / ``MOE-DP=``；aic-npu 无此列）。"""
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items() if v is not None}
