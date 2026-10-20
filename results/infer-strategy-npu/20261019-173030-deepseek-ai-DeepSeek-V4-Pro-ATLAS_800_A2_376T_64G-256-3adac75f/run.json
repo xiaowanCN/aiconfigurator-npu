@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "run_id": "20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256",
+  "run_id": "20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256-3adac75f-3adac75f",
   "generated_at": "2026-10-19T17:30:30+08:00",
   "status": "ok",
   "request": {
@@ -39,7 +39,7 @@
     "aic_model_path": "/workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json",
     "ms_model_source": null,
     "commands": [
-      "aic-npu default --model-path /workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json --total-gpus 256 --system ascend_910b --backend vllm-ascend --backend-version 0.23.0 --database-mode HYBRID --isl 8192 --osl 1024 --ttft 30000 --tpot 200 --top-n 10 --save-dir itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/aic_npu"
+      "aic-npu default --model-path /workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json --total-gpus 256 --system ascend_910b --backend vllm-ascend --backend-version 0.23.0 --database-mode HYBRID --isl 8192 --osl 1024 --ttft 30000 --tpot 200 --top-n 10 --save-dir itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256-3adac75f/aic_npu"
     ]
   },
   "frameworks": [
@@ -48,10 +48,10 @@
       "status": "ok",
       "message": null,
       "commands": [
-        "aic-npu default --model-path /workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json --total-gpus 256 --system ascend_910b --backend vllm-ascend --backend-version 0.23.0 --database-mode HYBRID --isl 8192 --osl 1024 --ttft 30000 --tpot 200 --top-n 10 --save-dir itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/aic_npu"
+        "aic-npu default --model-path /workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json --total-gpus 256 --system ascend_910b --backend vllm-ascend --backend-version 0.23.0 --database-mode HYBRID --isl 8192 --osl 1024 --ttft 30000 --tpot 200 --top-n 10 --save-dir itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256-3adac75f/aic_npu"
       ],
       "artifacts": {
-        "log": "itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/logs/aic_npu.log",
+        "log": "itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256-3adac75f-3adac75f/logs/aic_npu.log",
         "chosen_exp": "disagg",
         "best_throughputs": {
           "agg": 1.394,
@@ -869,7 +869,7 @@
   },
   "errors": [],
   "artifacts": {
-    "run_dir": "itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256",
-    "logs_dir": "itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256/logs"
+    "run_dir": "itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256-3adac75f-3adac75f",
+    "logs_dir": "itn-regression-128npu/deepseekV4-DISABLE/20261019-173030-deepseek-ai-DeepSeek-V4-Pro-ATLAS_800_A2_376T_64G-256-3adac75f-3adac75f/logs"
   }
 }
