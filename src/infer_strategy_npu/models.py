@@ -66,6 +66,16 @@ MODELS: tuple[ModelSpec, ...] = (
         local_dir="GLM5.3-Flash",
     ),
     ModelSpec(
+        model_id="ZhipuAI/GLM-5.3",
+        ms_model_id="ZhipuAI/GLM-5.3",
+        local_dir="GLM5.3",
+    ),
+    ModelSpec(
+        model_id="ZhipuAI/GLM-5.2",
+        ms_model_id="ZhipuAI/GLM-5.2",
+        local_dir="GLM5.2",
+    ),
+    ModelSpec(
         model_id="moonshotai/Kimi-K3",
         ms_model_id="moonshotai/Kimi-K3",
         local_dir="Kimi-K3",

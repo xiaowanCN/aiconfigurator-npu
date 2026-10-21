@@ -36,13 +36,14 @@ infer-strategy-npu -recommend
     [--output-length <int>]     # 默认 1024，>0
     [--tpot-limit <int>]        # 默认 50，>0
     [--ttft-limit <int>]        # 默认 1000，>0
-    [--quantize <DISABLE|W8A8>] # 默认 DISABLE
+    [--quantize <DISABLE|ENABLE>] # 默认 DISABLE（量化总开关）
     [--out-dir <路径>]           # 默认 /workspace/results/infer-strategy-npu
     [--top-n <int>]             # 默认 10（透传给 aic-npu --top-n）
     [--framework auto|aic-npu|msmodeling]  # 默认 auto，强制覆盖路由（排障用）
     [--local-model-root <路径>]  # msmodeling 本地模型根目录，默认取环境变量 INFER_STRATEGY_LOCAL_MODEL_ROOT
-    [--quantize-linear-action <枚举>]       # 覆盖 msmodeling --quantize-linear-action
-    [--quantize-attention-action <枚举>]    # 覆盖 msmodeling --quantize-attention-action
+    [--quantize-linear-action <枚举>]       # 专家线性层量化动作（ENABLE 时生效，默认 W8A8_DYNAMIC）
+    [--quantize-non-expert-linear-action <枚举>]  # 非专家线性层量化动作（ENABLE 时生效，默认 DISABLED）
+    [--quantize-attention-action <枚举>]    # KV cache 量化动作（ENABLE 时生效，默认 DISABLED）
     [--speculative-method none|dflash|dspark|mtp]   # 默认 dflash（PD分离-Decode）
     [--num-speculative-tokens N] [--acceptance-length F] [--num-draft-layers N]
     [--jobs N] [--max-search-combinations N]        # 透传 msmodeling
@@ -56,18 +57,22 @@ infer-strategy-npu -recommend
 
 参数取值校验：
 
-- `--model`：白名单 6 个 ModelScope ID（大小写不敏感，支持别名）：
-  `ZhipuAI/GLM-5.3-Flash`、`Qwen/Qwen3.8-27B`、`deepseek-ai/DeepSeek-R1`、
-  `deepseek-ai/DeepSeek-V4-Pro`、`moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3`。
+- `--model`：白名单 8 个 ModelScope ID（大小写不敏感，支持别名）：
+  `ZhipuAI/GLM-5.3-Flash`、`ZhipuAI/GLM-5.3`、`ZhipuAI/GLM-5.2`、`Qwen/Qwen3.8-27B`、
+  `deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro`、`moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3`。
 - `--device`：26 个，取自 `tensor_cast/device.py` 的 `DeviceProfile` 注册名（见 §4）。
 - `--num-devices` / `--input-length` / `--output-length` / `--tpot-limit` / `--ttft-limit`：正整数（>0）。
-- `--quantize`：`DISABLE` / `W8A8`（大小写与连字符不敏感，归一化为 `DISABLE` / `W8A8`）。
+- `--quantize`：量化总开关 `DISABLE` / `ENABLE`（大小写与连字符不敏感，归一化为 `DISABLE` / `ENABLE`）。
+  - `DISABLE`：完全不量化，三个 action 强制 `DISABLED`（忽略显式传入的 action）。
+  - `ENABLE`：开启量化，具体动作由三个 `--quantize-*-action` 决定（缺省时取 msmodeling 原生默认）。
+  - 旧版 `W8A8` / `FP8` 仍可作为 `ENABLE` 的别名（向后兼容），具体动作由三个 action 参数决定。
 - `--tp-sizes`：msmodeling 的 TP 搜索候选（`nargs="+"` 的正整数列表）。**仅在分发到 msmodeling 时生效**，
   aic-npu 分支不使用。缺省时按模型 + `--num-devices` 自动推导为 2 的幂：
 
   | 模型 | 起始值 | 示例（`--num-devices 64`） |
   |---|---|---|
   | `ZhipuAI/GLM-5.3-Flash`、`deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro`、`moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3` | 32 | `[32, 64]` |
+  | `ZhipuAI/GLM-5.3`、`ZhipuAI/GLM-5.2` | 4 | `[4, 8, 16, 32, 64]` |
   | 其余模型（如 `Qwen/Qwen3.8-27B`） | 1 | `[1, 2, 4, 8, 16, 32, 64]` |
 
   上限为不超过 `--num-devices` 的最大 2 的幂；若起始值已超过 `--num-devices`（例如 32 起跳但只有 16 卡），
@@ -93,11 +98,13 @@ infer-strategy-npu -recommend
 model ∈ {DeepSeek-R1, Qwen3.8-27B, DeepSeek-V4-Pro} 且 quantize == DISABLE
     → aic-npu
 
-其余全部
-    ├─ model ∈ {DeepSeek-R1, Qwen3.8-27B, DeepSeek-V4-Pro} 且 quantize == W8A8
-    └─ model ∈ {Kimi-K3, GLM-5.3-Flash, MiniMax-M3}（quantize 任意）
+其余全部（即 quantize == ENABLE，或 model 不在 aic-npu 白名单）
     → msmodeling
 ```
+
+即：分发到 aic-npu 的**只能是** `--quantize DISABLE` 的 3 个模型
+（`Qwen3.8-27B` / `DeepSeek-R1` / `DeepSeek-V4-Pro`）；其它情况（量化开启、或 GLM 系列 / Kimi-K3 / MiniMax-M3）
+一律走 msmodeling。
 
 aic-npu 分支额外约束：
 
@@ -125,7 +132,7 @@ msmodeling 分支一次运行拆成 3 个子任务（对应统一结果的 3 个
 python -m cli.inference.throughput_optimizer <model> \
   --device ATLAS_800_A2_376T_64G --num-devices 128 \
   --input-length 4096 --output-length 2048 \
-  --quantize-linear-action DISABLED --quantize-attention-action DISABLED \
+  --quantize-linear-action DISABLED --quantize-non-expert-linear-action DISABLED --quantize-attention-action DISABLED \
   --tpot-limit 50 --ttft-limit 1000
 
 # 2) disagg_prefill（PD分离-Prefill）→ results.disagg.prefill
@@ -164,19 +171,26 @@ SLO 参数口径（依据 `docs/zh/user_guide/msmodeling_throughput_optimizer_us
 
 `--quantize` → msmodeling 动作映射：
 
-| `--quantize` | `--quantize-linear-action` | `--quantize-attention-action` |
+`--quantize` 是总开关，三个 action 参数的取值与 msmodeling 原生命令完全一致：
+
+| 参数 | 取值集合 | `ENABLE` 缺省值 |
 |---|---|---|
-| `DISABLE` | `DISABLED` | `DISABLED` |
-| `W8A8` | `W8A8_DYNAMIC` | `INT8` |
+| `--quantize-linear-action`（专家线性层） | `DISABLED, W8A16_STATIC, W8A8_STATIC, W4A8_STATIC, W8A16_DYNAMIC, W8A8_DYNAMIC, W4A8_DYNAMIC, FP8, MXFP4` | `W8A8_DYNAMIC` |
+| `--quantize-non-expert-linear-action`（非专家线性层：attention 投影 / dense MLP / shared expert） | 同上 | `DISABLED` |
+| `--quantize-attention-action`（KV cache 量化） | `DISABLED, INT8, FP8` | `DISABLED` |
+
+- `DISABLE`：三个 action **强制 `DISABLED`**（忽略显式传入的 action）。
+- `ENABLE`：以显式传入的 action 为准；缺省时取上表"缺省值"。
 
 要点与文档一致性核对（已逐条对照用户指南）：
 
 1. `--quantize-linear-action` 的**默认值本身就是 `W8A8_DYNAMIC`**，所以 `quantize=DISABLE` 时必须显式下发 `DISABLED`，否则会被静默当成 W8A8。
-2. `--quantize-attention-action` 语义是 **KV cache 量化**（choices `DISABLED|INT8|FP8`）。`W8A8 → INT8` 对齐你给的 PD分离参考命令；文档多数示例用的是 `disabled`。要改口径可显式传 `--quantize-attention-action DISABLED`。
-3. 量化取值大小写与下划线/连字符写法均可，本层统一以**大写下划线**形式下发（`W8A8_DYNAMIC` / `INT8` / `DISABLED`）。
-4. `--num-draft-layers` **仅适用于 `dflash` / `dspark`，不可与 `mtp` 同用**（文档 2.2 节明确约束），代码已按此判断——选 `mtp` 时不下发该参数。
-5. `--num-speculative-tokens` 任一候选为 `0` 会解析失败；`--speculative-method` 只作用于 PD分离-Decode（投机解码影响 Decode）。
-6. 两个量化动作都提供了直通覆盖：`--quantize-linear-action` / `--quantize-attention-action`。
+2. `--quantize-attention-action` 语义是 **KV cache 量化**（choices `DISABLED|INT8|FP8`）。`INT8` 对齐你给的 PD分离参考命令；若口径是不量化 KV cache，显式加 `--quantize-attention-action DISABLED` 即可。
+3. `--quantize-non-expert-linear-action` 用于 DeepSeek V4 类 MoE：路由专家保持 `--quantize-linear-action`，而 attention 投影 / dense MLP / shared expert 等"非专家线性层"单独指定量化动作（默认 `DISABLED`）。
+4. 量化取值大小写与下划线/连字符写法均可，本层统一以**大写下划线**形式下发（`W8A8_DYNAMIC` / `INT8` / `DISABLED`）。
+5. `--num-draft-layers` **仅适用于 `dflash` / `dspark`，不可与 `mtp` 同用**（文档 2.2 节明确约束），代码已按此判断——选 `mtp` 时不下发该参数。
+6. `--num-speculative-tokens` 任一候选为 `0` 会解析失败；`--speculative-method` 只作用于 PD分离-Decode（投机解码影响 Decode）。
+7. 三个量化动作都提供了直通覆盖：`--quantize-linear-action` / `--quantize-non-expert-linear-action` / `--quantize-attention-action`。
 
 > 说明：msmodeling 侧用 `ParallelRunner` Python API 直接调用（而非 subprocess），
 > 以便拿到 `OptimizerSummary` 结构化对象并落盘；等价命令同样记入 `run.json`。
@@ -340,6 +354,8 @@ ATLAS_950_486T_128G          ATLAS_950_486T_96G           ATLAS_950_486T_144G
 | `Qwen/Qwen3.8-27B` | `/workspace/model_configs/qwen3_8_27B_config.json` | `model_configs/msmodeling/Qwen3.8-27B` | `Qwen/Qwen3.8-27B` |
 | `deepseek-ai/DeepSeek-V4-Pro` | `/workspace/model_configs/deepseek-ai--DeepSeek-V4-Pro_config.json` | `model_configs/msmodeling/DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4-Pro` |
 | `ZhipuAI/GLM-5.3-Flash` | — | `model_configs/msmodeling/GLM5.3-Flash` | `ZhipuAI/GLM-5.3-Flash` |
+| `ZhipuAI/GLM-5.3` | — | `model_configs/msmodeling/GLM5.3` | `ZhipuAI/GLM-5.3` |
+| `ZhipuAI/GLM-5.2` | — | `model_configs/msmodeling/GLM5.2` | `ZhipuAI/GLM-5.2` |
 | `moonshotai/Kimi-K3` | — | `model_configs/msmodeling/Kimi-K3` | `moonshotai/Kimi-K3` |
 | `MiniMax/MiniMax-M3` | — | `model_configs/msmodeling/MiniMax-M3` | `MiniMax/MiniMax-M3` |
 
@@ -355,6 +371,8 @@ model_configs/
     ├── DeepSeek-V4-Pro/config.json
     ├── Qwen3.8-27B/config.json
     ├── GLM5.3-Flash/config.json                 # 占位，待填
+    ├── GLM5.3/config.json                       # 占位，待填
+    ├── GLM5.2/config.json                       # 占位，待填
     ├── Kimi-K3/config.json                      # 占位，待填
     └── MiniMax-M3/config.json                   # 占位，待填
 ```
@@ -454,7 +472,7 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
   "num_devices": 128,
   "parallel": { "tp": 4, "pp": 1, "dp": 1, "moe_tp": 1, "moe_ep": 1 },
   "parallel_str": "tp4pp1dp1etp1ep1",
-  "quantize": { "linear": "DISABLED", "attention": "DISABLED" },
+  "quantize": { "linear": "DISABLED", "non_expert_linear": "DISABLED", "attention": "DISABLED" },
   "backend": "vllm-ascend",             // msmodeling 侧为 "msmodeling"
   "backend_version": "0.23.0",
   "system": "ascend_910b",              // msmodeling 侧为 device 名
@@ -676,9 +694,10 @@ Dockerfile 因此先生成约束把 `torch` / `torchvision` 钉在镜像自带�
    但 `--num-draft-layers`/`--acceptance-length` 是模型相关超参，
    对不支持的模型可能报错 → 可用 `--speculative-method none` 关闭。
    已按文档约束：`--num-draft-layers` 只在 `dflash`/`dspark` 时下发（`mtp` 不允许）。
-3. **`W8A8 → (W8A8_DYNAMIC, INT8)`**：`INT8` 是 **KV cache 量化**，与你给的 PD分离参考命令一致，
-   而 msmodeling 用户指南多数示例用 `disabled`。若你的口径是不量化 KV cache，
-   显式加 `--quantize-attention-action DISABLED` 即可。
+3. **`ENABLE` 默认量化动作**：开启量化（`--quantize ENABLE`）时，专家线性层默认 `W8A8_DYNAMIC`、
+   非专家线性层与 KV cache 默认 `DISABLED`。`--quantize-attention-action INT8` 表示 **KV cache 量化**，
+   与你给的 PD分离参考命令一致；若口径是不量化 KV cache，显式加 `--quantize-attention-action DISABLED` 即可。
+   `--quantize DISABLE` 则三项强制 `DISABLED`。
 4. **aic-npu 仅支持 1 种设备**：非 `ATLAS_800_A2_376T_64G` 的设备只能走 msmodeling，
    本层会在路由阶段直接给出明确报错而非静默降级。
 5. **aic-npu 结果目录随机后缀**：通过"预建空目录 + 取唯一子目录"规避，若未来改为多实验并存需调整。
@@ -705,8 +724,8 @@ infer-strategy-npu = "infer_strategy_npu.cli:main"
 | `cli.py` | argparse 定义、`-recommend` 模式、终端输出（table/json） | 已完成 |
 | `config.py` | 默认常量、环境变量、POSIX/Windows 路径拼接 | 已完成 |
 | `devices.py` | 26 个统一设备 + device→aic-npu `--system` 映射 | 已完成 |
-| `models.py` | 6 个模型注册表（aic-npu path / msmodeling id / 本地目录） | 已完成 |
-| `quantize.py` | `--quantize` 归一化与 msmodeling action 映射 | 已完成 |
+| `models.py` | 8 个模型注册表（aic-npu path / msmodeling id / 本地目录） | 已完成 |
+| `quantize.py` | `--quantize`(DISABLE/ENABLE) 归一化与三个 msmodeling action 映射 | 已完成 |
 | `schema.py` | `RecommendRequest` / `Candidate` / `FrameworkRun` / `UnifiedRunResult` | 已完成 |
 | `routing.py` | 路由决策 + 等价命令生成（dry-run 复现） | 已完成 |
 | `runners/aic_npu.py` | 调 `cli_default()`，解析 agg/disagg CSV，拆分 prefill/decode 视角 | 已完成 |
@@ -731,9 +750,15 @@ infer-strategy-npu -recommend --model Qwen/Qwen3.8-27B \
   --device ATLAS_800_A2_376T_64G --num-devices 128 \
   --input-length 1024 --output-length 1024 --tpot-limit 50 --ttft-limit 1000 --quantize DISABLE
 
-# 走 msmodeling（Kimi-K3 / GLM-5.3-Flash / MiniMax-M3，或 W8A8 量化）
+# 走 msmodeling（Kimi-K3 / GLM-5.3-Flash / GLM-5.3 / GLM-5.2 / MiniMax-M3，或开启量化 ENABLE）
 infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3-Flash \
-  --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize W8A8 \
+  --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize ENABLE \
+  --local-model-root /workspace/local_models
+
+# GLM-5.3 走 msmodeling + 量化（专家线性层 FP8、KV cache FP8，非专家线性层保持默认 DISABLED）
+infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3 \
+  --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize ENABLE \
+  --quantize-linear-action FP8 --quantize-attention-action FP8 \
   --local-model-root /workspace/local_models
 
 # 只看下发的命令，不执行

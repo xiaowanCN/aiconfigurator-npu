@@ -11,6 +11,8 @@ msmodeling 分支默认从这里加载模型配置（**相对路径**，相对 C
 | `Qwen/Qwen3.8-27B` | `model_configs/msmodeling/Qwen3.8-27B` |
 | `deepseek-ai/DeepSeek-V4-Pro` | `model_configs/msmodeling/DeepSeek-V4-Pro` |
 | `ZhipuAI/GLM-5.3-Flash` | `model_configs/msmodeling/GLM5.3-Flash` |
+| `ZhipuAI/GLM-5.3` | `model_configs/msmodeling/GLM5.3` |
+| `ZhipuAI/GLM-5.2` | `model_configs/msmodeling/GLM5.2` |
 | `moonshotai/Kimi-K3` | `model_configs/msmodeling/Kimi-K3` |
 | `MiniMax/MiniMax-M3` | `model_configs/msmodeling/MiniMax-M3` |
 
@@ -18,7 +20,7 @@ msmodeling 分支默认从这里加载模型配置（**相对路径**，相对 C
 
 - `DeepSeek-R1` / `Qwen3.8-27B` / `DeepSeek-V4-Pro`：已直接复用本仓库 `model_configs/` 下的
   aic-npu 配置（即真实的 HF `config.json`），可直接使用。
-- `GLM5.3-Flash` / `Kimi-K3` / `MiniMax-M3`：**占位配置**（含 `"_placeholder": true` 标记），
+- `GLM5.3-Flash` / `GLM5.3` / `GLM5.2` / `Kimi-K3` / `MiniMax-M3`：**占位配置**（含 `"_placeholder": true` 标记），
   需要把真实的 HF / ModelScope `config.json` 内容填进去才能跑出正确结果。
 
 填充后建议删掉 `"_placeholder"` 字段（不影响解析，仅作标记用）。

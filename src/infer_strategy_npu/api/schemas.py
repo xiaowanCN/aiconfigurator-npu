@@ -44,13 +44,14 @@ class TaskCreateRequest(BaseModel):
     output_length: int = Field(DEFAULT_OUTPUT_LENGTH, gt=0)
     tpot_limit: int = Field(DEFAULT_TPOT_LIMIT, gt=0)
     ttft_limit: int = Field(DEFAULT_TTFT_LIMIT, gt=0)
-    quantize: str = Field(DEFAULT_QUANTIZE, description="DISABLE | W8A8")
+    quantize: str = Field(DEFAULT_QUANTIZE, description="DISABLE | ENABLE")
     top_n: int = Field(DEFAULT_TOP_N, gt=0)
     framework: str = Field("auto", description="auto | aic-npu | msmodeling")
     out_dir: str | None = None
 
     # msmodeling 透传
     quantize_linear_action: str | None = None
+    quantize_non_expert_linear_action: str | None = None
     quantize_attention_action: str | None = None
     speculative_method: str | None = None
     num_speculative_tokens: int | None = None

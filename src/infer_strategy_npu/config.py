@@ -40,6 +40,8 @@ MS_DEFAULT_NUM_DRAFT_LAYERS = 6
 MS_TP_SIZES_START = 1
 # 这些模型参数量/显存占用大，小 TP 必然 OOM，默认直接从 32 起跳（仍按 2 的幂到 num_devices）。
 MS_TP_SIZES_LARGE_START = 32
+# 中等规模模型：TP 从 4 起跳（避免 tp=1/2 这类过小切分，但仍比大模型更细）。
+MS_TP_SIZES_MEDIUM_START = 4
 MS_TP_SIZES_LARGE_MODELS: frozenset[str] = frozenset(
     {
         "ZhipuAI/GLM-5.3-Flash",
@@ -47,6 +49,12 @@ MS_TP_SIZES_LARGE_MODELS: frozenset[str] = frozenset(
         "deepseek-ai/DeepSeek-V4-Pro",
         "moonshotai/Kimi-K3",
         "MiniMax/MiniMax-M3",
+    }
+)
+MS_TP_SIZES_MEDIUM_MODELS: frozenset[str] = frozenset(
+    {
+        "ZhipuAI/GLM-5.3",
+        "ZhipuAI/GLM-5.2",
     }
 )
 

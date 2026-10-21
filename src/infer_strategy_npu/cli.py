@@ -2,7 +2,7 @@
 
     infer-strategy-npu -recommend --model <ModelScope ID> --device <设备名> --num-devices <N>
         [--input-length 1024] [--output-length 1024]
-        [--tpot-limit 50] [--ttft-limit 1000] [--quantize DISABLE|W8A8]
+        [--tpot-limit 50] [--ttft-limit 1000] [--quantize DISABLE|ENABLE]
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from infer_strategy_npu.output import render_summary
 from infer_strategy_npu.quantize import (
     MS_ATTENTION_ACTIONS,
     MS_LINEAR_ACTIONS,
+    MS_NON_EXPERT_LINEAR_ACTIONS,
     QUANTIZE_CHOICES,
     normalize_quantize,
 )
@@ -88,7 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
             "      --input-length 1024 --output-length 1024 --tpot-limit 50 --ttft-limit 1000 --quantize DISABLE\n"
             "\n"
             "  infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3-Flash \\\n"
-            "      --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize W8A8\n"
+            "      --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize ENABLE\n"
+            "\n"
+            "  infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3 \\\n"
+            "      --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize ENABLE \\\n"
+            "      --quantize-linear-action FP8 --quantize-attention-action FP8\n"
         ),
     )
     parser.add_argument("--version", action="version", version=f"infer-strategy-npu {__version__}")
@@ -114,7 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--quantize",
         type=quantize_type,
         default=DEFAULT_QUANTIZE,
-        help=f"量化方式（默认 {DEFAULT_QUANTIZE}；可选 {', '.join(QUANTIZE_CHOICES)}）",
+        help=(
+            f"量化总开关（默认 {DEFAULT_QUANTIZE}；可选 {', '.join(QUANTIZE_CHOICES)}）。"
+            "DISABLE=完全不量化；ENABLE=开启量化，由三个 --quantize-*-action 决定具体动作"
+            "（旧版 W8A8/FP8 仍可作为 ENABLE 的别名）"
+        ),
     )
 
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help=f"结果输出目录（默认 {DEFAULT_OUT_DIR}）")
@@ -136,13 +145,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--quantize-linear-action",
         choices=list(MS_LINEAR_ACTIONS),
         default=None,
-        help="覆盖 msmodeling --quantize-linear-action（默认由 --quantize 推导）",
+        help="msmodeling 专家线性层量化动作（默认 W8A8_DYNAMIC；仅 --quantize ENABLE 生效）",
+    )
+    ms.add_argument(
+        "--quantize-non-expert-linear-action",
+        choices=list(MS_NON_EXPERT_LINEAR_ACTIONS),
+        default=None,
+        help=(
+            "msmodeling 非专家线性层量化动作（attention 投影 / dense MLP / shared expert 等，"
+            "默认 DISABLED；仅 --quantize ENABLE 生效，主要用于 DeepSeek V4 类 MoE）"
+        ),
     )
     ms.add_argument(
         "--quantize-attention-action",
         choices=list(MS_ATTENTION_ACTIONS),
         default=None,
-        help="覆盖 msmodeling --quantize-attention-action（KV cache 量化，默认由 --quantize 推导）",
+        help="msmodeling KV cache 量化动作（默认 DISABLED；仅 --quantize ENABLE 生效）",
     )
     ms.add_argument(
         "--speculative-method",
@@ -271,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         local_model_root=args.local_model_root,
         out_dir=args.out_dir,
         quantize_linear_action=args.quantize_linear_action,
+        quantize_non_expert_linear_action=args.quantize_non_expert_linear_action,
         quantize_attention_action=args.quantize_attention_action,
         speculative_method=(None if args.speculative_method == "none" else args.speculative_method),
         num_speculative_tokens=args.num_speculative_tokens,

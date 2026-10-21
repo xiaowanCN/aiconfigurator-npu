@@ -16,7 +16,7 @@ from infer_strategy_npu.config import (
     MODE_DISAGG_DECODE,
     MODE_DISAGG_PREFILL,
 )
-from infer_strategy_npu.quantize import to_ms_actions
+from infer_strategy_npu.quantize import resolve_ms_quantize_actions
 from infer_strategy_npu.routing import PdBalance, pd_balance_grid
 from infer_strategy_npu.runners.base import (
     FrameworkRunner,
@@ -402,7 +402,12 @@ class MsmodelingRunner(FrameworkRunner):
 
     def _candidate_from_row(self, ctx: RunnerContext, row, mode: str) -> Candidate:
         request = ctx.request
-        default_linear, default_attention = to_ms_actions(request.quantize)
+        default_linear, default_non_expert_linear, default_attention = resolve_ms_quantize_actions(
+            request.quantize,
+            request.quantize_linear_action,
+            request.quantize_non_expert_linear_action,
+            request.quantize_attention_action,
+        )
         serving_mode = MODE_AGG if mode == MODE_AGG else MODE_DISAGG
 
         ttft = to_float(_row_get(row, "ttft"))
@@ -431,6 +436,7 @@ class MsmodelingRunner(FrameworkRunner):
             parallel_str=parallel_str,
             quantize=QuantizeSpec(
                 linear=_row_get(row, "quantize_linear_action") or default_linear,
+                non_expert_linear=default_non_expert_linear,
                 attention=_row_get(row, "quantize_attention_action") or default_attention,
             ),
             backend=self.framework,

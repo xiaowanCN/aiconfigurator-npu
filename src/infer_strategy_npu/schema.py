@@ -58,10 +58,11 @@ def to_int(value: Any) -> int | None:
 @dataclass
 class QuantizeSpec:
     linear: str | None = None
+    non_expert_linear: str | None = None
     attention: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"linear": self.linear, "attention": self.attention}
+        return {"linear": self.linear, "non_expert_linear": self.non_expert_linear, "attention": self.attention}
 
 
 @dataclass
@@ -189,8 +190,11 @@ class RecommendRequest:
     quantize_linear_action: str | None = None
     """显式覆盖 msmodeling 的 --quantize-linear-action（为空则按 --quantize 映射）。"""
 
+    quantize_non_expert_linear_action: str | None = None
+    """显式覆盖 msmodeling 的 --quantize-non-expert-linear-action（MoE 非专家线性层；为空则按 --quantize 映射）。"""
+
     quantize_attention_action: str | None = None
-    """显式覆盖 msmodeling 的 --quantize-attention-action（为空则按 --quantize 映射）。"""
+    """显式覆盖 msmodeling 的 --quantize-attention-action（KV cache 量化；为空则按 --quantize 映射）。"""
 
     speculative_method: str | None = None
     num_speculative_tokens: int | None = None

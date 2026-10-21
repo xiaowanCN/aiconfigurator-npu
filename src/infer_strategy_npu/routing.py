@@ -19,6 +19,8 @@ from infer_strategy_npu.config import (
     MODE_DISAGG_PREFILL,
     MS_TP_SIZES_LARGE_MODELS,
     MS_TP_SIZES_LARGE_START,
+    MS_TP_SIZES_MEDIUM_MODELS,
+    MS_TP_SIZES_MEDIUM_START,
     MS_TP_SIZES_START,
     PD_BALANCE_MIN_NODES,
     PD_BALANCE_TABLE_MAX,
@@ -26,7 +28,7 @@ from infer_strategy_npu.config import (
 )
 from infer_strategy_npu.devices import AIC_NPU_SUPPORTED_DEVICES, to_aic_system
 from infer_strategy_npu.models import ModelSpec, aic_npu_model_path, msmodeling_model_source
-from infer_strategy_npu.quantize import QUANTIZE_DISABLE, to_ms_actions
+from infer_strategy_npu.quantize import QUANTIZE_DISABLE, resolve_ms_quantize_actions
 from infer_strategy_npu.schema import RecommendRequest
 
 # 命中这些模型且 --quantize DISABLE 时走 aic-npu
@@ -107,15 +109,17 @@ def build_aic_npu_command(request: RecommendRequest, model_path: str, system: st
     return " ".join(_q(p) for p in parts)
 
 
-def resolve_ms_actions(request: RecommendRequest) -> tuple[str, str]:
-    """实际下发给 msmodeling 的 (linear action, attention action)。
+def resolve_ms_actions(request: RecommendRequest) -> tuple[str, str, str]:
+    """实际下发给 msmodeling 的 (linear, non_expert_linear, attention) 动作。
 
-    优先级：显式 --quantize-linear-action / --quantize-attention-action > --quantize 映射。
+    优先级：显式 --quantize-linear-action / --quantize-non-expert-linear-action /
+    --quantize-attention-action > --quantize 映射（DISABLE 强制全 DISABLED）。
     """
-    default_linear, default_attention = to_ms_actions(request.quantize)
-    return (
-        request.quantize_linear_action or default_linear,
-        request.quantize_attention_action or default_attention,
+    return resolve_ms_quantize_actions(
+        request.quantize,
+        request.quantize_linear_action,
+        request.quantize_non_expert_linear_action,
+        request.quantize_attention_action,
     )
 
 
@@ -258,6 +262,7 @@ def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None)
 
     显式传入时原样使用；否则按模型 + 可用卡数自动推导：
     - 大模型（MS_TP_SIZES_LARGE_MODELS）从 32 起跳；
+    - 中等模型（MS_TP_SIZES_MEDIUM_MODELS）从 4 起跳；
     - 其余模型从 1 起跳；
     均为 2 的幂，上限为不超过**当前侧可用卡数**的最大 2 的幂。
 
@@ -265,7 +270,8 @@ def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None)
     ``--num-devices`` 报错，如 42 卡配 tp=32）。若按起始值筛完为空，则回退到
     "能整除该侧卡数的最大 2 的幂"，保证至少有一个候选（例：48 卡 -> tp=16）。
 
-    小模型起始值仍为 1（`[1, 2, 4, ...]`），大模型从 32 起跳，两者都受整除约束。
+    小模型起始值仍为 1（`[1, 2, 4, ...]`），中等模型从 4 起跳，大模型从 32 起跳，
+    三者都受整除约束。
 
     ``device_count`` 为该侧的卡数：PD 混部用总卡数，PD 分离时 P/D 各自用 xPyD
     拆分后分到的卡数，因此 TP 上限会随划分动态变化。
@@ -276,7 +282,12 @@ def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None)
     limit = int(device_count if device_count is not None else request.num_devices)
     if limit <= 0:
         return [1]
-    start = MS_TP_SIZES_LARGE_START if is_large_tp_model(request.model) else MS_TP_SIZES_START
+    if is_large_tp_model(request.model):
+        start = MS_TP_SIZES_LARGE_START
+    elif is_medium_tp_model(request.model):
+        start = MS_TP_SIZES_MEDIUM_START
+    else:
+        start = MS_TP_SIZES_START
     # max_divisor = 能整除 limit 的最大 2 的幂；所有更小的 2 的幂自然也能整除
     max_divisor = limit & -limit
     sizes = []
@@ -296,6 +307,11 @@ def is_large_tp_model(model_id: str | None) -> bool:
     return str(model_id or "").strip().lower() in {m.lower() for m in MS_TP_SIZES_LARGE_MODELS}
 
 
+def is_medium_tp_model(model_id: str | None) -> bool:
+    """该模型是否属于"TP 从 4 起跳"的中等模型。"""
+    return str(model_id or "").strip().lower() in {m.lower() for m in MS_TP_SIZES_MEDIUM_MODELS}
+
+
 def tp_size_flags(request: RecommendRequest, device_count: int | None = None) -> list[str]:
     """msmodeling 的 --tp-sizes 参数（始终下发，便于复现）。"""
     sizes = resolve_tp_sizes(request, device_count)
@@ -310,10 +326,12 @@ def ms_extra_flags(request: RecommendRequest, mode: str, device_count: int | Non
     ``device_count`` 为该子任务实际可用的卡数（PD 分离时是 xPyD 拆分后某一侧的卡数），
     决定 --tp-sizes 的上限。
     """
-    linear, attention = resolve_ms_actions(request)
+    linear, non_expert_linear, attention = resolve_ms_actions(request)
     extra = [
         "--quantize-linear-action",
         linear,
+        "--quantize-non-expert-linear-action",
+        non_expert_linear,
         "--quantize-attention-action",
         attention,
     ]
