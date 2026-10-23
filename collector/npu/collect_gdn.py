@@ -30,6 +30,25 @@ Run inside the vllm-ascend 0.23.0 NPU docker image (the one that ships the
 ``_C_ascend`` custom-op package). The collector bootstraps that package via
 ``vllm_ascend.utils.bootstrap_custom_op_env`` + ``enable_custom_op`` before
 touching ``torch.ops._C_ascend.*``.
+
+Ascend 950DT (A5) caveat
+------------------------
+``enable_custom_op()`` deliberately short-circuits on A5 (vllm_ascend/utils.py,
+"custom op compilation and execution are partially available in ASCEND950 chip,
+we temporarily disable all custom ops", issue #7157), i.e. it never imports
+``vllm_ascend.vllm_ascend_C`` and the whole ``torch.ops._C_ascend`` namespace
+stays empty -> every point dies with
+``AttributeError: '_OpNamespace' '_C_ascend' object has no attribute
+'npu_causal_conv1d_custom'``. Since the GDN conv / recurrence kernels *are*
+that package, ``_init_runtime`` imports the extension explicitly on A5 too (see
+``_load_ascend_custom_ops``).
+
+If the image's triton backend cannot build its ``npu_utils`` helper (missing
+``/lib64/libm.so.6`` -> ``clang: error: linker command failed``), the triton
+chunk scan additionally needs
+``init_device_properties_triton``; ``_fallback_triton_device_props`` then fills
+the core counters from torch_npu (or from ``AIC_TRITON_NUM_AICORE`` /
+``AIC_TRITON_NUM_VECTORCORE``).
 """
 
 from __future__ import annotations
@@ -205,6 +224,118 @@ def _patch_pcp_group() -> None:
         pass
 
 
+_C_ASCEND_KERNELS = ("npu_causal_conv1d_custom", "npu_recurrent_gated_delta_rule")
+
+
+def _load_ascend_custom_ops() -> None:
+    """Force-register ``torch.ops._C_ascend.*`` -- on Ascend 950 (A5) too.
+
+    ``vllm_ascend.utils.enable_custom_op()`` short-circuits on A5::
+
+        # FIXME(linfeng): ... custom op compilation and execution are partially
+        # available in ASCEND950 chip, we temporarily disable all custom ops.
+        if envs.VLLM_BATCH_INVARIANT or get_ascend_device_type() == AscendDeviceType.A5:
+            _CUSTOM_OP_ENABLED = False
+            return _CUSTOM_OP_ENABLED
+
+    i.e. it never imports ``vllm_ascend.vllm_ascend_C``, so the torch op library
+    that *defines* ``npu_causal_conv1d_custom`` / ``npu_recurrent_gated_delta_rule``
+    is never loaded and every GDN point dies with
+    ``AttributeError: '_OpNamespace' '_C_ascend' object has no attribute ...``
+    (on 910B the same collector works because enable_custom_op() does import it).
+
+    Those two ops are exactly the GDN conv / recurrence kernels, so import the
+    extension explicitly (the vendor op_api lib is already on LD_LIBRARY_PATH).
+    If the aclnn implementation really is unavailable on this build, the call
+    fails per point and is reported as a normal point error instead of taking
+    the whole sweep down at attribute-lookup time.
+    """
+    try:
+        import vllm_ascend.vllm_ascend_C  # type: ignore  # noqa: F401
+    except Exception as e:
+        logger.warning(
+            "could not import vllm_ascend.vllm_ascend_C (%s: %s); the "
+            "torch.ops._C_ascend kernels %s stay unregistered",
+            type(e).__name__, e, _C_ASCEND_KERNELS,
+        )
+        return
+
+    missing = [n for n in _C_ASCEND_KERNELS if not hasattr(torch.ops._C_ascend, n)]
+    if missing:
+        logger.warning(
+            "vllm_ascend_C loaded but %s are still not registered on this "
+            "build; the corresponding GDN points will fail", missing,
+        )
+    else:
+        logger.info("torch.ops._C_ascend kernels available: %s", list(_C_ASCEND_KERNELS))
+
+
+def _fallback_triton_device_props() -> None:
+    """Fill triton_utils' core counters when its helper .so cannot be built.
+
+    triton's Ascend driver compiles a small ``npu_utils`` extension on first
+    use; on images missing ``/lib64/libm.so.6`` that clang++ build always fails
+    ("cannot find /lib64/libm.so.6" -> "linker command failed with exit code
+    1"), so ``init_device_properties_triton()`` raises and every triton kernel
+    (here ``chunk_gated_delta_rule``, via ``l2norm_fwd ->
+    get_vectorcore_num()``) aborts with "AssertionError: Device properties not
+    initialized."
+
+    The counters only size launch grids, so an approximate value is enough to
+    get real timings. Sources, in order:
+      1. ``$AIC_TRITON_NUM_AICORE`` / ``$AIC_TRITON_NUM_VECTORCORE`` (override)
+      2. ``torch.npu.get_device_properties()`` (cube_core_num / vector_core_num)
+    """
+    import vllm_ascend.ops.triton.triton_utils as triton_utils
+
+    aic = os.environ.get("AIC_TRITON_NUM_AICORE")
+    vec = os.environ.get("AIC_TRITON_NUM_VECTORCORE")
+    if aic and vec:
+        triton_utils._NUM_AICORE = int(aic)
+        triton_utils._NUM_VECTORCORE = int(vec)
+        logger.info(
+            "triton device props from env override: aicore=%s vectorcore=%s", aic, vec
+        )
+        return
+
+    try:
+        props = torch.npu.get_device_properties(torch.npu.current_device())
+    except Exception as e:
+        logger.warning(
+            "triton device props unavailable (%s: %s); chunk_gated_delta_rule "
+            "will abort with 'Device properties not initialized'. Fix the "
+            "image (/lib64/libm.so.6 symlink) or set AIC_TRITON_NUM_AICORE / "
+            "AIC_TRITON_NUM_VECTORCORE.",
+            type(e).__name__, e,
+        )
+        return
+
+    def _pick(candidates: tuple[str, ...]) -> int:
+        for name in candidates:
+            value = getattr(props, name, None)
+            if isinstance(value, int) and value > 0:
+                return value
+        return 0
+
+    aicore = _pick(("ai_core_num", "aicore_num", "num_aicore", "cube_core_num"))
+    vectorcore = _pick(("vector_core_num", "num_vectorcore", "vectorcore_num"))
+    if not aicore or not vectorcore:
+        logger.warning(
+            "triton device props unavailable (cube/vector core counts not "
+            "exposed by torch_npu); chunk_gated_delta_rule will abort with "
+            "'Device properties not initialized'. Fix the image "
+            "(/lib64/libm.so.6 symlink) or set AIC_TRITON_NUM_AICORE / "
+            "AIC_TRITON_NUM_VECTORCORE."
+        )
+        return
+    triton_utils._NUM_AICORE = aicore
+    triton_utils._NUM_VECTORCORE = vectorcore
+    logger.info(
+        "triton device props from torch_npu: aicore=%d vectorcore=%d "
+        "(approximate; only used to size launch grids)", aicore, vectorcore,
+    )
+
+
 def _init_runtime(device: str) -> None:
     """Bootstrap the vllm-ascend custom-op package and select the NPU device."""
     torch.npu.set_device(0)
@@ -219,6 +350,9 @@ def _init_runtime(device: str) -> None:
 
     bootstrap_custom_op_env(include_vendor_lib=True)
     enable_custom_op()
+    # A5 disables custom ops wholesale (see _load_ascend_custom_ops); the GDN
+    # conv / recurrence kernels live in that very package, so load it anyway.
+    _load_ascend_custom_ops()
 
     # Populate the triton module-level _NUM_AICORE / _NUM_VECTORCORE counters.
     # In production vllm-ascend's worker calls this during device init
@@ -226,17 +360,23 @@ def _init_runtime(device: str) -> None:
     # chunk scan dies in l2norm_fwd -> get_vectorcore_num() with
     # "AssertionError: Device properties not initialized."
     try:
-        from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
+        from vllm_ascend.ops.triton.triton_utils import (
+            get_aicore_num,
+            get_vectorcore_num,
+            init_device_properties_triton,
+        )
 
         init_device_properties_triton()
+        get_aicore_num()
+        get_vectorcore_num()
     except Exception as e:
         logger.warning(
-            "init_device_properties_triton failed (%s: %s); triton kernels "
-            "(chunk_gated_delta_rule) will abort with "
-            "'Device properties not initialized'.",
+            "init_device_properties_triton failed (%s: %s); falling back to "
+            "approximate core counts",
             type(e).__name__,
             e,
         )
+        _fallback_triton_device_props()
 
     # The triton chunk scan reads vLLM parallel-state groups (TP for collectives,
     # PCP for context-parallel). On a real worker these are created at model load;
@@ -395,10 +535,11 @@ def _build_scan_ctx_func(spec: GdnBenchSpec) -> Callable[[], None]:
     # NOTE: chunk_gated_delta_rule_fwd_h's aclnn signature declares
     # `cu_seqlens: int[]?` and `chunk_indices: int[]?` -- it accepts ONLY a host
     # Python list/tuple of ints (NOT a tensor). The op copies these to device at
-    # call time, which is illegal inside a GLOBAL NPU-graph capture (see the
-    # "operation not permitted when a stream is capturing" error). So under
-    # --timing-mode graph the scan capture will fall back to eager; the tuple
-    # form is what the op actually accepts and is required for the eager run.
+    # call time, which Ascend permits during capture ONLY in RELAXED mode
+    # ("operation not permitted when a stream is capturing and the specified
+    # capture mode is not relaxed"). run_benchmark therefore captures this
+    # kernel with graph_capture_error_mode="relaxed"; the tuple form is what the
+    # op actually accepts and is also what the eager run needs.
     meta = _PrebuiltMeta(
         cu_seqlens_host=tuple(cu_seqlens.tolist()),
         chunk_indices_chunk64=prepare_chunk_indices(cu_seqlens, CHUNK),
@@ -649,7 +790,22 @@ def run_benchmark(
             failed = False
             try:
                 func = builder(spec)
-                result = benchmark_npu(func, warmup_iters=warmup_iters, num_runs=bench_iters, timing_mode=timing_mode)
+                # chunk_gated_delta_rule_fwd_h takes cu_seqlens as a HOST int
+                # list and copies it H2D on every call, so it can only be
+                # captured in RELAXED mode (GLOBAL/THREAD_LOCAL abort with
+                # "operation not permitted when a stream is capturing and the
+                # specified capture mode is not relaxed"). The _C_ascend conv /
+                # recurrence kernels capture fine in the default GLOBAL mode.
+                capture_mode = (
+                    "relaxed" if spec.kernel_source == KERNEL_SCAN_CTX else None
+                )
+                result = benchmark_npu(
+                    func,
+                    warmup_iters=warmup_iters,
+                    num_runs=bench_iters,
+                    timing_mode=timing_mode,
+                    graph_capture_error_mode=capture_mode,
+                )
                 writer.writerow(_make_row(spec, result, framework, version, device))
                 logger.info("%s -> %.2f us (avg of %d runs)", progress, result.avg_us, result.num_runs)
             except Exception:

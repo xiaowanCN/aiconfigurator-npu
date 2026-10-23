@@ -15,6 +15,7 @@ Timing modes (selectable via --timing-mode):
 """
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Callable
 
@@ -29,6 +30,50 @@ _GRAPH_CAPTURE_ERROR_LOGGED = False
 # Iterations run on the capture stream before capturing, so that all workspace
 # and memory-pool allocation is done before capture begins.
 _CAPTURE_WARMUP_ITERS = 3
+
+# Whether torch.npu.graph accepts ``capture_error_mode`` (probed once).
+_GRAPH_SUPPORTS_CAPTURE_ERROR_MODE: bool | None = None
+
+
+def _graph_supports_capture_error_mode() -> bool:
+    global _GRAPH_SUPPORTS_CAPTURE_ERROR_MODE
+    if _GRAPH_SUPPORTS_CAPTURE_ERROR_MODE is None:
+        try:
+            import inspect
+
+            fn = getattr(torch.npu.graph, "__init__", torch.npu.graph)
+            params = inspect.signature(fn).parameters
+            _GRAPH_SUPPORTS_CAPTURE_ERROR_MODE = "capture_error_mode" in params
+        except (ValueError, TypeError, AttributeError):
+            _GRAPH_SUPPORTS_CAPTURE_ERROR_MODE = False
+    return _GRAPH_SUPPORTS_CAPTURE_ERROR_MODE
+
+
+def _capture_graph(graph, kernel_func, repeat_n, side_stream, capture_error_mode):
+    """Capture kernel_func into ``graph`` on ``side_stream``.
+
+    Ascend forbids in-op stream syncs / H2D copies during capture unless the
+    capture mode is RELAXED; in GLOBAL(0)/THREAD_LOCAL(1) such kernels fail with
+    "NotSupported(EE1016): Synchronizing a stream failed ... during the capture
+    stage is not supported" / "operation not permitted when a stream is
+    capturing and the specified capture mode is not relaxed". The GDN triton
+    chunk scan is one of them: ``chunk_gated_delta_rule_fwd_h`` takes
+    ``cu_seqlens`` as a host int list and copies it H2D on every call, so it can
+    only be captured in RELAXED mode.
+
+    Only ONE attempt is made per call: a failed capture leaves the thread in
+    capture state ("the current thread ... is in the capture state"), so retrying
+    with another mode on the same/fresh stream just reproduces the same error and
+    additionally poisons the eager fallback that follows. Callers that need
+    RELAXED must ask for it up front (``AIC_NPU_GRAPH_CAPTURE_MODE=relaxed`` or
+    ``graph_capture_error_mode="relaxed"``).
+    """
+    kwargs = {}
+    if capture_error_mode and _graph_supports_capture_error_mode():
+        kwargs["capture_error_mode"] = capture_error_mode
+    with torch.npu.graph(graph, stream=side_stream, **kwargs):  # type: ignore[call-arg]
+        for _ in range(repeat_n):
+            kernel_func()
 
 
 @dataclass(frozen=True)
@@ -97,6 +142,7 @@ def benchmark_npu(
     num_runs: int = 100,
     repeat_n: int = 1,
     timing_mode: str = "auto",
+    graph_capture_error_mode: str | None = None,
 ) -> BenchResult:
     """Warmup + time kernel_func on NPU. Timing mode selects graph/eager policy.
 
@@ -114,6 +160,11 @@ def benchmark_npu(
     metadata and forward context must be built OUTSIDE ``kernel_func``. Anything
     that copies host->device inside the closure (e.g. building a shape tensor
     per call) makes capture fail with ``aclrtMemcpy ... error 107030``.
+
+    ``graph_capture_error_mode`` selects the Ascend capture mode for kernels that
+    legitimately sync / copy H2D inside the op (only RELAXED tolerates that);
+    ``None`` keeps the default GLOBAL mode. Can also be set globally via
+    ``$AIC_NPU_GRAPH_CAPTURE_MODE``.
     """
     global _GRAPH_CAPTURE_ERROR_LOGGED
 
@@ -153,11 +204,14 @@ def benchmark_npu(
                 kernel_func()
         torch.npu.synchronize()
 
-        with torch.npu.graph(graph, stream=side_stream):
-            for _ in range(repeat_n):
-                kernel_func()
+        # Single capture attempt: a failed capture leaves the thread in capture
+        # state, so retrying with another mode can only make things worse.
+        capture_mode = graph_capture_error_mode or os.environ.get(
+            "AIC_NPU_GRAPH_CAPTURE_MODE"
+        )
+        _capture_graph(graph, kernel_func, repeat_n, side_stream, capture_mode)
 
-        # Capture ran on side_stream; let the default stream catch up before
+        # Capture ran on the side stream; let the default stream catch up before
         # the timed replay / eager runs below.
         torch.npu.current_stream().wait_stream(side_stream)
 
