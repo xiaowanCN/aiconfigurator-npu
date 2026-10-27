@@ -303,6 +303,21 @@ body.report-mode .content { padding: 20px 24px 48px; max-width: 1280px; margin: 
 }
 .hide { display: none !important; }
 
+/* PD 候选表：横向滚动 + 左 6 列固定（排名/P×D/P实例×卡/D实例×卡/P并行/D并行） */
+.tbl-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; }
+table.cand { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+table.cand th, table.cand td { white-space: nowrap; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+table.cand thead th { position: sticky; top: 0; background: #f3f6fc; z-index: 3; text-align: left; }
+table.cand td.nowrap { white-space: nowrap; }
+/* 固定左列：列宽与 left 偏移需一一对应 */
+table.cand th:nth-child(1), table.cand td:nth-child(1) { position: sticky; left: 0;    width: 56px;  min-width: 56px;  background: #fff; z-index: 2; }
+table.cand th:nth-child(2), table.cand td:nth-child(2) { position: sticky; left: 56px;  width: 64px;  min-width: 64px;  background: #fff; z-index: 2; }
+table.cand th:nth-child(3), table.cand td:nth-child(3) { position: sticky; left: 120px; width: 104px; min-width: 104px; background: #fff; z-index: 2; }
+table.cand th:nth-child(4), table.cand td:nth-child(4) { position: sticky; left: 224px; width: 104px; min-width: 104px; background: #fff; z-index: 2; }
+table.cand th:nth-child(5), table.cand td:nth-child(5) { position: sticky; left: 328px; width: 212px; min-width: 212px; background: #fff; z-index: 2; }
+table.cand th:nth-child(6), table.cand td:nth-child(6) { position: sticky; left: 540px; width: 212px; min-width: 212px; background: #fff; z-index: 2; border-right: 1px solid var(--border); }
+table.cand thead th:nth-child(-n+6) { z-index: 4; background: #f3f6fc; }
+
 </style>
 </head>
 <body>
@@ -1030,6 +1045,15 @@ function pdSideSummary(s) {
   return `${fmtInt(s && s.num_devices)} 卡`;
 }
 
+function fmtParallel(s) {
+  if (!s) return '—';
+  // TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1  ->  TP4 PP1 DP2 EP8 MOE-TP1 MOE-DP1
+  return s.split('|').map(part => {
+    const kv = part.split('=');
+    return kv.length === 2 ? `${kv[0].trim()}${kv[1].trim()}` : part.trim();
+  }).filter(Boolean).join(' ');
+}
+
 function pdSideCells(c, i) {
   const p = c.prefill || {};
   const d = c.decode || {};
@@ -1039,8 +1063,8 @@ function pdSideCells(c, i) {
     <td class="strong">${escapeHtml(c.label || '—')}</td>
     <td class="num">${sideCell(p)}</td>
     <td class="num">${sideCell(d)}</td>
-    <td class="sub">${escapeHtml(p.parallel_str || '—')}</td>
-    <td class="sub">${escapeHtml(d.parallel_str || '—')}</td>
+    <td class="sub nowrap">${escapeHtml(fmtParallel(p.parallel_str))}</td>
+    <td class="sub nowrap">${escapeHtml(fmtParallel(d.parallel_str))}</td>
     <td class="num">${fmt(c.decode_tps_per_instance)}</td>
     <td class="num">${fmt(c.throughput_tokens_per_s)}</td>
     <td class="num">${fmt(c.throughput_tokens_per_s_per_device)}</td>
@@ -1056,10 +1080,10 @@ function pdCandidatesTable(cands) {
     const top = i === 0 ? ' class="top1"' : '';
     return `<tr${top}>${pdSideCells(c, i)}</tr>`;
   }).join('');
-  return `<table style="margin-top:12px"><thead><tr>
+  return `<div class="tbl-scroll"><table class="cand" style="margin-top:12px"><thead><tr>
     <th>排名</th><th>P×D</th><th>P 实例×卡</th><th>D 实例×卡</th><th>P 并行</th><th>D 并行</th>
     <th>decode 吞吐(单实例)</th><th>集群吞吐</th><th>单卡吞吐</th><th>req/s</th><th>TTFT</th><th>TPOT</th><th>用卡</th>
-  </tr></thead><tbody>${rows}</tbody></table>`;
+  </tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function variantBody(v) {

@@ -287,17 +287,30 @@ class TaskManager:
         rd = self.out_dir / task_id
         if not rd.is_dir():
             return None
-        if not ((rd / "run.json").is_file() or (rd / "report.html").is_file()):
+        if not (
+            (rd / "run.json").is_file()
+            or (rd / "report.html").is_file()
+            or (rd / "progress.json").is_file()
+        ):
             return None
         done = _read_json(rd / "done.json")
         meta = _read_json(rd / "task.json") or {}
+        # 没有 done.json 但有 progress.json：说明是正在跑的 CLI 任务
+        if done:
+            status = done.get("status", "SUCCESS")
+            finished_at = done.get("finished_at")
+            error = done.get("error")
+        else:
+            status = "RUNNING" if (rd / "progress.json").is_file() else "SUCCESS"
+            finished_at = None
+            error = None
         return TaskRecord(
             task_id=task_id,
             request=meta.get("request", {}),
-            status=(done or {}).get("status", "SUCCESS"),
+            status=status,
             created_at=meta.get("created_at", _now()),
-            finished_at=(done or {}).get("finished_at"),
-            error=(done or {}).get("error"),
+            finished_at=finished_at,
+            error=error,
         )
 
     def list(self, *, status: str | None = None, model: str | None = None) -> list[TaskRecord]:

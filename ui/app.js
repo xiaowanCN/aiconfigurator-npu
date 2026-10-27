@@ -494,6 +494,15 @@ function pdSideSummary(s) {
   return `${fmtInt(s && s.num_devices)} 卡`;
 }
 
+function fmtParallel(s) {
+  if (!s) return '—';
+  // TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1  ->  TP4 PP1 DP2 EP8 MOE-TP1 MOE-DP1
+  return s.split('|').map(part => {
+    const kv = part.split('=');
+    return kv.length === 2 ? `${kv[0].trim()}${kv[1].trim()}` : part.trim();
+  }).filter(Boolean).join(' ');
+}
+
 function pdSideCells(c, i) {
   const p = c.prefill || {};
   const d = c.decode || {};
@@ -503,8 +512,8 @@ function pdSideCells(c, i) {
     <td class="strong">${escapeHtml(c.label || '—')}</td>
     <td class="num">${sideCell(p)}</td>
     <td class="num">${sideCell(d)}</td>
-    <td class="sub">${escapeHtml(p.parallel_str || '—')}</td>
-    <td class="sub">${escapeHtml(d.parallel_str || '—')}</td>
+    <td class="sub nowrap">${escapeHtml(fmtParallel(p.parallel_str))}</td>
+    <td class="sub nowrap">${escapeHtml(fmtParallel(d.parallel_str))}</td>
     <td class="num">${fmt(c.decode_tps_per_instance)}</td>
     <td class="num">${fmt(c.throughput_tokens_per_s)}</td>
     <td class="num">${fmt(c.throughput_tokens_per_s_per_device)}</td>
@@ -520,10 +529,10 @@ function pdCandidatesTable(cands) {
     const top = i === 0 ? ' class="top1"' : '';
     return `<tr${top}>${pdSideCells(c, i)}</tr>`;
   }).join('');
-  return `<table style="margin-top:12px"><thead><tr>
+  return `<div class="tbl-scroll"><table class="cand" style="margin-top:12px"><thead><tr>
     <th>排名</th><th>P×D</th><th>P 实例×卡</th><th>D 实例×卡</th><th>P 并行</th><th>D 并行</th>
     <th>decode 吞吐(单实例)</th><th>集群吞吐</th><th>单卡吞吐</th><th>req/s</th><th>TTFT</th><th>TPOT</th><th>用卡</th>
-  </tr></thead><tbody>${rows}</tbody></table>`;
+  </tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function variantBody(v) {

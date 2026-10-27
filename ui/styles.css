@@ -295,3 +295,18 @@ body.report-mode .content { padding: 20px 24px 48px; max-width: 1280px; margin: 
   .modal { width: 92vw; }
 }
 .hide { display: none !important; }
+
+/* PD 候选表：横向滚动 + 左 6 列固定（排名/P×D/P实例×卡/D实例×卡/P并行/D并行） */
+.tbl-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; }
+table.cand { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+table.cand th, table.cand td { white-space: nowrap; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+table.cand thead th { position: sticky; top: 0; background: #f3f6fc; z-index: 3; text-align: left; }
+table.cand td.nowrap { white-space: nowrap; }
+/* 固定左列：列宽与 left 偏移需一一对应 */
+table.cand th:nth-child(1), table.cand td:nth-child(1) { position: sticky; left: 0;    width: 56px;  min-width: 56px;  background: #fff; z-index: 2; }
+table.cand th:nth-child(2), table.cand td:nth-child(2) { position: sticky; left: 56px;  width: 64px;  min-width: 64px;  background: #fff; z-index: 2; }
+table.cand th:nth-child(3), table.cand td:nth-child(3) { position: sticky; left: 120px; width: 104px; min-width: 104px; background: #fff; z-index: 2; }
+table.cand th:nth-child(4), table.cand td:nth-child(4) { position: sticky; left: 224px; width: 104px; min-width: 104px; background: #fff; z-index: 2; }
+table.cand th:nth-child(5), table.cand td:nth-child(5) { position: sticky; left: 328px; width: 212px; min-width: 212px; background: #fff; z-index: 2; }
+table.cand th:nth-child(6), table.cand td:nth-child(6) { position: sticky; left: 540px; width: 212px; min-width: 212px; background: #fff; z-index: 2; border-right: 1px solid var(--border); }
+table.cand thead th:nth-child(-n+6) { z-index: 4; background: #f3f6fc; }

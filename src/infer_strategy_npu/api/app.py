@@ -25,7 +25,7 @@ from infer_strategy_npu.api.schemas import (
     error_detail,
     supported_device_names,
 )
-from infer_strategy_npu.api.tasks import InvalidState, QueueFull, TaskManager
+from infer_strategy_npu.api.tasks import InvalidState, QueueFull, TERMINAL_STATUSES, TaskManager
 from infer_strategy_npu.models import resolve_model, supported_models
 
 API = "/api/v1"
@@ -368,23 +368,42 @@ def get_report(
 ) -> Response:
     """返回任务详情的单文件静态 HTML。
 
-    - 任务成功时已自动生成 ``<run_dir>/report.html``，这里直接回传；
-    - 文件缺失但 run.json 存在时现场渲染（兼容旧任务）；
-    - ``?download=1`` 走附件下载，便于三方平台归档。
+    - 任务**进行中**（PENDING/RUNNING，未结束）：返回 409 + 当前进度，不生成报告；
+    - 任务结束时：每次都从 ``run.json`` 现场渲染（保证 HTML 内的 CSS/JS 始终最新），
+      ``?download=1`` 走附件下载，便于三方平台归档。
     """
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
+        raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "reason": "未找到该任务目录"}))
+
+    # 任务存在但尚未结束：返回进度，避免误导成"任务不存在"
+    if rec.status not in TERMINAL_STATUSES:
+        progress = manager.progress(task_id)
+        raise HTTPException(
+            409,
+            detail=envelope(
+                409,
+                {
+                    "task_id": task_id,
+                    "status": rec.status,
+                    "progress": progress,
+                    "message": f"任务尚未结束（当前 {progress.get('label') or progress.get('stage') or rec.status}"
+                    f"{(' ' + str(progress.get('percent')) + '%') if progress.get('percent') is not None else ''}），"
+                    "报告将在完成后自动生成，请稍后重试。",
+                },
+                "任务未结束，报告待生成",
+            ),
+        )
 
     run_dir = manager.out_dir / task_id
     target = run_dir / "report.html"
-    if not target.is_file():
-        from infer_strategy_npu.reporting import write_report_from_run_json
+    from infer_strategy_npu.reporting import write_report_from_run_json
 
-        generated = write_report_from_run_json(run_dir / "run.json")
-        if generated is None:
-            raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "reason": "run.json not found"}))
-        target = generated
+    # 始终基于 run.json 重新渲染，确保 HTML 内联的 CSS/JS 为最新版本
+    generated = write_report_from_run_json(run_dir / "run.json")
+    if generated is None:
+        raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "reason": "run.json not found"}))
+    target = generated
 
     if download:
         return FileResponse(str(target), media_type="text/html", filename=f"{task_id}-report.html")
