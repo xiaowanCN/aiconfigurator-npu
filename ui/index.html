@@ -55,9 +55,14 @@
 
       <!-- 视图一：任务列表 -->
       <div id="view-list">
-        <div class="page-head">
-          <h1>推理策略寻优工具</h1>
-          <p>面向大模型推理部署的策略搜索与推荐：输入模型与硬件约束，自动在聚合（agg）与 PD 分离（disagg）模式间寻优。</p>
+        <div class="page-head" style="display:flex;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <h1>推理策略寻优工具</h1>
+            <p>面向大模型推理部署的策略搜索与推荐：输入模型与硬件约束，自动在聚合（agg）与 PD 分离（disagg）模式间寻优。</p>
+          </div>
+          <div style="padding-top:4px;">
+            <button class="btn-primary" onclick="openModal()">＋ 新建任务</button>
+          </div>
         </div>
 
         <div class="card">
@@ -116,13 +121,109 @@
   </div>
 </div>
 
-<!-- 新建任务弹窗（占位：接入 HTTP 接口后启用） -->
+<!-- 新建任务弹窗：提交到 POST /api/v1/tasks -->
 <div class="mask" id="mask">
   <div class="modal">
     <h3>新建任务</h3>
-    <div class="m-desc">Demo 阶段仅展示已有结果。接入 infer-strategy-npu-server 后，此处表单将提交到 <code>POST /api/v1/tasks</code>。</div>
+    <div class="m-desc" id="nf-hint">填写模型与硬件约束，提交后由服务端执行寻优。结果会自动出现在任务记录里。</div>
+
+    <div class="nf-grid">
+      <div class="field">
+        <label>模型 *</label>
+        <select id="nf-model"></select>
+      </div>
+      <div class="field">
+        <label>设备 *</label>
+        <select id="nf-device"></select>
+      </div>
+      <div class="field">
+        <label>卡数 *</label>
+        <input id="nf-num-devices" type="number" min="1" value="32">
+      </div>
+      <div class="field">
+        <label>量化</label>
+        <select id="nf-quantize">
+          <option value="DISABLE">DISABLE（不量化）</option>
+          <option value="ENABLE">ENABLE（开启量化）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>输入长度</label>
+        <input id="nf-isl" type="number" min="1" value="4096">
+      </div>
+      <div class="field">
+        <label>输出长度</label>
+        <input id="nf-osl" type="number" min="1" value="1024">
+      </div>
+      <div class="field">
+        <label>TTFT 上限 (ms)</label>
+        <input id="nf-ttft" type="number" min="1" value="2000">
+      </div>
+      <div class="field">
+        <label>TPOT 上限 (ms)</label>
+        <input id="nf-tpot" type="number" min="1" value="80">
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:14px;">
+      <label>部署形态（模式）</label>
+      <div class="nf-checks">
+        <label class="nf-check"><input type="checkbox" id="nf-mode-agg" checked> PD 混部（agg）</label>
+        <label class="nf-check"><input type="checkbox" id="nf-mode-disagg" checked> PD 分离（disagg）</label>
+      </div>
+    </div>
+
+    <details style="margin-top:16px;">
+      <summary style="cursor:pointer;font-size:13px;color:var(--text-2);">高级参数</summary>
+      <div class="nf-grid" style="margin-top:12px;">
+        <div class="field">
+          <label>PD 每实例卡数（空格分隔）</label>
+          <input id="nf-pd-sizes" type="text" value="8" placeholder="8 16 32">
+        </div>
+        <div class="field">
+          <label>TP 候选（空格分隔，留空=自动）</label>
+          <input id="nf-tp-sizes" type="text" placeholder="如 16 32">
+        </div>
+        <div class="field">
+          <label>并发度 jobs</label>
+          <input id="nf-jobs" type="number" min="1" placeholder="默认 32">
+        </div>
+        <div class="field">
+          <label>top-n（aic-npu）</label>
+          <input id="nf-top-n" type="number" min="1" value="10">
+        </div>
+        <div class="field">
+          <label>专家线性层量化动作</label>
+          <select id="nf-q-linear">
+            <option value="">（随 quantize 默认）</option>
+            <option value="DISABLED">DISABLED</option>
+            <option value="W8A8_DYNAMIC">W8A8_DYNAMIC</option>
+            <option value="MXFP4">MXFP4</option>
+            <option value="FP8">FP8</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>KV cache 量化动作</label>
+          <select id="nf-q-attn">
+            <option value="">（随 quantize 默认）</option>
+            <option value="DISABLED">DISABLED</option>
+            <option value="INT8">INT8</option>
+            <option value="FP8">FP8</option>
+          </select>
+        </div>
+      </div>
+      <label class="nf-check" style="margin-top:10px;">
+        <input type="checkbox" id="nf-compile"> 开启图编译（--compile，更准但更慢）
+      </label>
+    </details>
+
+    <div id="nf-preview" class="nf-preview hide"></div>
+    <div id="nf-error" class="nf-error hide"></div>
+
     <div class="form-foot">
       <button class="btn-cancel" onclick="closeModal()">关闭</button>
+      <button class="btn-cancel" onclick="previewNewTask()">预览命令</button>
+      <button class="btn-primary" id="nf-submit" onclick="submitNewTask()">提交并运行</button>
     </div>
   </div>
 </div>

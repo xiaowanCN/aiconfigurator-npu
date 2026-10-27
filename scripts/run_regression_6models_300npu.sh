@@ -34,10 +34,10 @@ BIN="${BIN:-infer-strategy-npu}"
 # TP_SIZES 留空 -> 不传, 由 infer-strategy-npu 按模型与卡数自动推导
 TP_SIZES="${TP_SIZES:-}"
 JOBS="${JOBS:-32}"
-# PD 均衡搜索(xPyD)默认开启; PD_OFF=1 关闭, PD_MAX=N 限制 P/D 节点数上限(默认 3)
-# PD_SIZES 显式指定组合(如 "1P1D 2P1D 3P1D"), 给定时忽略 PD_MAX
+# PD 分离默认就搜索; PD_OFF=1 -> 只跑 PD 混部(agg), DISAGG_ONLY=1 -> 只跑 PD 分离(disagg)
+# PD_SIZES 指定每实例卡数 P/D 的枚举空间(如 "8 16 32", 取 PxD 笛卡尔积; 默认 8)
 PD_OFF="${PD_OFF:-0}"
-PD_MAX="${PD_MAX:-}"
+DISAGG_ONLY="${DISAGG_ONLY:-0}"
 PD_SIZES="${PD_SIZES:-}"
 DRY_RUN="${DRY_RUN:-0}"
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1

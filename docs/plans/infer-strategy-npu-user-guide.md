@@ -92,11 +92,12 @@ infer-strategy-npu -recommend \
 ```
 
 
-### 2.2.1 PD 分离配比搜索（xPyD）
+### 2.2.1 PD 分离搜索（PD-ratio 每实例卡数）
 
-**适用场景：** 已确定走 PD 分离，需要规划 Prefill 与 Decode 的实例数量与卡数配比。`--pd-balance-search` 默认开启。
+**适用场景：** 已确定走 PD 分离，需要规划 Prefill 与 Decode 的每实例卡数与实例配比。
+**PD 分离默认就会搜索**，无需额外开关。
 
-**32 卡，限定 1P1D：**
+**32 卡，只搜每实例 8 卡（默认值）：**
 
 ```bash
 infer-strategy-npu -recommend \
@@ -105,10 +106,33 @@ infer-strategy-npu -recommend \
   --input-length 8196 --output-length 1024 \
   --tpot-limit 200 --ttft-limit 30000 \
   --quantize ENABLE --quantize-linear-action MXFP4 --quantize-attention-action FP8 \
-  --pd-balance-sizes 1P1D
+  --pd-ratio-sizes 8
 ```
 
-> 说明：`--pd-balance-sizes 1P1D` 表示 1 个 Prefill 实例 + 1 个 Decode 实例，合计 32 卡 → 各 16 卡。若使用默认 `--pd-balance-search`（不指定 `--pd-balance-sizes`），工具会按 `--pd-balance-max`（默认 3）展开 `1P1D / 1P2D / 2P1D / ...` 等组合，每组分别评估 Prefill 与 Decode 两侧，耗时随组数线性增长。
+**32 卡，同时对比每实例 8 / 16 卡的全部组合：**
+
+```bash
+  ... --pd-ratio-sizes 8 16
+```
+
+> 说明：`--pd-ratio-sizes` 是**每实例卡数** P/D 的枚举空间，取 P×D 笛卡尔积：
+> `8` → 1 组 `P8D8`；`8 16` → 4 组（`P8D8` `P8D16` `P16D8` `P16D16`）；
+> `8 16 32` → 9 组。每组各跑一次 PD-ratio 求解，msmodeling 内部再自动枚举
+> 「几个 P 实例 + 几个 D 实例」的最优配比。
+> `P + D > --num-devices` 的组合自动剔除（不报错），全部不可行时 PD 分离就是没有结果。
+>
+> 耗时：单组实测约 177s（32 卡 / msmodeling），组合数线性放大 ——
+> 默认 1 组最快，`8 16 32`（9 组）约 27 分钟。
+
+**只跑 PD 分离 / 只跑 PD 混部：**
+
+```bash
+  ... --serving-modes disagg     # 只跑 PD 分离（msmodeling 真跳过 agg 子任务）
+  ... --serving-modes agg        # 只跑 PD 混部
+  ... --serving-modes agg disagg # 默认，两者都跑
+```
+
+> aic-npu 一次调用必然同时产出 agg 与 disagg，`--serving-modes` 对它只过滤输出。
 
 ---
 
@@ -195,10 +219,9 @@ infer-strategy-npu -recommend \
 
 | 参数                                                                        | 说明                                          |
 | ------------------------------------------------------------------------- | ------------------------------------------- |
-| `--pd-balance-search` / `--no-pd-balance-search`                          | xPyD 配比搜索开关（默认开启）                           |
-| `--pd-balance-max`                                                        | xPyD 搜索的 P/D 节点数上限（默认 3）                    |
-| `--pd-balance-sizes`                                                      | 显式指定 xPyD 组合，如 `1P1D 2P1D`                  |
-| `--tp-sizes`                                                              | 显式指定 TP 候选（空格分隔；缺省按卡数自动推导）   |
+| `--serving-modes`                                                         | 要搜索的部署形态：`agg` / `disagg`（默认两者都跑）                                  |
+| `--pd-ratio-sizes`                                                        | PD 分离每实例卡数 P/D 的枚举空间（默认 `8`，取 P×D 笛卡尔积，如 `8 16 32`）           |
+| `--tp-sizes`                                                              | 显式指定 TP 候选（空格分隔；**缺省不下发**，由 msmodeling 自行推导）   |
 | `--jobs`                                                                  | 内部计算线程并发度                                       |
 | `--local-model-root`                                                      | 本地模型根目录                                     |
 | `--speculative-method`                                                    | 投机解码方法：`none` / `mtp` / `dflash` / `dspark` |
@@ -347,14 +370,14 @@ infer-strategy-npu -recommend  \
   --device ATLAS_950_486T_96G --num-devices 32  \
   --input-length 8196 --output-length 1024  \
   --tpot-limit 200 --ttft-limit 30000  \
-  --quantize ENABLE --pd-balance-search  \
+  --quantize ENABLE \
   --quantize-linear-action MXFP4 --quantize-attention-action FP8  \
-  --tp-sizes 2 4 8 16 
+  --pd-ratio-sizes 8 --tp-sizes 2 4 8 16 
 
 ```
 
 ```text
-❯ infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3 --device ATLAS_950_486T_96G --num-devices 32 --input-length 8196 --output-length 1024 --tpot-limit 200 --ttft-limit 30000 --quantize ENABLE --pd-balance-search --quantize-linear-action MXFP4 --quantize-attention-action FP8 --tp-sizes 2 4 8 16
+❯ infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3 --device ATLAS_950_486T_96G --num-devices 32 --input-length 8196 --output-length 1024 --tpot-limit 200 --ttft-limit 30000 --quantize ENABLE --pd-ratio-sizes 8 --quantize-linear-action MXFP4 --quantize-attention-action FP8 --tp-sizes 2 4 8 16
 
 ====================================================================================================
 infer-strategy-npu - recommend summary
@@ -390,14 +413,14 @@ model-source: model_configs/msmodeling/GLM5.3
   |  18 | agg  | 1862.46  |     58.20    | 17663.58 |  68.73   | 1.819  |  128   | TP=16 | PP=1 | DP=2 | EP=32 | MOE-TP=1 | MOE-DP=1 |
   +-----+------+----------+--------------+----------+----------+--------+--------+---------------------------------------------------+
 
-  PD 分离 (disagg) - xPyD 变体 1 组:
+  PD 分离 (disagg) - PD-ratio 组合 1 组:
 
-    [1P1D]  P=16 卡 (1 节点)   D=16 卡 (1 节点)
+    [P8D8]  P 侧 1 实例 × 8 卡（共 8 卡） | D 侧 3 实例 × 8 卡（共 24 卡）
     +-----+--------------+----------+--------------+----------+----------+--------+-------+-------------------------------------------------------------------+
     | Top |     Mode     | tokens/s | tokens/s/dev | TTFT(ms) | TPOT(ms) | req/s  | Conc. |                              Parallel                             |
     +-----+--------------+----------+--------------+----------+----------+--------+-------+-------------------------------------------------------------------+
-    |  1  | 1P1D_prefill | 61532.81 |   3845.80    | 2131.16  |    -     | 60.091 |   16  |          TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1         |
-    |  1  | 1P1D_decode  | 23672.43 |   1479.53    |    -     |  41.57   | 23.118 |  984  | TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
+    |  1  | P8D8_prefill | 61532.81 |   3845.80    | 2131.16  |    -     | 60.091 |   16  |          TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1         |
+    |  1  | P8D8_decode  | 23672.43 |   1479.53    |    -     |  41.57   | 23.118 |  984  | TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5 |
     +-----+--------------+----------+--------------+----------+----------+--------+-------+-------------------------------------------------------------------+
 
 ----------------------------------------------------------------------------------------------------

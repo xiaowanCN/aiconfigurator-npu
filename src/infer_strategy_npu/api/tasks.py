@@ -53,10 +53,18 @@ def _run_task(out_dir: str, task_id: str, request_dict: dict) -> None:
     run_dir = Path(out_dir) / task_id
 
     def on_progress(stage: str, done: int, total: int) -> None:
+        # stage 形如 "agg" 或 "P8D8/pd_ratio"；拆出 kind/label 便于调用方分类
+        head, sep, tail = stage.partition("/")
+        if sep:
+            label, kind = head, tail  # "P8D8" / "pd_ratio"
+        else:
+            label, kind = None, stage  # None / "agg"
         _atomic_write_json(
             run_dir / "progress.json",
             {
                 "stage": stage,
+                "kind": kind,          # "agg" | "pd_ratio"
+                "label": label or None,  # PD-ratio 组合标签，如 "P8D8"
                 "done": done,
                 "total": total,
                 "percent": round(100.0 * done / total, 2) if total else 0.0,
@@ -302,7 +310,17 @@ class TaskManager:
     def progress(self, task_id: str) -> dict:
         data = _read_json(self.out_dir / task_id / "progress.json")
         if not data:
-            return {"done": 0, "total": 0, "percent": 0.0, "stage": None, "updated_at": None}
+            return {
+                "done": 0,
+                "total": 0,
+                "percent": 0.0,
+                "stage": None,
+                "kind": None,
+                "label": None,
+                "updated_at": None,
+            }
+        data.setdefault("kind", None)
+        data.setdefault("label", None)
         return data
 
     def result(self, task_id: str) -> dict | None:

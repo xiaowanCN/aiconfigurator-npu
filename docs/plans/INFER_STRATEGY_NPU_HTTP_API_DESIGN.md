@@ -12,7 +12,7 @@
 | 项 | 现状 | 对 HTTP 封装的影响 |
 |---|---|---|
 | 核心入口 | `infer_strategy_npu.service.recommend(request, log=None) -> UnifiedRunResult` | 已是纯函数，可直接被服务层调用 |
-| 执行耗时 | 单次数分钟 ~ 数十分钟（128 卡 + xPyD 时 15 次 msmodeling 搜索） | **必须异步**：创建任务立即返回，客户端轮询 |
+| 执行耗时 | 单次数分钟 ~ 数十分钟（PD-ratio 单组实测 177s；`--pd-ratio-sizes 8 16 32` 九组约 27 min） | **必须异步**：创建任务立即返回，客户端轮询 |
 | 产物 | `<out_dir>/<run_id>/{run.json, request.json, summary.txt, aic_npu/, msmodeling/, logs/}` | 结果天然落盘，服务可直接读盘返回 |
 | 任务标识 | `run_id = {yyyyMMdd-HHmmss}-{model}-{device}-{num_devices}`（见 `output.RunArtifacts.create`） | 时间戳前缀便于排序，但**同一秒同参数会重名**，需补唯一后缀 |
 | 进度 | **目前无任何进度上报** | 需要在 runner 里加钩子（见 §5） |
@@ -134,6 +134,21 @@ def recommend(request, *, log=None, on_progress=None) -> UnifiedRunResult: ...
 - 子进程把进度 **原子写** 到 `<run_dir>/progress.json`（先写 tmp 再 rename），
   API 层按需读盘即可，**不需要队列/IPC**，且天然支持重启恢复
 
+`progress.json` 字段：
+
+```json
+{
+  "stage": "P8D8/pd_ratio",
+  "kind": "pd_ratio",
+  "label": "P8D8",
+  "done": 2, "total": 5, "percent": 40.0,
+  "updated_at": "2026-10-27T11:47:03+08:00"
+}
+```
+
+`kind` 取 `agg` / `pd_ratio`；`label` 为 PD-ratio 组合标签（agg 时为 `null`）。
+两者均为**新增可选字段**，旧调用方不受影响。
+
 进度粒度是"子任务级"（粗粒度），对分钟级任务足够；更细（并行度候选级）需要改 msmodeling 内部，暂不做。
 
 ---
@@ -148,12 +163,13 @@ Base path：`/api/v1`，全部 `application/json`。
 | `GET` | `/api/v1/tasks` | 任务列表（分页 / 按 status、model 过滤） | `200` |
 | `GET` | `/api/v1/tasks/{task_id}` | 任务详情：状态 + 进度 + 结果摘要 | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/result` | 完整结果（`run.json`，即 `UnifiedRunResult`） | `200` |
+| `GET` | `/api/v1/tasks/{task_id}/pd` | **PD 分离专用视图**：跨组合全局排序候选 + 每组摘要 | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/summary` | 人类可读摘要（`summary.txt`） | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/logs` | 日志文件列表 | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/logs/{name}` | 日志内容（支持 `?tail=200`） | `200` |
 | `POST` | `/api/v1/tasks/{task_id}/cancel` | 取消任务 | `202` |
 | `DELETE` | `/api/v1/tasks/{task_id}` | 删除任务记录与产物 | `200` |
-| `POST` | `/api/v1/tasks/preview` | **dry-run**：同步返回将要下发的命令 | `200` |
+| `POST` | `/api/v1/tasks/preview` | **dry-run**：同步返回将要下发的命令 + PD 组合网格 + 告警 | `200` |
 | `GET` | `/api/v1/models` | 支持的模型白名单 | `200` |
 | `GET` | `/api/v1/devices` | 支持的设备清单 | `200` |
 | `GET` | `/api/v1/health` | 健康检查（含当前并发数/队列长度） | `200` |
@@ -195,11 +211,25 @@ Base path：`/api/v1`，全部 `application/json`。
     "task_id": "20261020-143012-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-a1b2c3d4",
     "status": "PENDING",
     "created_at": "2026-10-20T14:30:12+08:00",
-    "progress": { "done": 0, "total": 15, "percent": 0.0, "stage": null },
+    "progress": { "done": 0, "total": 2, "percent": 0.0, "stage": null, "kind": null, "label": null },
+    "pd_ratio_grid": [ { "label": "P8D8", "prefill_devices": 8, "decode_devices": 8 } ],
+    "pd_skipped": [],
+    "warnings": [],
     "location": "/api/v1/tasks/20261020-143012-ZhipuAI-GLM-5.3-Flash-ATLAS_800_A2_376T_64G-128-a1b2c3d4"
   }
 }
 ```
+
+> **PD-ratio 专属字段**（`POST /tasks` 与 `POST /tasks/preview` 都返回）：
+>
+> | 字段 | 说明 |
+> |---|---|
+> | `pd_ratio_grid` | 实际会执行的 PD-ratio 组合（已剔除 `P+D > num_devices`） |
+> | `pd_skipped` | 被剔除的组合及原因 |
+> | `warnings` | **非阻断**告警：网格为空 / 组合数过多（含预计耗时）/ aic-npu 只过滤不减算 / 大模型小卡数未量化 |
+>
+> 旧字段 `pd_balance_search` / `pd_balance_max` / `pd_balance_sizes` 已删除，
+> 且请求体开启了 `extra="forbid"`，传入会直接 **422**。
 
 ### 6.2 查询任务（核心）
 

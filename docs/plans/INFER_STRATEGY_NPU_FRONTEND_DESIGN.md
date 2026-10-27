@@ -53,9 +53,10 @@ const DataSource = {
 1. **任务信息**（meta-grid）：模型 / 设备 / 卡数 / 量化 / in-out 长度 / TTFT·TPOT 上限 / 框架 / 路由原因。
 2. **推荐结论卡**（reco）：最佳部署模式（agg / disagg）、集群吞吐、单卡吞吐、TTFT、TPOT、并发、批大小、并行策略串。
 3. **聚合模式（agg）卡** + 聚合候选表（可折叠）。
-4. **PD 分离均衡搜索（xPyD）**：以 `disagg_variants`（1P1D / 2P1D / 3P1D …）作 tab，每个 tab 展示组合吞吐、Prefill 侧 / Decode 侧并行策略与各自卡数吞吐、候选表。
-5. **执行命令**（可折叠）：`routing.commands`。
-6. **错误信息**（失败时）：`errors[]`。
+4. **PD 分离（PD-ratio 每实例卡数组合）**：以 `disagg_variants`（`P8D8` / `P8D16` / `P16D8` …）作 tab，每个 tab 展示组合吞吐、用卡数、Prefill 侧 / Decode 侧并行策略与各自实例数·每实例卡数·吞吐、该组合候选表。
+5. **PD 分离候选汇总**：`frameworks[].pd_ratio_candidates`（跨全部 P×D 组合合并，按「单 D 实例 decode 吞吐」降序），列为 P×D / P 实例×卡 / D 实例×卡 / P 并行 / D 并行 / decode 吞吐 / 集群吞吐 / 单卡吞吐 / req/s / TTFT / TPOT / 用卡。
+7. **执行命令**（可折叠）：`routing.commands`。
+8. **错误信息**（失败时）：`errors[]`。
 
 ## 5. 字段映射（run.json → UI）
 
@@ -65,7 +66,8 @@ const DataSource = {
 | 框架 + 路由原因 | `routing.framework` / `routing.reason` |
 | 推荐结论 | `recommendation.best.{throughput_tokens_per_s, throughput_tokens_per_s_per_device, ttft_ms, tpot_ms, concurrency, batch_size, parallel_str}` |
 | agg 最优 / 候选 | `frameworks[].agg.best` / `frameworks[].agg.candidates[]` |
-| disagg 各 xPyD 组 | `frameworks[].disagg_variants[]`（`label`, `best`, `prefill`, `decode`, `candidates`） |
+| disagg 各 PD-ratio 组 | `frameworks[].disagg_variants[]`（`label`, `pd_ratio`, `best`, `prefill`, `decode`, `pd_ratio_candidates`） |
+| PD 候选汇总 | `frameworks[].pd_ratio_candidates[]`（`label`, `prefill.instances`, `decode.instances`, `*Parallel`, `decode_tps_per_instance`, …） |
 | 并行策略串 | `*.parallel_str`（已含 TP/PP/DP/EP/MOE-TP/MOE-DP/DFlash） |
 | 执行命令 | `routing.commands[]` |
 

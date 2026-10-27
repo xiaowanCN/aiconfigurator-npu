@@ -11,10 +11,12 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from infer_strategy_npu import __version__
 from infer_strategy_npu.api.schemas import (
@@ -24,7 +26,7 @@ from infer_strategy_npu.api.schemas import (
     supported_device_names,
 )
 from infer_strategy_npu.api.tasks import InvalidState, QueueFull, TaskManager
-from infer_strategy_npu.models import supported_models
+from infer_strategy_npu.models import resolve_model, supported_models
 
 API = "/api/v1"
 
@@ -61,19 +63,140 @@ manager = TaskManager(
 )
 
 
-def _task_view(rec) -> dict:
+def _task_view(rec, *, include_raw: bool = True, include_variant_candidates: bool = True) -> dict:
     """任务详情：状态 + 进度 + 结果（结果内嵌）。"""
     progress = manager.progress(rec.task_id)
     return {
         **rec.to_dict(),
         "progress": progress,
         "request": rec.request,
-        "result": manager.result(rec.task_id),
+        "result": _trim_result(manager.result(rec.task_id), include_raw, include_variant_candidates),
         "artifacts": {
             "run_dir": str(manager.out_dir / rec.task_id),
             "run_json": str(manager.out_dir / rec.task_id / "run.json"),
             "summary": str(manager.out_dir / rec.task_id / "summary.txt"),
         },
+    }
+
+
+def _trim_result(result: dict | None, include_raw: bool, include_variant_candidates: bool) -> dict | None:
+    """裁剪 run.json 里体积最大的两块（PD-ratio 下 397KB -> 约 60KB）。
+
+    - ``raw``：每条候选都挂着一个 48 字段的原始 PD 行；
+    - ``disagg_variants[].pd_ratio_candidates``：与 framework 级的
+      ``pd_ratio_candidates`` 完全重复。
+    """
+    if result is None or (include_raw and include_variant_candidates):
+        return result
+
+    frameworks = result.get("frameworks")
+    if not frameworks:
+        return result
+
+    # 1) 先摘掉与 framework 级 pd_ratio_candidates 重复的变体级副本
+    if not include_variant_candidates:
+        for fw in frameworks:
+            for variant in fw.get("disagg_variants") or []:
+                variant.pop("pd_ratio_candidates", None)
+
+    # 2) 再递归摘掉所有 raw（每条 PD 候选挂着一个 48 字段的原始行）
+    if not include_raw:
+        result["frameworks"] = _drop_raw(frameworks)
+        if result.get("recommendation"):
+            result["recommendation"] = _drop_raw(result["recommendation"])
+    return result
+
+
+def _drop_raw(obj: Any) -> Any:
+    """递归删除所有名为 ``raw`` 的键。"""
+    if isinstance(obj, dict):
+        return {k: _drop_raw(v) for k, v in obj.items() if k != "raw"}
+    if isinstance(obj, list):
+        return [_drop_raw(v) for v in obj]
+    return obj
+
+
+def _pd_view(result: dict | None, *, limit: int | None, include_raw: bool) -> dict | None:
+    """PD 分离专用视图：跨组合的全局排序候选 + 每组摘要。"""
+    if result is None:
+        return None
+    req = result.get("request") or {}
+    frameworks = result.get("frameworks") or []
+    fw = next((f for f in frameworks if f.get("pd_ratio_candidates")), frameworks[0] if frameworks else None)
+    if fw is None:
+        return None
+
+    candidates = list(fw.get("pd_ratio_candidates") or [])
+    if not include_raw:
+        candidates = [{k: v for k, v in c.items() if k != "raw"} for c in candidates]
+    if limit and limit > 0:
+        candidates = candidates[:limit]
+
+    variants = [
+        {
+            "label": v.get("label"),
+            "pd_ratio": v.get("pd_ratio"),
+            "best": v.get("best"),
+            "prefill": v.get("prefill"),
+            "decode": v.get("decode"),
+            "candidate_count": len(v.get("pd_ratio_candidates") or []),
+        }
+        for v in (fw.get("disagg_variants") or [])
+    ]
+
+    return {
+        "available": bool(candidates),
+        "framework": fw.get("framework"),
+        "serving_modes": req.get("serving_modes"),
+        "pd_ratio_sizes": req.get("pd_ratio_sizes"),
+        "num_devices": req.get("num_devices"),
+        "variants": variants,
+        "candidates": candidates,
+        "best": (fw.get("disagg") or {}).get("best"),
+        "message": fw.get("message"),
+        "errors": result.get("errors"),
+    }
+
+
+def _validate_payload(payload) -> tuple[dict, str]:
+    """复用领域层白名单校验 model / device，返回 (request_dict, framework_hint)。"""
+    request = payload.to_request_dict()
+    try:
+        resolve_model(request["model"])
+    except ValueError as exc:
+        raise HTTPException(400, detail=envelope(400, {"errors": [error_detail("model", str(exc))]})) from exc
+    if request["device"] not in supported_device_names():
+        raise HTTPException(
+            400,
+            detail=envelope(400, {"errors": [error_detail("device", f"unsupported device {request['device']!r}")]}),
+        )
+    return request, _resolve_framework(request)
+
+
+def _resolve_framework(request: dict) -> str | None:
+    """只做路由判定（不执行、不落盘），用于生成告警与 preview。"""
+    from infer_strategy_npu.routing import route
+    from infer_strategy_npu.schema import RecommendRequest
+
+    forced = str(request.get("framework") or "auto").lower()
+    if forced == "aic-npu":
+        return "aic-npu"
+    if forced == "msmodeling":
+        return "msmodeling"
+    try:
+        spec = resolve_model(request["model"])
+        decision = route(RecommendRequest(**request), spec, aic_save_dir="<preview>")
+    except Exception:
+        return None
+    return decision.framework
+
+
+def _pd_meta(payload) -> dict:
+    """PD-ratio 网格 + 非阻断告警。"""
+    return {
+        "pd_ratio_grid": list(payload.pd_ratio_grid),
+        "pd_skipped": list(payload.pd_skipped),
+        "warnings": payload.build_warnings(_resolve_framework(payload.to_request_dict())),
     }
 
 
@@ -93,6 +216,7 @@ def health() -> dict:
             "queued": queued,
             "max_concurrent": manager.max_concurrent,
             "out_dir": str(manager.out_dir),
+            "ui": UI_DIR.is_dir(),  # 是否由本服务托管静态界面
         },
         "服务正常",
     )
@@ -113,19 +237,8 @@ def devices() -> dict:
 
 @app.post(f"{API}/tasks", summary="创建任务（异步）", status_code=202)
 def create_task(payload: TaskCreateRequest, response: Response) -> dict:
-    request = payload.to_request_dict()
     # 模型/设备的取值校验复用领域层的白名单
-    try:
-        from infer_strategy_npu.models import resolve_model
-
-        resolve_model(request["model"])
-    except ValueError as exc:
-        raise HTTPException(400, detail=envelope(400, {"errors": [error_detail("model", str(exc))]})) from exc
-    if request["device"] not in supported_device_names():
-        raise HTTPException(
-            400,
-            detail=envelope(400, {"errors": [error_detail("device", f"unsupported device {request['device']!r}")]}),
-        )
+    request, _ = _validate_payload(payload)
 
     try:
         rec = manager.create(request)
@@ -133,7 +246,36 @@ def create_task(payload: TaskCreateRequest, response: Response) -> dict:
         raise HTTPException(429, detail=envelope(429, {"reason": str(exc)})) from exc
 
     response.headers["Location"] = f"{API}/tasks/{rec.task_id}"
-    return envelope(202, _task_view(rec))
+    view = _task_view(rec)
+    view.update(_pd_meta(payload))  # PD-ratio 网格与告警（不阻断）
+    return envelope(202, view)
+
+
+@app.post(f"{API}/tasks/preview", summary="dry-run：返回将要下发的命令，不创建任务")
+def preview_task(payload: TaskCreateRequest) -> dict:
+    """提交前先看会跑几组、命令长什么样（不 import msmodeling，秒级返回）。"""
+    request, framework = _validate_payload(payload)
+    from infer_strategy_npu.routing import route
+    from infer_strategy_npu.schema import RecommendRequest
+
+    try:
+        spec = resolve_model(request["model"])
+        decision = route(RecommendRequest(**request), spec, aic_save_dir="<preview>")
+    except Exception as exc:
+        raise HTTPException(400, detail=envelope(400, {"reason": f"{type(exc).__name__}: {exc}"})) from exc
+
+    grid = list(payload.pd_ratio_grid)
+    return envelope(
+        200,
+        {
+            "framework": framework,
+            "reason": decision.reason,
+            **_pd_meta(payload),
+            "commands": list(decision.commands),
+            "total_steps": len(decision.commands),
+            "pd_combo_count": len(grid),
+        },
+    )
 
 
 @app.get(f"{API}/tasks", summary="任务列表")
@@ -165,20 +307,40 @@ def list_tasks(
 
 
 @app.get(f"{API}/tasks/{{task_id}}", summary="任务详情（状态 + 进度 + 结果）")
-def get_task(task_id: str) -> dict:
+def get_task(
+    task_id: str,
+    include_raw: bool = Query(True, description="是否保留各候选的 raw 明细（PD-ratio 下体积最大）"),
+    include_variant_candidates: bool = Query(True, description="是否保留 disagg_variants[].pd_ratio_candidates（与 result 顶层重复）"),
+) -> dict:
     rec = manager.get(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    return envelope(200, _task_view(rec))
+    return envelope(200, _task_view(rec, include_raw=include_raw, include_variant_candidates=include_variant_candidates))
 
 
 @app.get(f"{API}/tasks/{{task_id}}/result", summary="完整结果（run.json）")
-def get_result(task_id: str) -> dict:
+def get_result(
+    task_id: str,
+    include_raw: bool = Query(True, description="是否保留各候选的 raw 明细（PD-ratio 下体积最大）"),
+    include_variant_candidates: bool = Query(True, description="是否保留 disagg_variants[].pd_ratio_candidates（与 result 顶层重复）"),
+) -> dict:
     rec = manager.get(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    result = manager.result(task_id)
+    result = _trim_result(manager.result(task_id), include_raw, include_variant_candidates)
     return envelope(200, result)
+
+
+@app.get(f"{API}/tasks/{{task_id}}/pd", summary="PD 分离专用视图（跨组合全局排序候选）")
+def get_pd(
+    task_id: str,
+    limit: int | None = Query(None, ge=1, description="只返回 Top-N 候选"),
+    include_raw: bool = Query(True, description="是否保留 raw 明细"),
+) -> dict:
+    rec = manager.get(task_id)
+    if rec is None:
+        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
+    return envelope(200, _pd_view(manager.result(task_id), limit=limit, include_raw=include_raw))
 
 
 @app.get(f"{API}/tasks/{{task_id}}/summary", summary="人类可读摘要")
@@ -231,6 +393,18 @@ def delete_task(task_id: str) -> dict:
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(request, exc: HTTPException) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content=exc.detail)
+
+
+# ------------------------------------------------------------------ 静态 UI
+# 由 FastAPI 自身托管 ui/：同源访问，既绕开 file:// 的 CORS 限制，
+# 也让表单可以直接 POST /api/v1/tasks。
+# 注意：必须挂在所有 API 路由**之后**，否则会吞掉 /api/v1/*。
+UI_DIR = Path(__file__).resolve().parents[3] / "ui"
+
+if UI_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(UI_DIR), html=True), name="ui")
+else:  # pragma: no cover - 以 wheel 安装、无 ui/ 目录时跳过
+    pass
 
 
 def build_parser() -> argparse.ArgumentParser:
