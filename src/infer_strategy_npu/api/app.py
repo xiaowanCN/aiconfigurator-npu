@@ -330,7 +330,7 @@ def get_task(
     include_raw: bool = Query(True, description="是否保留各候选的 raw 明细（PD-ratio 下体积最大）"),
     include_variant_candidates: bool = Query(True, description="是否保留 disagg_variants[].pd_ratio_candidates（与 result 顶层重复）"),
 ) -> dict:
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     return envelope(200, _task_view(rec, include_raw=include_raw, include_variant_candidates=include_variant_candidates))
@@ -342,7 +342,7 @@ def get_result(
     include_raw: bool = Query(True, description="是否保留各候选的 raw 明细（PD-ratio 下体积最大）"),
     include_variant_candidates: bool = Query(True, description="是否保留 disagg_variants[].pd_ratio_candidates（与 result 顶层重复）"),
 ) -> dict:
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     result = _trim_result(manager.result(task_id), include_raw, include_variant_candidates)
@@ -355,7 +355,7 @@ def get_pd(
     limit: int | None = Query(None, ge=1, description="只返回 Top-N 候选"),
     include_raw: bool = Query(True, description="是否保留 raw 明细"),
 ) -> dict:
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     return envelope(200, _pd_view(manager.result(task_id), limit=limit, include_raw=include_raw))
@@ -372,7 +372,7 @@ def get_report(
     - 文件缺失但 run.json 存在时现场渲染（兼容旧任务）；
     - ``?download=1`` 走附件下载，便于三方平台归档。
     """
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
 
@@ -393,7 +393,7 @@ def get_report(
 
 @app.get(f"{API}/tasks/{{task_id}}/summary", summary="人类可读摘要")
 def get_summary(task_id: str) -> dict:
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     return envelope(200, {"text": manager.summary_text(task_id)})
@@ -401,7 +401,7 @@ def get_summary(task_id: str) -> dict:
 
 @app.get(f"{API}/tasks/{{task_id}}/logs", summary="日志文件列表")
 def get_logs(task_id: str) -> dict:
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     return envelope(200, manager.logs(task_id))
@@ -409,7 +409,7 @@ def get_logs(task_id: str) -> dict:
 
 @app.get(f"{API}/tasks/{{task_id}}/logs/{{name}}", summary="日志内容")
 def get_log(task_id: str, name: str, tail: int | None = Query(None, ge=1)) -> dict:
-    rec = manager.get(task_id)
+    rec = manager.get_or_disk(task_id)
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     if ".." in name or "/" in name or "\\" in name:

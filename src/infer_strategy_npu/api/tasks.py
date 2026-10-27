@@ -276,6 +276,30 @@ class TaskManager:
         self._poll()
         return self._tasks.get(task_id)
 
+    def get_or_disk(self, task_id: str) -> TaskRecord | None:
+        """先查内存注册表；查不到但磁盘上 <out_dir>/<task_id> 有产物时，按磁盘态重建一条记录。
+
+        这样 CLI 跑出来的任务（无 ``task.json``、未注册进内存）也能被 /result、/report 等读取。
+        """
+        rec = self.get(task_id)
+        if rec is not None:
+            return rec
+        rd = self.out_dir / task_id
+        if not rd.is_dir():
+            return None
+        if not ((rd / "run.json").is_file() or (rd / "report.html").is_file()):
+            return None
+        done = _read_json(rd / "done.json")
+        meta = _read_json(rd / "task.json") or {}
+        return TaskRecord(
+            task_id=task_id,
+            request=meta.get("request", {}),
+            status=(done or {}).get("status", "SUCCESS"),
+            created_at=meta.get("created_at", _now()),
+            finished_at=(done or {}).get("finished_at"),
+            error=(done or {}).get("error"),
+        )
+
     def list(self, *, status: str | None = None, model: str | None = None) -> list[TaskRecord]:
         self._poll()
         items = [self._tasks[t] for t in self._order if t in self._tasks]
