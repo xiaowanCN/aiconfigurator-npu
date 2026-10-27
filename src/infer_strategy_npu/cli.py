@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Iterable
+from typing import TypeVar
 
 from infer_strategy_npu import __version__
 from infer_strategy_npu.config import (
@@ -24,7 +26,9 @@ from infer_strategy_npu.config import (
     MS_DEFAULT_NUM_DRAFT_LAYERS,
     MS_DEFAULT_NUM_SPECULATIVE_TOKENS,
     MS_DEFAULT_SPECULATIVE_METHOD,
-    PD_BALANCE_MAX_NODES_DEFAULT,
+    PD_RATIO_SIZES_DEFAULT,
+    SERVING_MODES,
+    SERVING_MODES_DEFAULT,
 )
 from infer_strategy_npu.devices import DEVICES
 from infer_strategy_npu.models import resolve_model, supported_models
@@ -36,7 +40,7 @@ from infer_strategy_npu.quantize import (
     QUANTIZE_CHOICES,
     normalize_quantize,
 )
-from infer_strategy_npu.routing import VALID_FRAMEWORKS, parse_pd_balance_label
+from infer_strategy_npu.routing import VALID_FRAMEWORKS
 from infer_strategy_npu.schema import RecommendRequest
 from infer_strategy_npu.service import recommend
 
@@ -68,13 +72,24 @@ def quantize_type(value: str) -> str:
         raise argparse.ArgumentTypeError(str(exc)) from None
 
 
-def pd_balance_label(value: str) -> str:
-    """校验 xPyD 写法（如 ``1P1D`` / ``3P1D``），返回规范化后的大写形式。"""
-    try:
-        x, y = parse_pd_balance_label(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(str(exc)) from None
-    return f"{x}P{y}D"
+def serving_mode(value: str) -> str:
+    """校验 ``--serving-modes`` 的取值。"""
+    key = str(value).strip().lower()
+    if key not in SERVING_MODES:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a valid serving mode; use {' | '.join(SERVING_MODES)}")
+    return key
+
+
+_T = TypeVar("_T")
+
+
+def _dedupe(values: Iterable[_T]) -> list[_T]:
+    """按输入顺序去重（--serving-modes / --pd-ratio-sizes 都用它）。"""
+    result: list[_T] = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
             "  infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3 \\\n"
             "      --device ATLAS_800_A2_376T_64G --num-devices 128 --quantize ENABLE \\\n"
             "      --quantize-linear-action FP8 --quantize-attention-action FP8\n"
+            "\n"
+            "  # PD 分离每实例卡数搜索 8/16/32 的全部 9 种 P×D 组合，只跑 PD 分离\n"
+            "  infer-strategy-npu -recommend --model ZhipuAI/GLM-5.2 \\\n"
+            "      --device ATLAS_950_486T_96G --num-devices 128 \\\n"
+            "      --input-length 4096 --output-length 1024 --ttft-limit 2000 --tpot-limit 80 \\\n"
+            "      --serving-modes disagg --pd-ratio-sizes 8 16 32\n"
         ),
     )
     parser.add_argument("--version", action="version", version=f"infer-strategy-npu {__version__}")
@@ -139,6 +160,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="msmodeling 本地模型根目录（含各模型 config.json），默认取环境变量 INFER_STRATEGY_LOCAL_MODEL_ROOT",
     )
+    parser.add_argument(
+        "--serving-modes",
+        type=serving_mode,
+        nargs="+",
+        metavar="MODE",
+        default=list(SERVING_MODES_DEFAULT),
+        help=(
+            "要搜索的部署形态（空格分隔，可选 "
+            f"{' | '.join(SERVING_MODES)}；默认 {' '.join(SERVING_MODES_DEFAULT)} 都跑）。"
+            "--serving-modes disagg 表示只跑 PD 分离，--serving-modes agg 表示只跑 PD 混部。"
+            "msmodeling 侧真正跳过对应子任务；aic-npu 一次调用必然同时产出两者，这里只过滤输出"
+        ),
+    )
 
     ms = parser.add_argument_group("msmodeling passthrough")
     ms.add_argument(
@@ -179,7 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "msmodeling 搜索的 TP 候选（空格分隔，如 --tp-sizes 32 64）；"
-            "默认按模型与 --num-devices 推导为 2 的幂，大模型从 32 起跳，其余从 1 起跳"
+            "默认不下发，由 msmodeling 按卡数自行推导（所有能整除该侧卡数的 2 的幂）"
         ),
     )
     ms.add_argument("--jobs", type=positive_int, default=None, help="msmodeling 搜索并发度")
@@ -194,38 +228,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ms.add_argument(
-        "--pd-balance-search",
-        dest="pd_balance_search",
-        action="store_true",
-        default=True,
-        help=(
-            "PD 分离时做 xPyD 卡数均衡搜索（默认开启）：把 --num-devices 按 x:y 切给 P/D 两侧，"
-            "而非两侧各用满总卡数；仅对分发到 msmodeling 的请求生效，aic-npu 分支忽略"
-        ),
-    )
-    ms.add_argument(
-        "--no-pd-balance-search",
-        dest="pd_balance_search",
-        action="store_false",
-        help="关闭 xPyD 卡数均衡搜索，退回 PD 两侧各用满 --num-devices 的旧行为",
-    )
-    ms.add_argument(
-        "--pd-balance-max",
+        "--pd-ratio-sizes",
         type=positive_int,
-        default=PD_BALANCE_MAX_NODES_DEFAULT,
-        metavar="N",
-        help=f"xPyD 搜索时 P/D 节点数上限，x、y 取 1..N（默认 {PD_BALANCE_MAX_NODES_DEFAULT}）",
-    )
-    ms.add_argument(
-        "--pd-balance-sizes",
-        type=pd_balance_label,
         nargs="+",
-        metavar="xPyD",
-        default=None,
+        metavar="N",
+        default=list(PD_RATIO_SIZES_DEFAULT),
         help=(
-            "显式指定要搜的 xPyD 组合（空格分隔，如 --pd-balance-sizes 1P1D 2P1D 3P1D）；"
-            "给定时只搜这些组合并忽略 --pd-balance-max。卡数按各自 x:y 比例切分，"
-            "不够切分的组合会被跳过"
+            "PD 分离搜索时每实例卡数 P/D 的枚举空间（默认 "
+            f"{' '.join(str(v) for v in PD_RATIO_SIZES_DEFAULT)}）；"
+            "取 P×D 笛卡尔积，如 8 16 32 -> (8,8)(8,16)(8,32)(16,8)…(32,32)。"
+            "P+D > --num-devices 的组合会被剔除，全部不可行时 PD 分离无结果（不报错）。"
+            "仅对分发到 msmodeling 的请求生效，aic-npu 分支忽略"
         ),
     )
 
@@ -259,16 +272,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    # --pd-balance-sizes 的可行性：x+y 超过卡数时 unit=floor(total/(x+y))=0，无法切分
-    if args.pd_balance_sizes:
-        for label in args.pd_balance_sizes:
-            x, y = parse_pd_balance_label(label)
-            if x + y > args.num_devices:
-                parser.error(
-                    f"--pd-balance-sizes {label} needs at least {x + y} devices "
-                    f"(x+y), but --num-devices={args.num_devices}"
-                )
-
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="[%(levelname)s] [%(name)s] %(message)s",
@@ -299,9 +302,8 @@ def main(argv: list[str] | None = None) -> int:
         jobs=args.jobs,
         max_search_combinations=args.max_search_combinations,
         compile_model=args.compile,
-        pd_balance_search=args.pd_balance_search,
-        pd_balance_max=args.pd_balance_max,
-        pd_balance_sizes=args.pd_balance_sizes,
+        serving_modes=_dedupe(args.serving_modes),
+        pd_ratio_sizes=_dedupe(args.pd_ratio_sizes),
         dry_run=args.dry_run,
     )
 

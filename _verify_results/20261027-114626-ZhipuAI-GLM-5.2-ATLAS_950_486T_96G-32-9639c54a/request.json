@@ -1,0 +1,34 @@
+{
+  "model": "ZhipuAI/GLM-5.2",
+  "device": "ATLAS_950_486T_96G",
+  "num_devices": 32,
+  "input_length": 4096,
+  "output_length": 1024,
+  "tpot_limit": 80,
+  "ttft_limit": 2000,
+  "quantize": "ENABLE",
+  "mode": "recommend",
+  "top_n": 10,
+  "framework": "auto",
+  "local_model_root": "model_configs/msmodeling",
+  "out_dir": "_verify_results",
+  "quantize_linear_action": "MXFP4",
+  "quantize_non_expert_linear_action": "DISABLED",
+  "quantize_attention_action": "FP8",
+  "speculative_method": "dflash",
+  "num_speculative_tokens": 7,
+  "acceptance_length": 5.0,
+  "num_draft_layers": 6,
+  "tp_sizes": null,
+  "jobs": null,
+  "max_search_combinations": null,
+  "compile_model": false,
+  "serving_modes": [
+    "disagg"
+  ],
+  "pd_ratio_sizes": [
+    8,
+    16
+  ],
+  "dry_run": false
+}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from infer_strategy_npu.config import (
     DEFAULT_INPUT_LENGTH,
@@ -13,7 +13,9 @@ from infer_strategy_npu.config import (
     DEFAULT_TOP_N,
     DEFAULT_TPOT_LIMIT,
     DEFAULT_TTFT_LIMIT,
-    PD_BALANCE_MAX_NODES_DEFAULT,
+    PD_RATIO_SIZES_DEFAULT,
+    SERVING_MODES,
+    SERVING_MODES_DEFAULT,
 )
 from infer_strategy_npu.devices import DEVICES
 from infer_strategy_npu.models import supported_models
@@ -48,6 +50,24 @@ class TaskCreateRequest(BaseModel):
     top_n: int = Field(DEFAULT_TOP_N, gt=0)
     framework: str = Field("auto", description="auto | aic-npu | msmodeling")
     out_dir: str | None = None
+    serving_modes: list[str] = Field(
+        default=list(SERVING_MODES_DEFAULT),
+        description=f"要搜索的部署形态；可选 {' | '.join(SERVING_MODES)}",
+    )
+
+    @field_validator("serving_modes")
+    @classmethod
+    def _validate_serving_modes(cls, value: list[str]) -> list[str]:
+        modes: list[str] = []
+        for item in value:
+            key = str(item).strip().lower()
+            if key not in SERVING_MODES:
+                raise ValueError(f"unsupported serving mode {item!r}; use {' | '.join(SERVING_MODES)}")
+            if key not in modes:
+                modes.append(key)
+        if not modes:
+            raise ValueError("serving_modes must not be empty")
+        return modes
 
     # msmodeling 透传
     quantize_linear_action: str | None = None
@@ -62,10 +82,25 @@ class TaskCreateRequest(BaseModel):
     max_search_combinations: int | None = None
     compile_model: bool = False
 
-    # PD 均衡搜索
-    pd_balance_search: bool = True
-    pd_balance_max: int = Field(PD_BALANCE_MAX_NODES_DEFAULT, gt=0)
-    pd_balance_sizes: list[str] | None = None
+    # PD 分离搜索：每实例卡数 P/D 的枚举空间
+    pd_ratio_sizes: list[int] = Field(
+        default=list(PD_RATIO_SIZES_DEFAULT),
+        description="每实例卡数 P/D 的枚举空间，取 P×D 笛卡尔积",
+    )
+
+    @field_validator("pd_ratio_sizes")
+    @classmethod
+    def _validate_pd_ratio_sizes(cls, value: list[int]) -> list[int]:
+        sizes: list[int] = []
+        for item in value:
+            size = int(item)
+            if size <= 0:
+                raise ValueError(f"pd_ratio_sizes must be positive, got {item!r}")
+            if size not in sizes:
+                sizes.append(size)
+        if not sizes:
+            raise ValueError("pd_ratio_sizes must not be empty")
+        return sizes
 
     client_token: str | None = Field(None, description="可选幂等键（当前仅记录，不去重）")
 

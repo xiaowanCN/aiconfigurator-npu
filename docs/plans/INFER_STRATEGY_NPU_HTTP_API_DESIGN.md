@@ -129,8 +129,8 @@ def recommend(request, *, log=None, on_progress=None) -> UnifiedRunResult: ...
 - `RunnerContext` 增加 `report_progress(stage: str, done: int, total: int)` 回调
 - 各 runner 在每个子任务开始/结束时调用：
   - aic-npu：总数 1（一次 `cli_default`）
-  - msmodeling：`total = 1(agg) + 2 * len(xPyD 网格)`，
-    stage 依次为 `agg`、`{xPyD}/disagg_prefill`、`{xPyD}/disagg_decode`
+  - msmodeling：`total = (1 if 含 agg else 0) + len(PD-ratio 网格)`，
+    stage 依次为 `agg`、`{PxDy}/pd_ratio`（每组 PD-ratio 一次调用，内部并行跑 P/D 两阶段）
 - 子进程把进度 **原子写** 到 `<run_dir>/progress.json`（先写 tmp 再 rename），
   API 层按需读盘即可，**不需要队列/IPC**，且天然支持重启恢复
 
@@ -176,9 +176,8 @@ Base path：`/api/v1`，全部 `application/json`。
   "quantize": "W8A8",
   "framework": "auto",
   "tp_sizes": null,
-  "pd_balance_search": true,
-  "pd_balance_max": 3,
-  "pd_balance_sizes": null,
+  "serving_modes": ["agg", "disagg"],
+  "pd_ratio_sizes": [8],
   "compile_model": false,
   "jobs": 32,
   "dry_run": false,
@@ -374,7 +373,6 @@ infer-strategy-npu-server --host 0.0.0.0 --port 8000 \
 | `INFER_STRATEGY_API_TASK_TIMEOUT_SEC` | 单任务超时 | `7200` |
 | `INFER_STRATEGY_API_CORS_ORIGINS` | 允许的跨域来源（逗号分隔） | `*`（前端 demo 期全放开） |
 | `INFER_STRATEGY_LOCAL_MODEL_ROOT` | （已有）msmodeling 本地模型根目录 | `model_configs/msmodeling` |
-| `INFER_STRATEGY_PD_BALANCE_GRANULARITY` | （已有）xPyD 卡数粒度 | `16` |
 
 > 鉴权按评审结论**不做**；如需接入网关，再加 `INFER_STRATEGY_API_KEY`。
 

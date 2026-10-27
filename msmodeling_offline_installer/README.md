@@ -17,7 +17,7 @@
 msmodeling 源码有更新时，重新构建并覆盖本目录的 whl：
 
 ```bash
-cd D:/Projects/ExpProjects/GITProject/msmodeling-self/msmodeling
+cd D:/Projects/ExpProjects/GITCODEProject/msmodeling
 
 # 构建 wheel，直接输出到本目录（-o 指定输出目录，不会在源码仓库里留 dist/）
 uv build --wheel -o "D:/Projects/ExpProjects/GITProject/aic-npu-cn-ascend/aiconfigurator-npu/msmodeling_offline_installer"

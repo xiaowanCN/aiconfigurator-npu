@@ -137,15 +137,14 @@ replicas              = num_devices ÷ (tp × pp × dp)
 }
 ```
 
-### 3.3 `PlanDisagg`（PD 分离，一组 xPyD 一个）
+### 3.3 `PlanDisagg`（PD 分离，一组 PD-ratio 组合一个）
 
 ```jsonc
 {
-  "label": "3P1D",                     // xPyD 标签；aic-npu 为 "disagg"
-  "pd_balance": { "prefill_nodes": 3, "decode_nodes": 1,
-                  "prefill_devices": 96, "decode_devices": 32, "total_used": 128 },
-  "prefill": DeploymentSide,           // P 节点信息
-  "decode":  DeploymentSide,           // D 节点信息
+  "label": "P8D8",                     // PD-ratio 组合标签；aic-npu 为 "disagg"
+  "pd_ratio": { "prefill_devices": 8, "decode_devices": 8 },   // **每实例**卡数
+  "prefill": DeploymentSide,           // P 侧信息
+  "decode":  DeploymentSide,           // D 侧信息
   "overall": {                         // 整条 PD 方案的端到端口径
     "output_tokens_per_s": 12345.6,
     "output_tokens_per_s_per_device": 96.4,

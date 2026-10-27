@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from infer_strategy_npu.config import DEFAULT_OUT_DIR, slugify
-from infer_strategy_npu.schema import Candidate, UnifiedRunResult, to_float
+from infer_strategy_npu.schema import Candidate, ServingModeResult, UnifiedRunResult, to_float
 
 
 def make_run_id(model: str, device: str, num_devices: int) -> str:
@@ -104,6 +104,13 @@ def _fmt(value: float | int | None, digits: int = 2, suffix: str = "") -> str:
     return f"{value:.{digits}f}{suffix}"
 
 
+def _clip(value: str | None, width: int = 58) -> str:
+    if not value:
+        return "-"
+    text = str(value)
+    return text if len(text) <= width else text[: width - 3] + "..."
+
+
 def _candidate_rows(candidates: list[Candidate], framework: str, serving_mode: str, mode: str) -> list[list[str]]:
     rows = []
     for idx, c in enumerate(candidates, start=1):
@@ -118,7 +125,7 @@ def _candidate_rows(candidates: list[Candidate], framework: str, serving_mode: s
                 _fmt(to_float(c.tpot_ms)),
                 _fmt(to_float(c.throughput_req_per_s), 3),
                 "-" if c.concurrency is None else str(c.concurrency),
-                c.parallel_str or "-",
+                _clip(c.parallel_str),
             ]
         )
     return rows
@@ -137,20 +144,97 @@ _TABLE_HEADER = [
     "Parallel",
 ]
 
+# PD 分离（PD-ratio）候选汇总表，按"单 D 实例 decode 吞吐"降序
+_PD_TABLE_HEADER = [
+    "Rank",
+    "PxD",
+    "P inst",
+    "D inst",
+    "P dev/inst",
+    "D dev/inst",
+    "P Parallel",
+    "D Parallel",
+    "P bs",
+    "D bs",
+    "P conc",
+    "D conc",
+    "TTFT(ms)",
+    "TPOT(ms)",
+    "decode tps/inst",
+    "decode tps/cluster",
+    "cluster tokens/s",
+    "tokens/s/dev",
+    "req/s",
+    "Devices",
+]
 
-def _make_table(rows: list[list[str]]) -> str:
+
+def _make_table(rows: list[list[str]], header: list[str] | None = None) -> str:
+    columns = header or _TABLE_HEADER
     try:
         from prettytable import PrettyTable
 
-        table = PrettyTable(_TABLE_HEADER)
+        table = PrettyTable(columns)
         for row in rows:
             table.add_row(row)
         return str(table)
     except Exception:  # pragma: no cover - prettytable 缺失时退化为简单表格
-        widths = [max(len(str(r[i])) for r in [*rows, _TABLE_HEADER]) for i in range(len(_TABLE_HEADER))]
-        line = " | ".join(h.ljust(w) for h, w in zip(_TABLE_HEADER, widths))
+        widths = [max(len(str(r[i])) for r in [*rows, columns]) for i in range(len(columns))]
+        line = " | ".join(h.ljust(w) for h, w in zip(columns, widths))
         body = "\n".join(" | ".join(str(c).ljust(w) for c, w in zip(row, widths)) for row in rows)
         return f"{line}\n{'-' * len(line)}\n{body}"
+
+
+def _pd_candidate_rows(candidates: list[dict]) -> list[list[str]]:
+    """把 run.json 里的 PD 候选字典渲染成表格行。"""
+    rows = []
+    for item in candidates:
+        prefill = item.get("prefill") or {}
+        decode = item.get("decode") or {}
+        rows.append(
+            [
+                str(item.get("rank") or len(rows) + 1),
+                item.get("label") or "-",
+                str(prefill.get("instances") or "-"),
+                str(decode.get("instances") or "-"),
+                str(prefill.get("devices_per_instance") or "-"),
+                str(decode.get("devices_per_instance") or "-"),
+                _clip(prefill.get("parallel_str"), 40),
+                _clip(decode.get("parallel_str"), 40),
+                str(prefill.get("batch_size") or "-"),
+                str(decode.get("batch_size") or "-"),
+                str(prefill.get("concurrency") or "-"),
+                str(decode.get("concurrency") or "-"),
+                _fmt(to_float(item.get("ttft_ms"))),
+                _fmt(to_float(item.get("tpot_ms"))),
+                _fmt(to_float(item.get("decode_tps_per_instance"))),
+                _fmt(to_float(item.get("decode_tps_cluster"))),
+                _fmt(to_float(item.get("throughput_tokens_per_s"))),
+                _fmt(to_float(item.get("throughput_tokens_per_s_per_device"))),
+                _fmt(to_float(item.get("throughput_req_per_s")), 3),
+                f"{item.get('devices_used') or '-'}/{item.get('num_devices') or '-'}",
+            ]
+        )
+    return rows
+
+
+def _variant_headline(variant: ServingModeResult) -> str:
+    """PD-ratio 变体的一行标题：P/D 两侧的实例与卡数分布。"""
+    combo = variant.pd_ratio or {}
+    if not combo:
+        return "[PD 分离] P/D 两侧均用满总卡数"
+    extra = (variant.best.extra if variant.best else None) or {}
+    prefill = extra.get("prefill") or {}
+    decode = extra.get("decode") or {}
+    p_inst, d_inst = prefill.get("instances"), decode.get("instances")
+    p_dev, d_dev = combo.get("prefill_devices"), combo.get("decode_devices")
+
+    def _side(tag: str, instances, devices) -> str:
+        if instances is None or devices is None:
+            return f"{tag} 侧 {devices} 卡/实例"
+        return f"{tag} 侧 {instances} 实例 × {devices} 卡（共 {instances * devices} 卡）"
+
+    return f"[{variant.label}]  {_side('P', p_inst, p_dev)} | {_side('D', d_inst, d_dev)}"
 
 
 def render_summary(result: UnifiedRunResult) -> str:
@@ -169,6 +253,10 @@ def render_summary(result: UnifiedRunResult) -> str:
         f"tpot-limit={req.get('tpot_limit')} ms   ttft-limit={req.get('ttft_limit')} ms"
     )
     lines.append(f"quantize    : {req.get('quantize')}")
+    lines.append(
+        f"serving     : {' '.join(req.get('serving_modes') or [])}"
+        f"   PD 每实例卡数枚举: {' '.join(str(v) for v in (req.get('pd_ratio_sizes') or []))}"
+    )
     lines.append(f"framework   : {result.routing.get('framework')}  ({result.routing.get('reason')})")
     if result.routing.get("aic_model_path"):
         lines.append(f"model-path  : {result.routing['aic_model_path']}")
@@ -195,19 +283,16 @@ def render_summary(result: UnifiedRunResult) -> str:
             lines.extend("  " + line for line in _make_table(rows).splitlines())
         variants = list(getattr(fw, "disagg_variants", []) or [])
         if variants:
+            is_pd_ratio = any(v.pd_ratio for v in variants)
             lines.append("")
-            lines.append(f"  PD 分离 (disagg) - xPyD 变体 {len(variants)} 组:")
+            lines.append(
+                f"  PD 分离 (disagg) - PD-ratio 组合 {len(variants)} 组:"
+                if is_pd_ratio
+                else f"  PD 分离 (disagg) - 变体 {len(variants)} 组:"
+            )
             for variant in variants:
-                balance = variant.pd_balance or {}
                 lines.append("")
-                if balance:
-                    lines.append(
-                        f"    [{variant.label}]  P={balance.get('prefill_devices')} 卡 "
-                        f"({balance.get('prefill_nodes')} 节点)   "
-                        f"D={balance.get('decode_devices')} 卡 ({balance.get('decode_nodes')} 节点)"
-                    )
-                else:
-                    lines.append("    [PD 分离] P/D 两侧均用满总卡数")
+                lines.append("    " + _variant_headline(variant))
                 rows: list[list[str]] = []
                 tag = variant.label or "disagg"
                 if variant.prefill:
@@ -219,6 +304,16 @@ def render_summary(result: UnifiedRunResult) -> str:
                 if not rows:
                     rows = _candidate_rows(variant.candidates, fw.framework, "disagg", tag)
                 lines.extend("    " + line for line in _make_table(rows).splitlines())
+            pd_candidates = list(getattr(fw, "pd_ratio_candidates", []) or [])
+            if pd_candidates:
+                lines.append("")
+                lines.append(
+                    f"  PD 分离候选汇总（按单 D 实例 decode 吞吐降序，共 {len(pd_candidates)} 条）:"
+                )
+                lines.extend(
+                    "    " + line
+                    for line in _make_table(_pd_candidate_rows(pd_candidates), _PD_TABLE_HEADER).splitlines()
+                )
         elif fw.disagg and fw.disagg.available:
             lines.append("")
             lines.append("  PD 分离 (disagg):")

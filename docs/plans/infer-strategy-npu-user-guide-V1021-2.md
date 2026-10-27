@@ -91,7 +91,7 @@ infer-strategy-npu -recommend \
   --tpot-limit 200 --ttft-limit 30000 \
   --quantize ENABLE \
   --quantize-linear-action MXFP4 --quantize-attention-action FP8
-  --pd-balance-max 3
+  --pd-ratio-sizes 8
 ```
 
 **输出结果**
@@ -264,10 +264,9 @@ python -m cli.inference.throughput_optimizer /workspace/model_configs/msmodeling
 
 | 参数                                                                        | 说明                                          |
 | ------------------------------------------------------------------------- | ------------------------------------------- |
-| `--pd-balance-search` / `--no-pd-balance-search`                          | xPyD 配比搜索开关（默认开启）                           |
-| `--pd-balance-max`                                                        | xPyD 搜索的 P/D 节点数上限（默认 3）                    |
-| `--pd-balance-sizes`                                                      | 显式指定 xPyD 组合，如 `1P1D 2P1D`                  |
-| `--tp-sizes`                                                              | 显式指定 TP 候选（空格分隔；缺省按卡数自动推导）   |
+| `--serving-modes`                                                         | 要搜索的部署形态：`agg` / `disagg`（默认两者都跑）；`--serving-modes disagg` 只跑 PD 分离                                      |
+| `--pd-ratio-sizes`                                                        | PD 分离每实例卡数 P/D 的枚举空间（默认 `8`，取 P×D 笛卡尔积，如 `8 16 32`） |
+| `--tp-sizes`                                                              | 显式指定 TP 候选（空格分隔；缺省不下发，由 msmodeling 自行推导）   |
 | `--jobs`                                                                  | 内部计算线程并发度                                       |
 | `--local-model-root`                                                      | 本地模型根目录                                     |
 | `--speculative-method`                                                    | 投机解码方法：`none` / `mtp` / `dflash` / `dspark` |

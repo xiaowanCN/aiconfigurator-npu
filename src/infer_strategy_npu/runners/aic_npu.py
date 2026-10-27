@@ -40,13 +40,32 @@ def _row_get(row, key: str):
 
 
 def _parallel(row, prefix: str = "") -> ParallelConfig:
+    """aic-npu 的并行列 -> 统一并行字段。
+
+    aic-npu 的 ``moe_ep`` 就是 MoE 专家并行，映射到统一字段 ``ep``；
+    ``moe_tp``（aic-npu 记作 ``etp``）属于非统一字段，落到 ``extra``。
+    """
     return ParallelConfig(
         tp=to_int(_row_get(row, f"{prefix}tp")),
         pp=to_int(_row_get(row, f"{prefix}pp")),
         dp=to_int(_row_get(row, f"{prefix}dp")),
-        moe_tp=to_int(_row_get(row, f"{prefix}moe_tp")),
-        moe_ep=to_int(_row_get(row, f"{prefix}moe_ep")),
+        ep=to_int(_row_get(row, f"{prefix}moe_ep")),
     )
+
+
+def _moe_extra(row, prefix: str = "") -> dict[str, int | None]:
+    return {"moe_tp": to_int(_row_get(row, f"{prefix}moe_tp"))}
+
+
+def _side_devices(row, prefix: str) -> int | None:
+    """aic-npu 的 ``gpus/worker = tp * pp * dp``，对应 PD-ratio 的每实例卡数。"""
+    values = (to_int(_row_get(row, f"{prefix}{key}")) for key in ("tp", "pp", "dp"))
+    devices = 1
+    for value in values:
+        if value is None:
+            return None
+        devices *= value
+    return devices
 
 
 class AicNpuRunner(FrameworkRunner):
@@ -110,17 +129,40 @@ class AicNpuRunner(FrameworkRunner):
             if df is not None:
                 ctx.artifacts.write_dataframe(f"aic_npu/{mode}/best_config_topn.csv", df)
 
-        run.agg = self._parse_mode(ctx, best_configs.get(MODE_AGG), MODE_AGG)
-        run.disagg = self._parse_mode(ctx, best_configs.get(MODE_DISAGG), MODE_DISAGG)
+        # aic-npu 一次调用必然同时产出 agg + disagg，--serving-modes 只过滤输出，
+        # 省不掉求解（要真正跳过需要动 aiconfigurator_npu.cli.api）。
+        notes: list[str] = []
+        if not request.wants_serving_mode(MODE_AGG) or not request.wants_serving_mode(MODE_DISAGG):
+            notes.append(
+                f"aic-npu 一次调用同时产出 agg/disagg，--serving-modes={request.serving_modes} 仅过滤输出，不减少计算"
+            )
+        run.agg = (
+            self._parse_mode(ctx, best_configs.get(MODE_AGG), MODE_AGG)
+            if request.wants_serving_mode(MODE_AGG)
+            else None
+        )
+        run.disagg = (
+            self._parse_mode(ctx, best_configs.get(MODE_DISAGG), MODE_DISAGG)
+            if request.wants_serving_mode(MODE_DISAGG)
+            else None
+        )
 
-        if not run.agg.available and not run.disagg.available:
+        if not self._any_available(run):
             run.status = "failed"
-            run.message = f"aic-npu produced no usable agg/disagg results: {tail_text(log_path)}"
+            notes.append(f"aic-npu produced no usable agg/disagg results: {tail_text(log_path)}")
+        if notes:
+            run.message = " | ".join(notes)
         # aic-npu 一次调用即产出 agg+disagg，进度按单个步骤上报
         ctx.report_progress("aic_npu", 1, 1)
         return run
 
     # ------------------------------------------------------------------ 解析
+
+    @staticmethod
+    def _any_available(run: FrameworkRun) -> bool:
+        return any(
+            mode_result is not None and mode_result.available for mode_result in (run.agg, run.disagg)
+        )
 
     def _parse_mode(self, ctx: RunnerContext, df, mode: str) -> ServingModeResult:
         output = ServingModeResult(mode=mode)
@@ -171,6 +213,7 @@ class AicNpuRunner(FrameworkRunner):
                 "power_w": to_float(_row_get(row, "power_w")),
                 "gemm_quant": _row_get(row, "gemm"),
                 "kvcache_quant": _row_get(row, "kvcache"),
+                **_moe_extra(row),
             },
             raw=sanitize_raw(row),
         )
@@ -207,14 +250,18 @@ class AicNpuRunner(FrameworkRunner):
                 "prefill": {
                     "parallel": p_str,
                     "workers": to_int(_row_get(row, "(p)workers")),
+                    "devices_per_instance": _side_devices(row, "(p)"),
                     "bs": to_int(_row_get(row, "(p)bs")),
                     "seq_per_s_per_worker": to_float(_row_get(row, "(p)seq/s/worker")),
+                    **_moe_extra(row, "(p)"),
                 },
                 "decode": {
                     "parallel": d_str,
                     "workers": to_int(_row_get(row, "(d)workers")),
+                    "devices_per_instance": _side_devices(row, "(d)"),
                     "bs": to_int(_row_get(row, "(d)bs")),
                     "seq_per_s_per_worker": to_float(_row_get(row, "(d)seq/s/worker")),
+                    **_moe_extra(row, "(d)"),
                 },
             },
             raw=sanitize_raw(row),
@@ -263,6 +310,6 @@ class AicNpuRunner(FrameworkRunner):
             backend=_row_get(row, f"{prefix}backend"),
             backend_version=_row_get(row, f"{prefix}version"),
             system=_row_get(row, f"{prefix}system"),
-            extra={"workers": workers, "seq_per_s_per_worker": seq_per_worker},
+            extra={"workers": workers, "seq_per_s_per_worker": seq_per_worker, **_moe_extra(row, prefix)},
             raw=sanitize_raw(row),
         )

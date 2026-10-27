@@ -61,6 +61,11 @@ MODELS: tuple[ModelSpec, ...] = (
         local_dir="DeepSeek-V4-Pro",
     ),
     ModelSpec(
+        model_id="deepseek-ai/DeepSeek-V4.1-Flash",
+        ms_model_id="deepseek-ai/DeepSeek-V4.1-Flash",
+        local_dir="DeepSeek-V4.1-Flash",
+    ),
+    ModelSpec(
         model_id="ZhipuAI/GLM-5.3-Flash",
         ms_model_id="ZhipuAI/GLM-5.3-Flash",
         local_dir="GLM5.3-Flash",

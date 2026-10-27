@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import bisect
-import math
-import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -15,16 +12,10 @@ from infer_strategy_npu.config import (
     FRAMEWORK_AIC_NPU,
     FRAMEWORK_MSMODELING,
     MODE_AGG,
+    MODE_DISAGG,
     MODE_DISAGG_DECODE,
     MODE_DISAGG_PREFILL,
-    MS_TP_SIZES_LARGE_MODELS,
-    MS_TP_SIZES_LARGE_START,
-    MS_TP_SIZES_MEDIUM_MODELS,
-    MS_TP_SIZES_MEDIUM_START,
-    MS_TP_SIZES_START,
-    PD_BALANCE_MIN_NODES,
-    PD_BALANCE_TABLE_MAX,
-    get_pd_balance_granularity,
+    MODE_PD_RATIO,
 )
 from infer_strategy_npu.devices import AIC_NPU_SUPPORTED_DEVICES, to_aic_system
 from infer_strategy_npu.models import ModelSpec, aic_npu_model_path, msmodeling_model_source
@@ -123,208 +114,71 @@ def resolve_ms_actions(request: RecommendRequest) -> tuple[str, str, str]:
     )
 
 
-def _powers_of_two(start: int, limit: int) -> list[int]:
-    """从 ``start`` 起按 2 的幂递增，返回所有 <= limit 的值。"""
-    value = 1
-    while value < start:
-        value *= 2
-    sizes: list[int] = []
-    while value <= limit:
-        sizes.append(value)
-        value *= 2
-    return sizes
-
-
-_ALLOWED_DEVICE_COUNTS: dict[int, tuple[int, ...]] = {}
-
-
-def allowed_device_counts(granularity: int) -> tuple[int, ...]:
-    """预生成"合理卡数"线性表：``granularity`` 的所有倍数（升序，上限 PD_BALANCE_TABLE_MAX）。
-
-    只按 ``granularity`` 缓存一次；因为「常见 TP（8/16/32/64/128）的并集」恰好等于
-    「其中最小值的倍数」，所以这张表就是那次线性筛的结果（8 → 8,16,24,32,...）。
-    超过表上限的取值走 :func:`floor_to_allowed` 里的算术兜底。
-    """
-    cached = _ALLOWED_DEVICE_COUNTS.get(granularity)
-    if cached is None:
-        cached = tuple(range(granularity, PD_BALANCE_TABLE_MAX + 1, granularity))
-        _ALLOWED_DEVICE_COUNTS[granularity] = cached
-    return cached
-
-
-def floor_to_allowed(value: int, granularity: int) -> int:
-    """向下取到最近的"合理卡数"（表中 <= value 的最大值）；无可用值返回 0。
-
-    例：granularity=16 时 113 -> 112、56 -> 48、25 -> 16。
-    """
-    if value <= 0:
-        return 0
-    table = allowed_device_counts(granularity)
-    if value <= table[-1]:
-        idx = bisect.bisect_right(table, value) - 1
-        return table[idx] if idx >= 0 else 0
-    # 超出表上限：直接按算术向下取整，结果与表语义一致
-    return value - (value % granularity)
-
-
 @dataclass(frozen=True)
-class PdBalance:
-    """一组 xPyD 的 P/D 卡数划分。
+class PdRatioCombo:
+    """一组 PD-ratio 组合：P 侧每实例卡数 + D 侧每实例卡数。
 
-    每节点卡数 ``unit`` 先按 :func:`floor_to_allowed` 落到"合理卡数"上，
-    则 ``prefill_devices = unit * x``、``decode_devices = unit * y``，
-    天然满足 ``P + D <= total``，且两侧都是 ``granularity`` 的倍数、比例严格为 ``x:y``。
+    与旧的 ``PdBalance`` 不同，这里的两个数字是**每实例**卡数，集群总卡数由
+    ``--num-devices`` 单独给出，实例数配比由 msmodeling 内部反推。
     """
 
-    prefill_nodes: int
-    decode_nodes: int
     prefill_devices: int
     decode_devices: int
 
     @property
     def label(self) -> str:
-        """目录名/标签，如 ``1P1D``、``3P1D``。"""
-        return f"{self.prefill_nodes}P{self.decode_nodes}D"
+        """目录名/标签，如 ``P8D8``、``P16D8``。"""
+        return f"P{self.prefill_devices}D{self.decode_devices}"
+
+    def to_dict(self) -> dict[str, int]:
+        return {"prefill_devices": self.prefill_devices, "decode_devices": self.decode_devices}
 
 
-_PD_LABEL_RE = re.compile(r"^(\d+)\s*[Pp]\s*(\d+)\s*[Dd]$")
+def pd_ratio_grid(total_devices: int, sizes: Sequence[int] | None = None) -> list[PdRatioCombo]:
+    """生成 PD-ratio 组合列表：``sizes`` 与自身的笛卡尔积。
 
+    默认 ``sizes=(8,)`` → 只有 ``P8D8`` 一组；``sizes=(8, 16, 32)`` 则展开成
+    9 组 ``(8,8)(8,16)(8,32)(16,8)...(32,32)``。
 
-def parse_pd_balance_label(value: str) -> tuple[int, int]:
-    """解析 ``1P1D`` / ``3P1D`` 这样的 xPyD 写法，返回 ``(x, y)``。
-
-    大小写与空格不敏感（``1p1d``、``1 P 1 D`` 均可）；x、y 必须 >= 1。
+    剔除规则（不报错，无可行组合时返回空列表）：
+    - ``p + d > total_devices``：装不下 1 个 P 实例 + 1 个 D 实例
+    - ``p > total`` 或 ``d > total``
     """
-    match = _PD_LABEL_RE.match(str(value).strip())
-    if not match:
-        raise ValueError(f"invalid xPyD spec {value!r}; expected like '1P1D' or '3P1D'")
-    x, y = int(match.group(1)), int(match.group(2))
-    if x < PD_BALANCE_MIN_NODES or y < PD_BALANCE_MIN_NODES:
-        raise ValueError(f"invalid xPyD spec {value!r}: P/D 节点数必须 >= {PD_BALANCE_MIN_NODES}")
-    return x, y
-
-
-def pd_balance_grid(
-    total_devices: int,
-    max_nodes: int,
-    labels: Sequence[str] | None = None,
-    granularity: int | None = None,
-) -> list[PdBalance]:
-    """生成 xPyD 组合列表。
-
-    每节点卡数 ``unit = floor_to_allowed(total // (x + y))``，即先按节点数均分，
-    再向下落到"合理卡数"（``granularity`` 的倍数）上。这样即使 ``--num-devices``
-    是 1013 这类基数，也能得到能被常见 TP 整除的 P/D 卡数，只是总用量略小于给定值。
-
-    - 未给 ``labels``：枚举 ``1 <= x, y <= max_nodes``，并按 **P:D 的最简比例**去重
-      （``1P1D`` / ``2P2D`` / ``3P3D`` 都是 1:1，只保留最先出现的那组），
-      卡数取整后撞车的组合也会去掉。
-    - 给了 ``labels``（对应 ``--pd-balance-sizes 1P1D 2P1D 3P1D``）：**只搜指定的组合**，
-      按用户给定顺序；此时不再按比例去重（不同比例的卡数划分确实不同），但仍会去掉
-      卡数完全相同的重复项，并跳过卡数不够切分的组合。
-    """
-    if labels:
-        pairs = [parse_pd_balance_label(v) for v in labels]
-        dedupe_ratio = False
-    else:
-        pairs = [
-            (x, y)
-            for x in range(PD_BALANCE_MIN_NODES, max_nodes + 1)
-            for y in range(PD_BALANCE_MIN_NODES, max_nodes + 1)
-        ]
-        dedupe_ratio = True
-
-    gran = get_pd_balance_granularity(granularity)
-    grid: list[PdBalance] = []
-    seen_ratios: set[tuple[int, int]] = set()
-    seen_devices: set[tuple[int, int]] = set()
-    for x, y in pairs:
-        unit = floor_to_allowed(int(total_devices) // (x + y), gran)
-        if unit <= 0:
+    values: list[int] = []
+    for raw in sizes or ():
+        value = int(raw)
+        if value > 0 and value not in values:
+            values.append(value)
+    total = int(total_devices)
+    grid: list[PdRatioCombo] = []
+    for prefill in values:
+        if prefill > total:
             continue
-        combo = PdBalance(x, y, unit * x, unit * y)
-        devices = (combo.prefill_devices, combo.decode_devices)
-        if devices in seen_devices:
-            continue
-        if dedupe_ratio:
-            gcd = math.gcd(x, y)
-            ratio = (x // gcd, y // gcd)
-            if ratio in seen_ratios:
+        for decode in values:
+            if decode > total or prefill + decode > total:
                 continue
-            seen_ratios.add(ratio)
-        seen_devices.add(devices)
-        grid.append(combo)
+            grid.append(PdRatioCombo(prefill, decode))
     return grid
 
 
-def resolve_tp_sizes(request: RecommendRequest, device_count: int | None = None) -> list[int]:
-    """msmodeling 的 TP 候选（--tp-sizes）。
-
-    显式传入时原样使用；否则按模型 + 可用卡数自动推导：
-    - 大模型（MS_TP_SIZES_LARGE_MODELS）从 32 起跳；
-    - 中等模型（MS_TP_SIZES_MEDIUM_MODELS）从 4 起跳；
-    - 其余模型从 1 起跳；
-    均为 2 的幂，上限为不超过**当前侧可用卡数**的最大 2 的幂。
-
-    候选还必须是**能整除该侧卡数**的 2 的幂（否则 msmodeling 会因 tp 不整除
-    ``--num-devices`` 报错，如 42 卡配 tp=32）。若按起始值筛完为空，则回退到
-    "能整除该侧卡数的最大 2 的幂"，保证至少有一个候选（例：48 卡 -> tp=16）。
-
-    小模型起始值仍为 1（`[1, 2, 4, ...]`），中等模型从 4 起跳，大模型从 32 起跳，
-    三者都受整除约束。
-
-    ``device_count`` 为该侧的卡数：PD 混部用总卡数，PD 分离时 P/D 各自用 xPyD
-    拆分后分到的卡数，因此 TP 上限会随划分动态变化。
-    """
-    if request.tp_sizes:
-        return [int(v) for v in request.tp_sizes]
-
-    limit = int(device_count if device_count is not None else request.num_devices)
-    if limit <= 0:
-        return [1]
-    if is_large_tp_model(request.model):
-        start = MS_TP_SIZES_LARGE_START
-    elif is_medium_tp_model(request.model):
-        start = MS_TP_SIZES_MEDIUM_START
-    else:
-        start = MS_TP_SIZES_START
-    # max_divisor = 能整除 limit 的最大 2 的幂；所有更小的 2 的幂自然也能整除
-    max_divisor = limit & -limit
-    sizes = []
-    value = 1
-    while value <= max_divisor:
-        if value >= start:
-            sizes.append(value)
-        value *= 2
-    if not sizes:
-        # 起始值超过可整除上限（如大模型 32 起跳但只有 48 卡）-> 回退到最大可整除值
-        sizes = [max_divisor] if max_divisor > 0 else [1]
-    return sizes
-
-
-def is_large_tp_model(model_id: str | None) -> bool:
-    """该模型是否属于"TP 需从 32 起跳"的大模型。"""
-    return str(model_id or "").strip().lower() in {m.lower() for m in MS_TP_SIZES_LARGE_MODELS}
-
-
-def is_medium_tp_model(model_id: str | None) -> bool:
-    """该模型是否属于"TP 从 4 起跳"的中等模型。"""
-    return str(model_id or "").strip().lower() in {m.lower() for m in MS_TP_SIZES_MEDIUM_MODELS}
-
-
 def tp_size_flags(request: RecommendRequest, device_count: int | None = None) -> list[str]:
-    """msmodeling 的 --tp-sizes 参数（始终下发，便于复现）。"""
-    sizes = resolve_tp_sizes(request, device_count)
+    """msmodeling 的 --tp-sizes 参数。
+
+    **缺省（None / 空列表）时不下发**，由 msmodeling 自行推导（所有能整除该侧
+    卡数的 2 的幂）；显式传入时才原样下发。
+
+    保留 ``device_count`` 形参仅为兼容旧调用点，实际不再使用。
+    """
+    sizes = [int(v) for v in (request.tp_sizes or ())]
     if not sizes:
         return []
     return ["--tp-sizes", *sizes]
 
 
 def ms_extra_flags(request: RecommendRequest, mode: str, device_count: int | None = None) -> list[str]:
-    """msmodeling 的量化/投机等附加参数（不含 --disagg 与 SLO）。
+    """msmodeling 的量化/投机等附加参数（不含 PD-ratio 专属参数与 SLO）。
 
-    ``device_count`` 为该子任务实际可用的卡数（PD 分离时是 xPyD 拆分后某一侧的卡数），
-    决定 --tp-sizes 的上限。
+    ``device_count`` 形参保留以兼容旧调用点，实际不再参与 --tp-sizes 推导。
     """
     linear, non_expert_linear, attention = resolve_ms_actions(request)
     extra = [
@@ -336,7 +190,8 @@ def ms_extra_flags(request: RecommendRequest, mode: str, device_count: int | Non
         attention,
     ]
     method = (request.speculative_method or "").lower()
-    if mode == "disagg_decode" and method and method != "none":
+    # PD-ratio 模式下 msmodeling 内部只对 Decode 阶段生效投机，但参数需在顶层下发
+    if mode in (MODE_DISAGG_DECODE, MODE_PD_RATIO) and method and method != "none":
         extra += ["--speculative-method", method]
         if request.num_speculative_tokens is not None:
             extra += ["--num-speculative-tokens", request.num_speculative_tokens]
@@ -356,14 +211,16 @@ def ms_extra_flags(request: RecommendRequest, mode: str, device_count: int | Non
 def slo_flags(request: RecommendRequest, mode: str) -> list[str]:
     """SLO 相关参数。
 
-    - PD 混部(agg)：文档列出的关键参数为 ``--tpot-limit`` 与 ``--ttft-limit``，两个都下发，
-      与 aic-npu（同时传 --ttft / --tpot）保持一致的语义。
-    - PD 分离-Prefill：``--disagg --ttft-limit``
-    - PD 分离-Decode：``--disagg --tpot-limit``
+    - PD 混部(agg)：``--tpot-limit`` 与 ``--ttft-limit`` 都下发，与 aic-npu
+      （同时传 --ttft / --tpot）保持一致的语义。
+    - PD 分离(pd_ratio)：同样两个都下发，但**不能**带 ``--disagg``
+      （msmodeling 的 ``pd_ratio_mutex_disagg`` 校验器会直接报错）；
+      msmodeling 内部按阶段各取其一（P 用 ttft、D 用 tpot）。
+    - PD 分离-Prefill / Decode（aic-npu 侧复现用，msmodeling 旧路径）：带 ``--disagg``。
     """
-    if mode == "disagg_prefill":
+    if mode == MODE_DISAGG_PREFILL:
         return ["--disagg", "--ttft-limit", request.ttft_limit]
-    if mode == "disagg_decode":
+    if mode == MODE_DISAGG_DECODE:
         return ["--disagg", "--tpot-limit", request.tpot_limit]
     return ["--tpot-limit", request.tpot_limit, "--ttft-limit", request.ttft_limit]
 
@@ -373,14 +230,13 @@ def build_msmodeling_command(
     model_source: str,
     *,
     mode: str,
-    device_count: int | None = None,
+    combo: PdRatioCombo | None = None,
 ) -> str:
     """等价的 msmodeling 命令（用于 dry-run / run.json 复现）。
 
-    ``device_count`` 为该子任务实际下发的卡数：PD 混部是总卡数；PD 分离开启
-    --pd-balance-search 后，P/D 各自用 xPyD 拆分到的卡数。
+    PD 混部(agg) 与 PD 分离(pd_ratio) 都用**集群总卡数**下发 ``--num-devices``；
+    PD 分离额外给出每侧的每实例卡数，一条命令即完成 P/D 两阶段与实例配比。
     """
-    devices = int(device_count if device_count is not None else request.num_devices)
     parts = [
         "python",
         "-m",
@@ -389,7 +245,7 @@ def build_msmodeling_command(
         "--device",
         request.device,
         "--num-devices",
-        devices,
+        request.num_devices,
         "--input-length",
         request.input_length,
         "--output-length",
@@ -398,35 +254,32 @@ def build_msmodeling_command(
     # --compile 是 msmodeling 专属开关（aic-npu 侧无对应参数，故只在这里下发）
     if request.compile_model:
         parts.append("--compile")
-    parts += ms_extra_flags(request, mode, devices)
+    if mode == MODE_PD_RATIO and combo is not None:
+        parts += [
+            "--enable-optimize-prefill-decode-ratio",
+            "--prefill-devices-per-instance",
+            combo.prefill_devices,
+            "--decode-devices-per-instance",
+            combo.decode_devices,
+        ]
+    parts += ms_extra_flags(request, mode)
     parts += slo_flags(request, mode)
     return " ".join(_q(p) for p in parts)
 
 
 def build_msmodeling_commands(request: RecommendRequest, model_source: str) -> list[str]:
-    """一次运行要下发的全部 msmodeling 命令（含 xPyD 各组），用于 dry-run 展示。
+    """一次运行要下发的全部 msmodeling 命令，用于 dry-run 展示。
 
-    - PD 混部(agg)：始终 1 条，用总卡数。
-    - PD 分离：开启 --pd-balance-search 时，对 xPyD 网格里每组各下发
-      disagg_prefill(P 卡数) + disagg_decode(D 卡数) 两条；关闭时按旧行为
-      两侧都用总卡数各 1 条。
+    - PD 混部(agg)：``--serving-modes`` 含 ``agg`` 时 1 条，用集群总卡数。
+    - PD 分离(pd_ratio)：``--serving-modes`` 含 ``disagg`` 时，对 PD-ratio 网格里
+      每组各 1 条（**不再**是旧的 P/D 两条）。
     """
-    commands = [build_msmodeling_command(request, model_source, mode=MODE_AGG)]
-    if request.pd_balance_search:
-        for combo in pd_balance_grid(request.num_devices, request.pd_balance_max, request.pd_balance_sizes):
-            commands.append(
-                build_msmodeling_command(
-                    request, model_source, mode=MODE_DISAGG_PREFILL, device_count=combo.prefill_devices
-                )
-            )
-            commands.append(
-                build_msmodeling_command(
-                    request, model_source, mode=MODE_DISAGG_DECODE, device_count=combo.decode_devices
-                )
-            )
-    else:
-        commands.append(build_msmodeling_command(request, model_source, mode=MODE_DISAGG_PREFILL))
-        commands.append(build_msmodeling_command(request, model_source, mode=MODE_DISAGG_DECODE))
+    commands: list[str] = []
+    if request.wants_serving_mode(MODE_AGG):
+        commands.append(build_msmodeling_command(request, model_source, mode=MODE_AGG))
+    if request.wants_serving_mode(MODE_DISAGG):
+        for combo in pd_ratio_grid(request.num_devices, request.pd_ratio_sizes):
+            commands.append(build_msmodeling_command(request, model_source, mode=MODE_PD_RATIO, combo=combo))
     return commands
 
 

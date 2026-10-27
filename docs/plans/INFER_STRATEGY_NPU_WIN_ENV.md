@@ -61,16 +61,16 @@ scripts\setup_win_env.ps1
 # 只看下发命令（不需要任何框架依赖，dry-run 一定可用）
 .\.venv\Scripts\python.exe -m infer_strategy_npu.cli -recommend `
     --model ZhipuAI/GLM-5.3 --device ATLAS_950_486T_96G --num-devices 16 `
-    --quantize ENABLE --pd-balance-sizes 1P1D --dry-run
+    --quantize ENABLE --pd-ratio-sizes 8 --dry-run
 
 # 真实跑 msmodeling（需要上面的 torch + whl 就绪）
 .\.venv\Scripts\python.exe -m infer_strategy_npu.cli -recommend `
     --model ZhipuAI/GLM-5.3 --device ATLAS_950_486T_96G --num-devices 16 `
     --input-length 8196 --output-length 1024 --tpot-limit 200 --ttft-limit 30000 `
-    --quantize ENABLE --pd-balance-search
+    --quantize ENABLE
 ```
 
-预期：路由到 `msmodeling`，TP 候选从 4 起跳（GLM5.3/GLM5.2 中等模型），
+预期：路由到 `msmodeling`，TP 候选由 msmodeling 按卡数自行推导（不下发 `--tp-sizes`），
 `--quantize ENABLE` 默认下发 `--quantize-linear-action W8A8_DYNAMIC`
 `--quantize-non-expert-linear-action DISABLED` `--quantize-attention-action DISABLED`；
 传入 `--quantize DISABLE` 时三项强制 `DISABLED`。

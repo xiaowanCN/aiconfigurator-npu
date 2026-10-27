@@ -47,48 +47,41 @@ infer-strategy-npu -recommend
     [--speculative-method none|dflash|dspark|mtp]   # 默认 dflash（PD分离-Decode）
     [--num-speculative-tokens N] [--acceptance-length F] [--num-draft-layers N]
     [--jobs N] [--max-search-combinations N]        # 透传 msmodeling
-    [--tp-sizes N [N ...]]       # msmodeling TP 候选，默认自动推导（见下）
+    [--serving-modes agg disagg]  # 要搜索的部署形态（默认两者都跑，见 §3.1）
+    [--tp-sizes N [N ...]]       # msmodeling TP 候选；缺省不下发，由 msmodeling 自行推导
     [--compile]                  # 仅对 msmodeling 生效；不设置则为 False（默认）
-    [--no-pd-balance-search] [--pd-balance-max N]   # xPyD 卡数均衡搜索（默认开启，见 §3.1）
-    [--pd-balance-sizes 1P1D 2P1D 3P1D]             # 显式指定要搜的 xPyD 组合
+    [--pd-ratio-sizes N [N ...]] # PD 分离每实例卡数 P/D 的枚举空间（默认 8，见 §3.1）
     [--dry-run]                  # 只打印将要下发的两套框架命令，不执行
     [--quiet] [--verbose]
 ```
 
 参数取值校验：
 
-- `--model`：白名单 8 个 ModelScope ID（大小写不敏感，支持别名）：
+- `--model`：白名单 9 个 ModelScope ID（大小写不敏感，支持别名）：
   `ZhipuAI/GLM-5.3-Flash`、`ZhipuAI/GLM-5.3`、`ZhipuAI/GLM-5.2`、`Qwen/Qwen3.8-27B`、
-  `deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro`、`moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3`。
+  `deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro`、`deepseek-ai/DeepSeek-V4.1-Flash`、
+  `moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3`。
 - `--device`：26 个，取自 `tensor_cast/device.py` 的 `DeviceProfile` 注册名（见 §4）。
 - `--num-devices` / `--input-length` / `--output-length` / `--tpot-limit` / `--ttft-limit`：正整数（>0）。
 - `--quantize`：量化总开关 `DISABLE` / `ENABLE`（大小写与连字符不敏感，归一化为 `DISABLE` / `ENABLE`）。
   - `DISABLE`：完全不量化，三个 action 强制 `DISABLED`（忽略显式传入的 action）。
   - `ENABLE`：开启量化，具体动作由三个 `--quantize-*-action` 决定（缺省时取 msmodeling 原生默认）。
   - 旧版 `W8A8` / `FP8` 仍可作为 `ENABLE` 的别名（向后兼容），具体动作由三个 action 参数决定。
+- `--serving-modes`：要搜索的部署形态（`nargs="+"`，取值 `agg` / `disagg`），默认 `agg disagg` 都跑。
+  - `--serving-modes agg`：只跑 PD 混部。
+  - `--serving-modes disagg`：只跑 PD 分离。
+  - msmodeling 侧**真正跳过**对应子任务；aic-npu 一次调用必然同时产出两者（上游限制），
+    这里只过滤输出，并在 `run.message` 里注明"仅过滤输出，不减少计算"。
 - `--tp-sizes`：msmodeling 的 TP 搜索候选（`nargs="+"` 的正整数列表）。**仅在分发到 msmodeling 时生效**，
-  aic-npu 分支不使用。缺省时按模型 + `--num-devices` 自动推导为 2 的幂：
-
-  | 模型 | 起始值 | 示例（`--num-devices 64`） |
-  |---|---|---|
-  | `ZhipuAI/GLM-5.3-Flash`、`deepseek-ai/DeepSeek-R1`、`deepseek-ai/DeepSeek-V4-Pro`、`moonshotai/Kimi-K3`、`MiniMax/MiniMax-M3` | 32 | `[32, 64]` |
-  | `ZhipuAI/GLM-5.3`、`ZhipuAI/GLM-5.2` | 4 | `[4, 8, 16, 32, 64]` |
-  | 其余模型（如 `Qwen/Qwen3.8-27B`） | 1 | `[1, 2, 4, 8, 16, 32, 64]` |
-
-  上限为不超过 `--num-devices` 的最大 2 的幂；若起始值已超过 `--num-devices`（例如 32 起跳但只有 16 卡），
-  退化为从 1 推导，保证至少有一个候选。显式传入 `--tp-sizes 3 5` 时原样使用、不做任何推导。
+  aic-npu 分支不使用。**缺省（不传）时完全不下发 `--tp-sizes`**，由 msmodeling 自行推导 ——
+  即"所有能整除该侧卡数的 2 的幂"，上限为不超过卡数的最大 2 的幂（PD 分离下按**每实例卡数**算，
+  与集群总卡数解耦）。显式传入 `--tp-sizes 16 32` 时原样下发、不做推导。
+- `--pd-ratio-sizes`：PD 分离搜索时**每实例卡数** P/D 的枚举空间（`nargs="+"` 的正整数，默认 `8`）。
+  取 P×D 笛卡尔积：`8` → 1 组 `P8D8`；`8 16` → 4 组；`8 16 32` → 9 组。
+  `P + D > --num-devices` 的组合自动剔除（不报错），全部不可行时 PD 分离无结果。详见 §3.1。
 - `--compile`：开关型（set 语义），**仅对分发到 msmodeling 的请求生效**，aic-npu 分支忽略。
   **不设置 = False（默认）**；显式加 `--compile` = True。为 True 时向 msmodeling 子任务命令追加
   `--compile`（开启 FX 图改写/融合，更准但更慢）。
-- `--pd-balance-search`：**默认开启**（`default=True`），**仅对分发到 msmodeling 的请求生效**。
-  开启后 PD 分离按 xPyD 切分总卡数（`P=unit*x`、`D=unit*y`、`unit=floor(total/(x+y))`），
-  而不是 P/D 两侧各用满 `--num-devices`；用 `--no-pd-balance-search` 关闭并退回旧行为。
-- `--pd-balance-max`：xPyD 搜索时 P/D 节点数上限，x、y 取 `1..N`，默认 `3`（枚举 `1P1D ~ 3P3D`
-  共 9 种，按比例**去重后 7 组**）。仅在未给 `--pd-balance-sizes` 时生效。详见 §3.1。
-- `--pd-balance-sizes`：显式指定要搜的 xPyD 组合（`nargs="+"`，如 `--pd-balance-sizes 1P1D 2P1D 3P1D`），
-  用法与 `--tp-sizes` 一致。**给定时只搜这些组合，并忽略 `--pd-balance-max`**。
-  写法大小写/空格不敏感（`1p1d` 亦可），节点数须 `>=1`；`x+y > --num-devices` 时 CLI 直接报错，
-  其余卡数不足切分的组合自动跳过。
 
 ---
 
@@ -125,36 +118,32 @@ aic-npu default \
   - `--backend` 必须显式给 `vllm-ascend`（默认 `trtllm` 在 ascend 上必然失败）。
   - 实现上通过 `cli_default()` Python API 调用，等价命令会记入 `run.json` 便于复现。
 
-msmodeling 分支一次运行拆成 3 个子任务（对应统一结果的 3 个字段）：
+msmodeling 分支一次运行拆成若干子任务（默认 1 个 agg + N 个 PD-ratio 组合）：
 
 ```
-# 1) agg（PD 混部）→ results.agg
+# 1) agg（PD 混部）→ results.agg（始终用集群总卡数）
 python -m cli.inference.throughput_optimizer <model> \
   --device ATLAS_800_A2_376T_64G --num-devices 128 \
   --input-length 4096 --output-length 2048 \
   --quantize-linear-action DISABLED --quantize-non-expert-linear-action DISABLED --quantize-attention-action DISABLED \
   --tpot-limit 50 --ttft-limit 1000
 
-# 2) disagg_prefill（PD分离-Prefill）→ results.disagg.prefill
-#    --num-devices 是该 xPyD 组下 P 侧分到的卡数（以 1P1D / 总 128 卡为例 = 64）
+# 2) pd_ratio（PD分离）→ results.disagg —— 每个 (P, D) 组合一条命令
+#    --num-devices 是**集群总卡数**；P/D 是**每实例**卡数，实例数配比由 msmodeling 内部反推。
+#    标签 P8D8 表示 P 侧每实例 8 卡、D 侧每实例 8 卡。
 python -m cli.inference.throughput_optimizer <model> \
-  --device ATLAS_800_A2_376T_64G --num-devices 64 \
+  --device ATLAS_800_A2_376T_64G --num-devices 128 \
   --input-length 4096 --output-length 2048 \
   --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 \
-  --tp-sizes 32 64 --disagg --ttft-limit 1000
-
-# 3) disagg_decode（PD分离-Decode）→ results.disagg.decode
-#    --num-devices 是该 xPyD 组下 D 侧分到的卡数（1P1D / 总 128 卡 = 64）
-python -m cli.inference.throughput_optimizer <model> \
-  --device ATLAS_800_A2_376T_64G --num-devices 64 \
-  --input-length 4096 --output-length 2048 \
-  --quantize-linear-action W8A8_DYNAMIC --quantize-attention-action INT8 \
-  --tp-sizes 32 64 --disagg --tpot-limit 50 \
+  --enable-optimize-prefill-decode-ratio \
+  --prefill-devices-per-instance 8 --decode-devices-per-instance 8 \
+  --tpot-limit 50 --ttft-limit 1000 \
   --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5 --num-draft-layers 6
 ```
 
-> 上面 2)/3) 的 `--num-devices` 是 **xPyD 拆分后某一侧的卡数**，不是总卡数（见 §3.1）。
-> 关闭 `--pd-balance-search` 时，2)/3) 的 `--num-devices` 才会是总卡数。
+> **不能带 `--disagg`**：msmodeling 的 `pd_ratio_mutex_disagg` 校验器会在
+> `--enable-optimize-prefill-decode-ratio` 与 `--disagg` 同时出现时直接报错。
+> P/D 两阶段与实例配比由 msmodeling 内部一次完成，因此**不再**是旧的 P 一条 + D 一条。
 
 > **`--compile` 开关**：统一 CLI 的 `--compile` 默认**不设置（False）**，故上面渲染出的命令默认不含
 > `--compile`。只有显式加了 `--compile`，且该请求**分发到 msmodeling** 时，才会向子任务命令里追加
@@ -166,8 +155,7 @@ SLO 参数口径（依据 `docs/zh/user_guide/msmodeling_throughput_optimizer_us
 | 子任务 | 下发的 SLO 参数 |
 |---|---|
 | agg（PD 混部） | `--tpot-limit` **和** `--ttft-limit`（文档列出的 PD 混部关键参数就是这两个；也与 aic-npu 同时传 `--ttft/--tpot` 的语义一致） |
-| disagg_prefill（PD分离-Prefill） | `--disagg --ttft-limit` |
-| disagg_decode（PD分离-Decode） | `--disagg --tpot-limit` |
+| pd_ratio（PD 分离） | `--tpot-limit` **和** `--ttft-limit`（**不带** `--disagg`；msmodeling 内部按阶段各取其一，P 用 ttft、D 用 tpot） |
 
 `--quantize` → msmodeling 动作映射：
 
@@ -198,125 +186,113 @@ SLO 参数口径（依据 `docs/zh/user_guide/msmodeling_throughput_optimizer_us
 > `build_argparser(get_spec("throughput_optimizer")) + parse_module_args(spec, parser, argv)`
 > 走同一套声明式 parser，避免自建 Namespace 缺字段。
 
-### 3.1 PD 均衡搜索：`--pd-balance-search`（xPyD）
+### 3.1 PD 分离改用 msmodeling 原生 PD-ratio（`--pd-ratio-sizes`）
 
-**问题**：旧行为把 `--num-devices` 原样下发给 PD 分离的两个子任务，等价于
-「P 阶段有 N 卡**且** D 阶段也有 N 卡」，与普遍认知、也与 aic-npu 的口径都不一致。
-通常语义是：**总共只有 N 卡，如何在 P 节点与 D 节点之间分配**。
+**旧做法的问题**：自研 xPyD 把 `--num-devices` 按 `x:y`（**节点数**）切给 P/D 两侧，
+再各自独立跑一次 `--disagg`。它只解决了"总卡怎么在 P/D 之间分"，但分完之后
+P 侧和 D 侧各自**只有一种实例规模**，且**不再做**"几个 P 实例 + 几个 D 实例"的集群配比，
+与 msmodeling 自身的 PD 部署模型并不等价。
 
-**修正**：新增开关 `--pd-balance-search`（**默认开启**），仅对分发到 msmodeling 的请求生效
-（aic-npu 分支忽略）。开启后，PD 分离按 xPyD 网格切分总卡数：
-
-```
-seats = floor(total / (x + y))     # 每节点可分到的卡数（未对齐）
-unit  = floor_to_allowed(seats)    # 向下落到"合理卡数"（GRAN 的倍数）
-P 卡数 = unit * x
-D 卡数 = unit * y
-```
-
-- `x`、`y` 取 `1 .. --pd-balance-max`（默认 3），即枚举区间为 `1P1D ~ 3P3D`（共 9 种 `(x, y)`）。
-- `unit` 先向下取整、再对齐粒度，保证 `P + D = unit*(x+y) <= total`，
-  **总卡数绝不超 `--num-devices`**（可小于，见下方基数卡数处理）。
-- 按 **P:D 的最简比例**去重（`gcd(x, y)` 归一化）：比例相同代表同一种切分意图，只是节点粒度
-  不同，下发给 msmodeling 语义等价，只保留最简的那组（枚举序里最先出现者）。
-  例：`1P1D ≡ 2P2D ≡ 3P3D`（均 1:1）、`1P2D ≡ 2P4D`（均 1:2），因此 `2P2D` / `3P3D` 会被去掉。
-  卡数取整后撞车的组合（不同比例但 P/D 卡数相同）也会一并去掉。
-  9 种 `(x, y)` 去重后剩 **7 组**。
-- `unit` 对齐后为 0（卡数不够切出 `(x+y)` 个节点）的组合直接跳过。
-
-`--num-devices 128` 的实际网格（7 组，`2P2D`、`3P3D` 已按比例去重；GRAN=16）：
-
-| xPyD | P 卡数 | D 卡数 | 合计 |  | xPyD | P 卡数 | D 卡数 | 合计 |
-|---|---|---|---|---|---|---|---|---|
-| 1P1D | 64 | 64 | 128 |  | 2P3D | 32 | 48 | 80 |
-| 1P2D | 32 | 64 | 96 |  | 3P1D | 96 | 32 | 128 |
-| 1P3D | 32 | 96 | 128 |  | 3P2D | 48 | 32 | 80 |
-| 2P1D | 64 | 32 | 96 |  | | | | |
-
-### 3.2 "合理卡数"线性表与粒度 GRAN
-
-P/D 下发的 `--num-devices` 必须是**粒度 GRAN 的倍数**，避免出现 113、42 这类无法被常见 TP
-整除的卡数（msmodeling 会因 tp 不整除 `--num-devices` 直接报错）。
-
-- **GRAN 默认 `16`**，可用环境变量覆盖：
-  `export INFER_STRATEGY_PD_BALANCE_GRANULARITY=8`（非法值会告警并回退到 16）。
-- **线性表**：启动时按 GRAN 预生成 `[GRAN, 2*GRAN, 3*GRAN, ...]`（上限 `PD_BALANCE_TABLE_MAX=8192`，
-  超上限走算术兜底），用 `bisect` 向下取最近的合理值，O(log n) 命中。
-
-  > 为什么是"GRAN 的倍数"：常见 TP `8/16/32/64/128` 的并集筛，结果恰好等于其中最小值
-  > `8` 的倍数（`{n : ∃tp∈TP, n%tp==0} == {n : n%8==0}`，已验证）。因此不必真的做多重筛，
-  > 取"GRAN 的倍数"即可；GRAN 取 16 是在"利用率"与"至少能被 tp=16 整除"之间的平衡。
-
-- 取整示例（GRAN=16）：`113 -> 112`、`56 -> 48`、`25 -> 16`、`15 -> 0`（该组合被跳过）。
-
-**基数 / 非 2 的幂卡数**（`--num-devices 1013`，GRAN=16）：总用量会略小于给定值，属预期。
-
-| xPyD | P 卡数 | D 卡数 | 合计 |  | xPyD | P 卡数 | D 卡数 | 合计 |
-|---|---|---|---|---|---|---|---|---|
-| 1P1D | 496 | 496 | 992 |  | 2P3D | 384 | 576 | 960 |
-| 1P2D | 336 | 672 | 1008 |  | 3P1D | 720 | 240 | 960 |
-| 1P3D | 240 | 720 | 960 |  | 3P2D | 576 | 384 | 960 |
-| 2P1D | 672 | 336 | 1008 |  | | | | |
-
-全部 `<= 1013`、都是 16 的倍数、比例严格等于 `x:y`。
-
-### 3.3 TP 候选必须能整除该侧卡数
-
-`--tp-sizes` 候选不再取"该侧卡数以内的所有 2 的幂"，而是**取其中能整除该侧卡数的**：
+**新做法**：直接用 msmodeling 原生的 PD-ratio 模式 ——
 
 ```
-候选 = { 2^k : 2^k | N  且  2^k >= start }        # N = 该侧实际卡数
-若为空 -> 回退为 [能整除 N 的最大 2 的幂]          # 保证至少有一个候选
+--enable-optimize-prefill-decode-ratio \
+--prefill-devices-per-instance <P> --decode-devices-per-instance <D> \
+--num-devices <集群总卡数>
 ```
 
-- 小模型（如 `Qwen/Qwen3.8-27B`）`start = 1`，行为不变：`[1, 2, 4, 8, ...]`；
-  只是会剔除不整除的项（48 卡时为 `[1,2,4,8,16]`，无 32）。
-- 大模型 `start = 32`；整除约束生效后：
+- `P` / `D` 是**每实例卡数**；集群总卡数仍由 `--num-devices` 给出。
+- msmodeling 内部并行完成 P/D 两阶段求解，再枚举 `(P 实例数, D 实例数)` 做实例分配，
+  直接产出「Top N PD Ratio Configurations」表（含 `pd_ratio` / `balanced_qps` /
+  `p_instances` / `d_instances` 等）。
+- **一条命令 = 一次完整 PD 分离求解**，取代旧的 P 一条 + D 一条。
 
-  | 该侧卡数 | 候选 | 说明 |
-  |---|---|---|
-  | 64 | `[32, 64]` | |
-  | 96 | `[32]` | 64 不整除 96 |
-  | 48 | `[16]` | 回退：能整除 48 的最大 2 的幂 |
-  | 32 | `[32]` | |
+**必须注意的两条上游约束**：
 
-- 显式 `--tp-sizes 3 5` 时原样下发，不做推导与整除校验（保留人工覆盖能力）。
+1. `--enable-optimize-prefill-decode-ratio` 与 `--disagg` **互斥**（上游
+   `pd_ratio_mutex_disagg` 校验器会直接报错）。
+2. `--ttft-limit` 与 `--tpot-limit` 需**同时**在顶层下发；上游 `_run_pd_phase()`
+   按阶段各取其一（P 用 ttft、D 用 tpot）。
 
-**`--tp-sizes` 上限随划分动态调整**：TP 候选上限取**当前子任务实际可用的卡数**
-（agg 用总卡数；PD 分离时 P 侧用 P 卡数、D 侧用 D 卡数），而非总卡数。
-例：128 卡 + 大模型（起跳 32）时，agg 侧 `32 64 128`，而 3P1D 的 D 侧（32 卡）只有 `32`。
+**组合枚举**（`pd_ratio_grid`）：`--pd-ratio-sizes` 与自身的笛卡尔积，
+标签记作 `P{p}D{d}`（**不再**用旧的 `1P1D`，避免与"节点数"语义混淆）。
+
+| `--pd-ratio-sizes` | 组合数 | 组合 |
+|---|---|---|
+| `8`（默认） | 1 | `P8D8` |
+| `8 16` | 4 | `P8D8` `P8D16` `P16D8` `P16D16` |
+| `8 16 32` | 9 | `P8D8` `P8D16` `P8D32` `P16D8` … `P32D32` |
+
+剔除规则（`P + D > --num-devices` 或单侧超过总卡数）——**不报错**，
+全部不可行时 PD 分离就是没有结果，只记一条 failure 并在摘要里提示可增大 `--num-devices`。
 
 **结果与产物**：
 
-- 每组 xPyD 各跑一次 `disagg_prefill`(P 卡数) 与 `disagg_decode`(D 卡数)，
-  结果落在 `msmodeling/<xPyD>/{disagg_prefill,disagg_decode}/`（见 §7）。
-- `run.json` 中 `frameworks[].disagg_variants[]` 为全部变体（含 `label` 与 `pd_balance`
-  明细：x / y / P卡数 / D卡数）；`frameworks[].disagg` 仍保留**吞吐最优的那组**，
-  使既有渲染与推荐逻辑无需感知多组 xPyD。
-- 关闭 `--no-pd-balance-search` 时退回旧行为：P/D 两侧各用满 `--num-devices`，
-  产物落在 `msmodeling/{disagg_prefill,disagg_decode}/`。
-
-**约束搜索范围**（三种方式，优先级从高到低）：
-
-1. `--pd-balance-sizes 1P1D 2P1D 3P1D`：只搜指定的组合（忽略 `--pd-balance-max`）。
-2. `--pd-balance-max N`：`x、y` 取 `1..N`（默认 3，去重后 7 组）。
-3. `--no-pd-balance-search`：完全关闭，退回 P/D 两侧各用满 `--num-devices` 的旧行为。
+- 每组 PD-ratio 各跑一次，结果落在 `msmodeling/pd_ratio/<PxDy>/{pd_ratio_raw.csv,
+  pd_ratio_candidates.csv, pd_ratio_best.json, command.txt}`（见 §7）。
+- `run.json` 中 `frameworks[].disagg_variants[]` 为全部变体（含 `label` 与 `pd_ratio`
+  明细：P/D 每实例卡数）；`frameworks[].disagg` 保留**集群吞吐最优**的那组。
+- `frameworks[].pd_ratio_candidates` 是跨组合合并、按**单 D 实例 decode 吞吐**降序的全部候选。
 
 ```bash
-# 只对比 3 种 P 占比
-infer-strategy-npu -recommend --model ZhipuAI/GLM-5.3-Flash \
-  --device ATLAS_800_A2_376T_64G --num-devices 128 \
-  --pd-balance-sizes 1P1D 2P1D 3P1D
-# → 1 + 3×2 = 7 次 msmodeling 搜索
+# 只跑 PD 分离，搜索 8/16/32 的全部 9 种 P×D 组合
+infer-strategy-npu -recommend --model ZhipuAI/GLM-5.2 \
+  --device ATLAS_950_486T_96G --num-devices 128 \
+  --input-length 4096 --output-length 1024 --ttft-limit 2000 --tpot-limit 80 \
+  --serving-modes disagg --pd-ratio-sizes 8 16 32
+# → 9 次 msmodeling PD-ratio 搜索
 ```
 
-> **执行成本提示**：默认网格在 128 卡下是 1(agg) + 7×2(disagg) = **15 次** msmodeling
-> `ParallelRunner` 搜索，耗时显著。想快速回归可用 `--pd-balance-sizes 1P1D`（共 3 次）、
-> `--pd-balance-max 1`，或 `--no-pd-balance-search`。
+> **执行成本提示**：每组 PD-ratio 会内部并行跑 P/D 两阶段，因此
+> `--pd-ratio-sizes 8 16 32` 的耗时约为单组的 9 倍。默认只用 1 组（共 1 次），
+> 快速回归保持默认即可。
 >
-> **粒度调整**：`export INFER_STRATEGY_PD_BALANCE_GRANULARITY=8` 会让卡数利用率更高
-> （113 卡 1P1D 得 56/56=112 而不是 48/48=96），但可整除的 tp 可能降到 8；默认 16 更均衡。
-> 详见 §3.2 / §3.3。
+> P/D 两阶段结果分别只依赖 `p_dev` / `d_dev`，9 组里实际只有 3 种 P 阶段 + 3 种 D 阶段，
+> 存在 3 倍重复计算。当前为保持只用上游公共 API 未做相位缓存，如需提速可再议。
+
+### 3.2 TP 候选交给 msmodeling 自行推导
+
+**改前**：`--tp-sizes` 缺省时按"三档起跳规则"推导（大模型 32 / 中等 4 / 其余 1），
+并且**始终下发** `--tp-sizes`，卡数粒度与整除约束都在我们这边。
+
+**改后**：`--tp-sizes` 缺省时**完全不下发**，由 msmodeling 自行推导：
+
+```
+tp 候选 = { 2^k : 2^k <= N  且  N % 2^k == 0 }     # N = 该侧卡数
+```
+
+- PD 混部：`N = --num-devices`（集群总卡数）。
+- PD 分离：`N = 每实例卡数`（`--prefill/decode-devices-per-instance`），与总卡数解耦。
+  例：默认 `P8D8` 时两侧 TP 候选都是 `[1,2,4,8]`。
+
+**已知代价**：大模型 128 卡的 TP 候选由旧的 `[32,64,128]` 变为 `[1,2,4,...,128]`，
+小 TP 会被上游 early-stop 跳过，单轮耗时上升。这是"让模型自身决定"的必然代价。
+显式传 `--tp-sizes` 时仍可人工覆盖。
+
+### 3.3 PD 分离吞吐的口径
+
+msmodeling 的 PD 结果表**本身不带吞吐列**，其终端图
+`<device>_<model>_pd_decode_tps: Throughput vs concurrency` 的纵轴是现场复算的：
+
+```
+token/s(单 D 实例) = concurrency_d / tpot_d * 1000
+token/s/device     = 上式 / num_devices_d
+```
+
+整合层按**同一公式**逐行复算（见 `src/infer_strategy_npu/pd_ratio_metrics.py`），
+并补充集群口径：
+
+| 指标 | 公式 |
+|---|---|
+| 单 D 实例 decode 吞吐（**候选排序键**） | `concurrency_d / tpot_d * 1000` |
+| 单 D 实例单卡 | 上式 `/ num_devices_d` |
+| D 侧集群 | 上式 `× d_instances` |
+| 集群端到端 token 吞吐 | `balanced_qps × output_length` |
+| 集群单卡 | 上式 `/ devices_used` |
+| 单 P 实例 prefill 吞吐 | `p_qps × input_length` |
+
+> 上游的 `tpot` 已经过 `_fold_decode_latency_ms()` 折叠，投机解码加速已包含在内，
+> 因此这里无需再乘接受率。
 
 ---
 
@@ -369,6 +345,7 @@ model_configs/
 └── msmodeling/                                  # msmodeling 用（每个模型一个目录 + config.json）
     ├── DeepSeek-R1/config.json                  # 复用 aic-npu 的真实配置
     ├── DeepSeek-V4-Pro/config.json
+    ├── DeepSeek-V4.1-Flash/config.json
     ├── Qwen3.8-27B/config.json
     ├── GLM5.3-Flash/config.json                 # 占位，待填
     ├── GLM5.3/config.json                       # 占位，待填
@@ -433,14 +410,16 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
         "decode":  {CANDIDATE},         // 与 aic-npu disagg 的 (d)* 列对应
         "best":    {CANDIDATE},         // 整条 disagg 方案（tokens/s/gpu_cluster 最高者）
         "candidates": [CANDIDATE, ...],
-        "label": "3P1D",                // xPyD 变体标签（非 xPyD 场景为 ""）
-        "pd_balance": {                 // 该变体的卡数划分（非 xPyD 场景为 null）
-          "prefill_nodes": 3, "decode_nodes": 1,
-          "prefill_devices": 96, "decode_devices": 32
-        }
+        "label": "P8D8",                // PD-ratio 组合标签（非 PD-ratio 场景为 ""）
+        "pd_ratio": {                   // 该组合的每实例卡数（非 PD-ratio 场景为 null）
+          "prefill_devices": 8, "decode_devices": 8
+        },
+        "pd_ratio_candidates": [PD_RATIO_CANDIDATE, ...]   // 该组合下的全部 PD 候选
       },
-      // --pd-balance-search 开启时：每组 xPyD 一个变体；disagg 取其中吞吐最优的一组
-      "disagg_variants": [ { "...": "同上结构，含 label 与 pd_balance" } ]
+      // 每组 PD-ratio 一个变体；disagg 取其中集群吞吐最优的一组
+      "disagg_variants": [ { "...": "同上结构，含 label 与 pd_ratio" } ],
+      // 跨组合合并、按单 D 实例 decode 吞吐降序的全部 PD 候选（msmodeling 专有）
+      "pd_ratio_candidates": [PD_RATIO_CANDIDATE, ...]
     }
   ],
   "recommendation": {
@@ -515,14 +494,15 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
 │       └── disagg/{...}
 └── msmodeling/
     ├── agg/{summary.csv,candidates.json,command.txt}          # PD 混部，始终用总卡数
-    │
-    │   # 开启 --pd-balance-search（默认）时：每个 xPyD 一个子目录
-    ├── 1P1D/
-    │   ├── disagg_prefill/{summary.csv,candidates.json,command.txt}
-    │   └── disagg_decode/{summary.csv,candidates.json,command.txt}
-    ├── 1P2D/{disagg_prefill,disagg_decode}/...
-    ├── 3P1D/{disagg_prefill,disagg_decode}/...
-    └── ...                                                    # 其余 xPyD 组合（共 7 组，见 §3.1）
+    ├── pd_ratio/
+    │   ├── P8D8/                          # 每个 PD-ratio 组合一个子目录（见 §3.1）
+    │   │   ├── pd_ratio_raw.csv           # get_summary_df() 原始 PD 交叉表
+    │   │   ├── pd_ratio_candidates.csv    # 该组合的全部候选
+    │   │   ├── pd_ratio_best.json         # 该组合的最优候选
+    │   │   └── command.txt
+    │   ├── P16D8/...                      # 其余组合（--pd-ratio-sizes 展开）
+    │   ├── all_candidates.csv             # 跨组合合并，按单 D 实例 decode 吞吐降序
+    │   └── all_candidates.json
 ```
 
 - aic-npu 目录名含随机后缀：其 `save_results()` 在 `model_path` 为本地文件时会把结果目录
@@ -530,10 +510,10 @@ aic-npu 只扫描 `model_configs/*.json`（`<org>--<name>_config.json`），新�
   改为直接消费 `cli_default()` 返回的 in-memory `best_configs`，再自行写到 `aic_npu/<mode>/`。
 - msmodeling 无落盘能力：直接把 `OptimizerSummary.get_summary_df()` 写 `summary.csv`，
   把候选写 `candidates.json`，并额外落一份 `command.txt`（可复现命令）。
-- **xPyD 子目录**：`--pd-balance-search` 默认开启，PD 分离会按多组 xPyD 分别执行，
-  每组单独一个 `<xPyD>/` 子目录，其下再放 `disagg_prefill` / `disagg_decode`。
-  `agg` 与 xPyD 无关（PD 混部用满总卡数），保持在 `msmodeling/agg/` 不动。
-  关闭 `--pd-balance-search` 时退回旧布局：`msmodeling/{disagg_prefill,disagg_decode}/`。
+- **PD-ratio 子目录**：PD 分离按 `--pd-ratio-sizes` 展开成多组，每组单独一个
+  `pd_ratio/<PxDy>/` 子目录；跨组合合并的排序候选额外落在 `pd_ratio/all_candidates.{csv,json}`。
+  `agg` 与 PD-ratio 无关（PD 混部用满总卡数），保持在 `msmodeling/agg/` 不动。
+  `--serving-modes disagg` 时不生成 `agg/`，`--serving-modes agg` 时不生成 `pd_ratio/`。
 
 ---
 

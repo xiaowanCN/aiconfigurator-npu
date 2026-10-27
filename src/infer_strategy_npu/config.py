@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import posixpath
 from pathlib import Path
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 # ---- 统一 CLI 默认值 ----
 DEFAULT_INPUT_LENGTH = 1024
@@ -35,41 +34,10 @@ MS_DEFAULT_NUM_SPECULATIVE_TOKENS = 7
 MS_DEFAULT_ACCEPTANCE_LENGTH = 5
 MS_DEFAULT_NUM_DRAFT_LAYERS = 6
 
-# ---- msmodeling 的 TP 搜索空间（--tp-sizes）默认值 ----
-# 默认从 1 开始按 2 的幂递增，直到不超过 --num-devices 的最大 2 的幂。
-MS_TP_SIZES_START = 1
-# 这些模型参数量/显存占用大，小 TP 必然 OOM，默认直接从 32 起跳（仍按 2 的幂到 num_devices）。
-MS_TP_SIZES_LARGE_START = 32
-# 中等规模模型：TP 从 4 起跳（避免 tp=1/2 这类过小切分，但仍比大模型更细）。
-MS_TP_SIZES_MEDIUM_START = 4
-MS_TP_SIZES_LARGE_MODELS: frozenset[str] = frozenset(
-    {
-        "ZhipuAI/GLM-5.3-Flash",
-        "deepseek-ai/DeepSeek-R1",
-        "deepseek-ai/DeepSeek-V4-Pro",
-        "moonshotai/Kimi-K3",
-        "MiniMax/MiniMax-M3",
-    }
-)
-MS_TP_SIZES_MEDIUM_MODELS: frozenset[str] = frozenset(
-    {
-        "ZhipuAI/GLM-5.3",
-        "ZhipuAI/GLM-5.2",
-    }
-)
-
-# ---- PD 均衡搜索（--pd-balance-search）：xPyD 的 P/D 节点数取值区间 ----
-# 默认只搜 1P1D ~ 3P3D；总卡数按 unit = floor(total/(x+y)) 分配，P=unit*x、D=unit*y。
-PD_BALANCE_MIN_NODES = 1
-PD_BALANCE_MAX_NODES_DEFAULT = 3
-
-# ---- PD 均衡搜索：卡数粒度与"合理卡数"线性表 ----
-# P/D 两侧下发的 --num-devices 必须是 GRANULARITY 的倍数，避免出现 113 这类无法被
-# 常见 TP 整除的卡数。默认 16（兼顾利用率与"至少能被 tp=16 整除"）。
-ENV_PD_BALANCE_GRANULARITY = "INFER_STRATEGY_PD_BALANCE_GRANULARITY"
-PD_BALANCE_GRANULARITY_DEFAULT = 16
-# "合理卡数"表的生成上限（>= 该值时走算术兜底，不浪费内存枚举）
-PD_BALANCE_TABLE_MAX = 8192
+# ---- PD 分离（PD-ratio）搜索：每实例卡数 P/D 的枚举空间 ----
+# --pd-ratio-sizes 8 16 32 -> (8,8)(8,16)(8,32)(16,8)(16,16)(16,32)(32,8)(32,16)(32,32)；
+# P+D > --num-devices 的组合会被剔除。
+PD_RATIO_SIZES_DEFAULT: tuple[int, ...] = (8,)
 
 # ---- 本地模型目录（避免 ModelScope/HF 拉取超时） ----
 # msmodeling 的模型配置统一放在 model_configs/msmodeling/<模型目录>/config.json，
@@ -84,6 +52,12 @@ MODE_AGG = "agg"
 MODE_DISAGG = "disagg"
 MODE_DISAGG_PREFILL = "disagg_prefill"
 MODE_DISAGG_DECODE = "disagg_decode"
+MODE_PD_RATIO = "pd_ratio"
+
+SERVING_MODE_AGG = MODE_AGG
+SERVING_MODE_DISAGG = MODE_DISAGG
+SERVING_MODES: tuple[str, ...] = (SERVING_MODE_AGG, SERVING_MODE_DISAGG)
+SERVING_MODES_DEFAULT: tuple[str, ...] = (SERVING_MODE_AGG, SERVING_MODE_DISAGG)
 
 
 def get_local_model_root(explicit: str | None = None) -> str:
@@ -98,29 +72,6 @@ def get_local_model_root(explicit: str | None = None) -> str:
     if env:
         return env
     return MS_MODEL_ROOT
-
-
-def get_pd_balance_granularity(explicit: int | None = None) -> int:
-    """xPyD 的卡数粒度：P/D 下发的 --num-devices 必须是它的倍数。
-
-    优先级：显式参数 > 环境变量 ``INFER_STRATEGY_PD_BALANCE_GRANULARITY`` > 默认 16。
-    """
-    if explicit is not None:
-        return max(1, int(explicit))
-    raw = os.environ.get(ENV_PD_BALANCE_GRANULARITY)
-    if raw:
-        try:
-            value = int(str(raw).strip())
-            if value > 0:
-                return value
-        except ValueError:
-            logging.getLogger(__name__).warning(
-                "invalid %s=%r, fallback to %d",
-                ENV_PD_BALANCE_GRANULARITY,
-                raw,
-                PD_BALANCE_GRANULARITY_DEFAULT,
-            )
-    return PD_BALANCE_GRANULARITY_DEFAULT
 
 
 def _is_posix(path: str) -> bool:
