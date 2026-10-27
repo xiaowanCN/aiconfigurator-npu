@@ -139,5 +139,16 @@ def recommend(
     summary_path = artifacts.write_text("summary.txt", render_summary(result))
     result.artifacts["run_json"] = str(run_json)
     result.artifacts["summary"] = str(summary_path)
+
+    # 单文件静态报告：CLI 与 HTTP 共用，失败不影响主流程
+    if result.status in ("ok", "partial"):
+        try:
+            from infer_strategy_npu.reporting import write_report
+
+            report = write_report(result.to_dict(), artifacts.run_dir)
+            result.artifacts["report"] = str(report)
+        except Exception:  # noqa: BLE001
+            pass
+
     result.artifacts["files"] = list(artifacts.files)
     return result

@@ -8,8 +8,16 @@
  * 两者返回的“单任务结构”都是 run.json，因此渲染逻辑无需改动。
  * ============================================================ */
 const API_BASE = '/api/v1';
-const RESULTS_INDEX = '../results/infer-strategy-npu/index.json';
-const RESULTS_RUN = (id) => `../results/infer-strategy-npu/${id}/run.json`;
+
+// 结果根目录：默认 ../results/infer-strategy-npu；
+// 用 --out-dir _verify_results 跑出来时，可在 URL 上加 ?dir=_verify_results 覆盖；
+// 若由 infer-strategy-npu-server 托管（out_dir 挂在 /results），直接用服务端给的路径。
+const _dirParam = new URLSearchParams(location.search).get('dir');
+const _resultsBase = _dirParam ? `../${String(_dirParam).replace(/^\/+|\/+$/g, '')}` : '../results/infer-strategy-npu';
+let _apiResultsUrl = null;
+const resultsBase = () => _apiResultsUrl || _resultsBase;
+const RESULTS_INDEX = () => `${resultsBase()}/index.json`;
+const RESULTS_RUN = (id) => `${resultsBase()}/${id}/run.json`;
 
 const _forcedSource = new URLSearchParams(location.search).get('source'); // api | static | null
 let _apiMode = _forcedSource ? _forcedSource === 'api' : null; // null = 未探测
@@ -20,6 +28,7 @@ async function isApiMode() {
     const r = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
     const j = r.ok ? await r.json() : null;
     _apiMode = !!(j && j.code === 200);
+    if (_apiMode && j.data && j.data.results_url) _apiResultsUrl = j.data.results_url;
   } catch (e) {
     _apiMode = false;
   }
@@ -33,11 +42,12 @@ const DataSource = {
       const j = await r.json();
       return (j.data && j.data.items || []).map(apiTaskToSummary);
     }
-    const r = await fetch(RESULTS_INDEX);
+    const r = await fetch(RESULTS_INDEX());
     if (!r.ok) throw new Error(
-      '无法读取 results/index.json。两种解法：① 启动服务后从服务端打开本页 —— ' +
+      `无法读取 ${RESULTS_INDEX()}。两种解法：① 启动服务后从服务端打开本页 —— ` +
       '`infer-strategy-npu-server --port 8000`，浏览器访问 http://<host>:8000/ ；' +
-      '② 或在仓库根目录执行 `python -m http.server` 后再访问（浏览器 file:// 直接打开会因 CORS 拒绝读取本地文件）。'
+      `② 或在仓库根目录执行 \`python -m http.server\` 后再访问（浏览器 file:// 直接打开会因 CORS 拒绝读取本地文件）；` +
+      '结果目录不是默认位置时，在 URL 上加 ?dir=<结果目录名>，如 ?dir=_verify_results。'
     );
     const j = await r.json();
     return j.tasks || [];
@@ -68,7 +78,13 @@ function apiTaskToSummary(t) {
 /* ============================================================
  * 工具
  * ============================================================ */
-const state = { tasks: [], filtered: [], page: 1, pageSize: 8, currentFw: null };
+const state = { tasks: [], filtered: [], page: 1, pageSize: 8, currentFw: null, currentId: null };
+
+/** 状态归一：run.json 用 ok/failed，HTTP 任务用 SUCCESS/FAILED/… */
+function normStatus(s) {
+  const m = { SUCCESS: 'ok', FAILED: 'failed', RUNNING: 'running', PENDING: 'running', CANCELLED: 'cancelled', TIMEOUT: 'timeout' };
+  return m[s] || String(s || '').toLowerCase();
+}
 
 const fmt = (n, d = 2) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: d }));
 const fmtInt = (n) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN'));
@@ -80,10 +96,13 @@ function escapeHtml(s) {
 function shortId(id) { return id.length > 42 ? id.slice(0, 22) + '…' + id.slice(-16) : id; }
 
 function statusTag(s) {
-  if (s === 'ok' || s === 'SUCCESS') return '<span class="tag tag-green">成功</span>';
-  if (s === 'failed' || s === 'FAILED') return '<span class="tag tag-red">失败</span>';
-  if (s === 'RUNNING') return '<span class="tag tag-blue">运行中</span>';
-  return `<span class="tag tag-gray">${escapeHtml(s || '未知')}</span>`;
+  const n = normStatus(s);
+  if (n === 'ok') return '<span class="tag ok">成功</span>';
+  if (n === 'failed') return '<span class="tag critical">失败</span>';
+  if (n === 'running') return '<span class="tag info">运行中</span>';
+  if (n === 'cancelled') return '<span class="tag neutral">已取消</span>';
+  if (n === 'timeout') return '<span class="tag warn">超时</span>';
+  return `<span class="tag neutral">${escapeHtml(s || '未知')}</span>`;
 }
 
 function metric(k, v, unit) {
@@ -122,7 +141,7 @@ function applyFilters() {
   const kw = document.getElementById('f-kw').value.trim().toLowerCase();
   state.filtered = state.tasks.filter(t =>
     (!m || t.model === m) &&
-    (!st || t.status === st) &&
+    (!st || normStatus(t.status) === st) &&
     (!kw || (t.task_id || '').toLowerCase().includes(kw) || (t.model || '').toLowerCase().includes(kw))
   );
   state.page = 1;
@@ -159,8 +178,17 @@ function gotoPage(p) { state.page = p; renderList(); }
 /* ============================================================
  * 详情视图
  * ============================================================ */
+/** 打开单文件静态报告：优先走服务端接口，静态模式下直接读 report.html */
+async function openReport() {
+  const id = state.currentId;
+  if (!id) return;
+  if (await isApiMode()) { window.open(`${API_BASE}/tasks/${encodeURIComponent(id)}/report`, '_blank'); return; }
+  window.open(`${resultsBase()}/${id}/report.html`, '_blank');
+}
+
 async function openDetail(encId) {
   const id = decodeURIComponent(encId);
+  state.currentId = id;
   stopPendingTimer();
   showView('detail');
   setCrumb('推理策略寻优', '任务详情');
@@ -208,9 +236,9 @@ async function renderPending(id, data) {
     : 'PD 分离每组 PD-ratio 实测约 177s；<code>--pd-ratio-sizes 8 16 32</code>（9 组）约 27 分钟。页面每 10 秒自动刷新，结果出来后会自动展示。';
   body.innerHTML =
     `<div class="card"><div class="card-title"><span class="bar"></span>${done ? '任务已结束（无结果）' : '任务执行中'}</div>
-      <div class="reco-metrics">
-        ${metric('状态', statusTag(status), '')}
-        ${metric('当前阶段', escapeHtml(stage), '')}
+      <div class="stat-grid">
+        ${statItem('状态', statusTag(status), '')}
+        ${statItem('当前阶段', escapeHtml(stage), '')}
       </div>
       ${bar}
       <div class="sub" style="margin-top:12px">${tip}</div>
@@ -232,74 +260,185 @@ function pickFramework(data) {
   return fws.find(f => (f.agg && f.agg.available) || (f.disagg && f.disagg.available)) || fws[0] || {};
 }
 function bestOf(m) { return m ? (m.best || (m.candidates && m.candidates[0]) || null) : null; }
+/** 该部署形态是否真的产出了可用配置 */
+function modeReady(m) { return !!(m && m.available && bestOf(m)); }
+function modeName(m) { return m === 'disagg' ? 'PD 分离（disagg）' : 'PD 混部（agg）'; }
+
+/* ------------------------------------------------------------
+ * 并行策略解析
+ *   parallel_str 有两种写法，统一拆成 [{key, value, hot}]：
+ *     msmodeling : "TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5"
+ *     aic-npu    : "tp4pp1dp8etp1ep32"
+ *   hot=true 的项（TP/PP/DP/EP/MOE-*）在结论卡里重点标记。
+ * ---------------------------------------------------------- */
+const PP_ALIAS = {
+  TP: 'TP', PP: 'PP', DP: 'DP', EP: 'EP',
+  'MOE-TP': 'MOE-TP', 'MOE-DP': 'MOE-DP', 'MOE-EP': 'MOE-EP',
+  ETP: 'MOE-TP', EDP: 'MOE-DP', MOE_TP: 'MOE-TP', MOE_DP: 'MOE-DP', MOE_EP: 'MOE-EP',
+  DFLASH: 'DFlash',
+};
+const KEY_PARALLEL = { TP: 1, PP: 1, DP: 1, EP: 1, 'MOE-TP': 1, 'MOE-DP': 1, 'MOE-EP': 1 };
+
+function parseParallel(s) {
+  if (!s) return [];
+  const out = [];
+  for (const it of String(s).split('|').map(x => x.trim()).filter(Boolean)) {
+    const kv = /^([A-Za-z][A-Za-z0-9_ -]*?)\s*[:=]\s*(.+)$/.exec(it);
+    if (kv) { out.push([kv[1].trim().toUpperCase(), kv[2].trim()]); continue; }
+    // 紧凑写法（aic-npu）："tp4pp1dp8etp1ep32" —— key 只吃字母，避免贪婪回溯把 "ep32" 切成 "ep3"+"2"
+    const tight = [...it.matchAll(/([A-Za-z_][A-Za-z_]*)\s*(\d+(?:\.\d+)?)/g)];
+    if (tight.length) { tight.forEach(t => out.push([t[1].toUpperCase(), t[2]])); continue; }
+    out.push([null, it]);
+  }
+  return out.map(([k, v]) => {
+    const key = PP_ALIAS[k] || k || '';
+    return { key: key || '配置', value: v, hot: !!KEY_PARALLEL[key] };
+  });
+}
+
+function chipsHtml(list, large) {
+  if (!list || !list.length) return '<span class="sub">—</span>';
+  return list.map(c => `<span class="chip${c.hot ? ' hot' : ''}${large ? ' lg' : ''}">${escapeHtml(c.key)}<b>${escapeHtml(c.value)}</b></span>`).join('');
+}
+
+/** 兼容 parallel 为字典的情况（aic-npu / 部分 msmodeling 结构） */
 function parallelStr(b) {
-  if (!b) return '—';
+  if (!b) return '';
   if (b.parallel_str) return b.parallel_str;
-  if (b.parallel) return `TP=${b.parallel.tp} | PP=${b.parallel.pp} | DP=${b.parallel.dp}`;
-  return '—';
+  const p = b.parallel;
+  if (!p) return '';
+  const order = [['tp', 'TP'], ['pp', 'PP'], ['dp', 'DP'], ['ep', 'EP'], ['moe_tp', 'MOE-TP'], ['moe_dp', 'MOE-DP'], ['moe_ep', 'MOE-EP']];
+  return order.filter(([k]) => p[k] != null).map(([k, label]) => `${label}=${p[k]}`).join(' | ');
 }
 
-function renderMeta(data) {
-  const req = data.request || {};
-  const rt = data.routing || {};
+/** disagg：拆出 P/D 两侧的并行串与实例信息（优先取 extra.prefill / extra.decode） */
+function pdSides(b) {
+  const ex = (b && b.extra) || {};
+  const ps = ex.prefill || {}, ds = ex.decode || {};
+  let pStr = ps.parallel || null, dStr = ds.parallel || null;
+  if (!pStr || !dStr) {
+    const m = /prefill\[([^\]]*)\][\s/]*decode\[([^\]]*)\]/i.exec((b && b.parallel_str) || '');
+    if (m) { pStr = pStr || m[1]; dStr = dStr || m[2]; }
+  }
+  const pack = (o, str) => ({
+    str, instances: o.instances, per: o.devices_per_instance,
+    batch_size: o.batch_size, concurrency: o.concurrency, qps: o.qps_per_instance,
+  });
+  return { p: pack(ps, pStr), d: pack(ds, dStr) };
+}
+
+/* ------------------------------------------------------------
+ * 一、推理策略推荐结论：agg / disagg 各出一张结论卡
+ * ---------------------------------------------------------- */
+function statItem(k, v, unit, cls) {
+  return `<div class="stat${cls ? ' ' + cls : ''}"><div class="v">${v}${unit ? `<small>${unit}</small>` : ''}</div><div class="l">${k}</div></div>`;
+}
+
+/** 关键指标：建模估算值，刻意做成弱化排版（结论以并行策略为准）。 */
+function metricsMini(b) {
   const items = [
-    ['run_id', data.run_id], ['模型', req.model], ['设备', req.device], ['卡数', req.num_devices],
-    ['量化', req.quantize], ['输入/输出长度', `${req.input_length} / ${req.output_length}`],
-    ['TTFT/TPOT 上限', `${req.ttft_limit} / ${req.tpot_limit} ms`], ['路由原因', rt.reason || '—'],
+    ['集群吞吐', fmt(b.throughput_tokens_per_s), 'tokens/s'],
+    ['单卡吞吐', fmt(b.throughput_tokens_per_s_per_device), 'tokens/s'],
+    ['TTFT', b.ttft_ms == null ? '—' : fmt(b.ttft_ms, 1), 'ms'],
+    ['TPOT', b.tpot_ms == null ? '—' : fmt(b.tpot_ms, 1), 'ms'],
+    ['并发', fmtInt(b.concurrency), 'req'],
+    ['批大小', fmtInt(b.batch_size), ''],
+    ['req/s', fmt(b.throughput_req_per_s, 3), ''],
+    ['用卡', b.num_devices == null ? '—' : fmtInt(b.num_devices), '卡'],
   ];
-  return `<div class="card"><div class="card-title"><span class="bar"></span>任务信息</div>
-    <div class="meta-grid">${items.map(([k, v]) => `<div class="meta"><div class="k">${k}</div><div class="v">${escapeHtml(String(v == null ? '—' : v))}</div></div>`).join('')}</div></div>`;
+  return `<div class="metrics-mini">${items.map(([k, v, u]) =>
+    `<span class="mi"><i>${k}</i>${v}${u ? `<em>${u}</em>` : ''}</span>`).join('')}</div>
+    <div class="sub">指标为建模估算值，仅作辅助参考；策略取舍以并行配置为准。</div>`;
 }
 
-function renderRecommendation(data) {
-  const rec = data.recommendation || {};
-  const b = rec.best || {};
-  const modeLabel = rec.serving_mode === 'disagg' ? 'PD 分离（disagg）' : '聚合模式（agg）';
-  return `<div class="reco">
-    <div class="reco-left">
-      <div class="mode">推荐部署模式</div>
-      <div class="big">${modeLabel}</div>
-      <div class="reco-badge">${escapeHtml(rec.framework || '')}</div>
-    </div>
-    <div class="reco-right">
-      <div class="reco-metrics">
-        ${metric('集群吞吐', fmt(b.throughput_tokens_per_s), 'tokens/s')}
-        ${metric('单卡吞吐', fmt(b.throughput_tokens_per_s_per_device), 'tokens/s')}
-        ${metric('TTFT', b.ttft_ms == null ? '—' : fmt(b.ttft_ms, 1), 'ms')}
-        ${metric('TPOT', b.tpot_ms == null ? '—' : fmt(b.tpot_ms, 1), 'ms')}
-        ${metric('并发', fmtInt(b.concurrency), 'req')}
-        ${metric('批大小', fmtInt(b.batch_size), '')}
-      </div>
-      <div class="reco-why"><span class="tag tag-blue">${escapeHtml(parallelStr(b))}</span><span class="sub">${escapeHtml(rec.reason || '')}</span></div>
-    </div>
-  </div>`;
-}
-
-function cfgCard(title, m) {
+function conclCard(mode, m, isBest) {
   const b = bestOf(m);
-  if (!b) return `<div class="card"><div class="card-title"><span class="bar"></span>${title}</div><div class="sub">无可用配置</div></div>`;
-  return `<div class="card">
-    <div class="card-title"><span class="bar"></span>${title}</div>
-    <div class="reco-metrics">
-      ${metric('集群吞吐', fmt(b.throughput_tokens_per_s), 'tokens/s')}
-      ${metric('单卡吞吐', fmt(b.throughput_tokens_per_s_per_device), 'tokens/s')}
-      ${metric('TTFT', b.ttft_ms == null ? '—' : fmt(b.ttft_ms, 1), 'ms')}
-      ${metric('TPOT', b.tpot_ms == null ? '—' : fmt(b.tpot_ms, 1), 'ms')}
-      ${metric('并发', fmtInt(b.concurrency), 'req')}
-      ${metric('批大小', fmtInt(b.batch_size), '')}
+  if (!b) {
+    return `<div class="concl-card empty"><div class="cc-head"><div class="idx">${modeName(mode)}</div></div>
+      <div class="sub">本次未产出可用配置</div></div>`;
+  }
+  const ex = b.extra || {};
+  const q = b.quantize || {};
+  let paraBlock, extraPairs;
+
+  if (mode === 'disagg') {
+    const s = pdSides(b);
+    paraBlock = `<div class="para-block">
+      <div class="para-head">并行策略（推荐配置）</div>
+      <div class="para-line lg"><span class="k">Prefill 并行</span><span class="v">${chipsHtml(parseParallel(s.p.str), true)}</span></div>
+      <div class="para-line lg"><span class="k">Decode 并行</span><span class="v">${chipsHtml(parseParallel(s.d.str), true)}</span></div>
+    </div>`;
+    extraPairs = [
+      ['PD 组合', ex.label || '—'],
+      ['实例 × 卡数', `${fmtInt(s.p.instances)} × ${fmtInt(s.p.per)}卡 / ${fmtInt(s.d.instances)} × ${fmtInt(s.d.per)}卡`],
+      ['P/D batch', `${fmtInt(s.p.batch_size)} / ${fmtInt(s.d.batch_size)}`],
+      ['PD 比值', fmt(ex.pd_ratio, 3)],
+      ['单用户吞吐', fmt(ex.tokens_per_s_per_user, 2) + ' tokens/s'],
+      ['请求时延', fmt(ex.request_latency_ms, 0) + ' ms'],
+    ];
+  } else {
+    paraBlock = `<div class="para-block">
+      <div class="para-head">并行策略（推荐配置）</div>
+      <div class="para-line lg"><span class="k">TP / PP / DP</span><span class="v">${chipsHtml(parseParallel(parallelStr(b)), true)}</span></div>
+    </div>`;
+    extraPairs = [
+      ['实例 × 卡数', ex.instances && ex.devices_per_instance ? `${fmtInt(ex.instances)} × ${fmtInt(ex.devices_per_instance)}卡` : `${fmtInt(b.num_devices)} 卡`],
+      ['GEMM / KV 量化', (ex.gemm_quant || ex.kvcache_quant) ? `${ex.gemm_quant || '—'} / ${ex.kvcache_quant || '—'}` : null],
+      ['单卡集群吞吐', ex.tokens_per_s_gpu_cluster == null ? null : fmt(ex.tokens_per_s_gpu_cluster)],
+      ['整机功耗', ex.power_w ? fmt(ex.power_w, 0) + ' W' : null],
+    ].filter(x => x[1]);
+  }
+
+  const qPairs = [
+    ['线性层量化', q.linear], ['非专家线性层', q.non_expert_linear], ['KV cache', q.attention],
+  ].filter(x => x[1]);
+
+  const chipList = (pairs) => pairs.map(([k, v]) => `<span class="chip">${escapeHtml(k)}<b>${escapeHtml(String(v))}</b></span>`).join('');
+
+  return `<div class="concl-card${isBest ? ' best' : ''}">
+    <div class="cc-head">
+      <div class="idx">${modeName(mode)}</div>
+      <div class="cc-tags">
+        ${isBest ? '<span class="tag info">推荐</span>' : ''}
+        ${b.meets_slo ? '<span class="tag ok">SLO 达标</span>' : '<span class="tag warn">SLO 未达标</span>'}
+      </div>
     </div>
-    <div class="reco-why"><span class="tag tag-blue">${escapeHtml(parallelStr(b))}</span></div>
+    ${paraBlock}
+    <h4 class="blk">附加部署配置</h4>
+    <div class="chips">${chipList(extraPairs.concat(qPairs))}</div>
+    <h4 class="blk">关键指标（估算）</h4>
+    ${metricsMini(b)}
   </div>`;
 }
 
+function renderConclusion(data, fw) {
+  const rec = data.recommendation || {};
+  const modes = [];
+  if (modeReady(fw.agg)) modes.push('agg');
+  if (modeReady(fw.disagg)) modes.push('disagg');
+  if (!modes.length) {
+    return `<div class="card"><div class="card-title"><span class="bar"></span>推理策略推荐结论</div>
+      <div class="sub">本次任务没有产出可用配置，请查看“分析过程 / 错误信息”。</div></div>`;
+  }
+  const cards = modes.map(m => conclCard(m, m === 'agg' ? fw.agg : fw.disagg, rec.serving_mode === m)).join('');
+  return `<div class="card">
+    <div class="card-title"><span class="bar"></span>推理策略推荐结论 <span class="card-desc">按部署形态分别给出最优配置</span></div>
+    <div class="concl-grid">${cards}</div>
+    ${rec.reason ? `<div class="stat-caption">择优口径：${escapeHtml(rec.reason)}</div>` : ''}
+  </div>`;
+}
+
+/* ------------------------------------------------------------
+ * 候选表（排名列统一在最左，避免列错位）
+ * ---------------------------------------------------------- */
 function candidatesTable(cands, title) {
   if (!cands || !cands.length) return `<div class="sub" style="margin-top:12px">${title || '候选'}：无</div>`;
   const rows = cands.map((c, i) => {
-    const sla = c.meets_slo ? '<span class="tag tag-green">达标</span>' : '<span class="tag tag-red">未达标</span>';
+    const sla = c.meets_slo ? '<span class="tag ok">达标</span>' : '<span class="tag warn">未达标</span>';
     const top = i === 0 ? ' class="top1"' : '';
     return `<tr${top}>
       <td class="strong">#${i + 1}</td>
-      <td>${escapeHtml(parallelStr(c))}</td>
+      <td>${chipsHtml(parseParallel(parallelStr(c)))}</td>
       <td class="num">${fmt(c.throughput_tokens_per_s)}</td>
       <td class="num">${fmt(c.throughput_tokens_per_s_per_device)}</td>
       <td class="num">${c.ttft_ms == null ? '—' : fmt(c.ttft_ms, 1)}</td>
@@ -314,15 +453,32 @@ function candidatesTable(cands, title) {
   </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function renderVariants(fw) {
-  const vs = fw.disagg_variants || [];
-  if (!vs.length) return '';
+/* 二、分析过程的折叠块：整行 summary 都能点开/收起，交互统一 */
+function foldCard(title, inner, open) {
+  return `<details class="card fold"${open ? ' open' : ''}>
+    <summary class="card-title"><span class="bar"></span><span class="fold-text">${title}</span><span class="fold-ico"></span></summary>
+    <div class="fold-body">${inner}</div>
+  </details>`;
+}
+
+/** 组合列表：优先 disagg_variants；缺失时按 framework 级候选的 label 兜底，保证每个 P×D 都出现。 */
+function pdVariants(fw) {
+  const vs = (fw.disagg_variants || []).filter(v => v && (v.label || v.pd_ratio));
+  if (vs.length) return vs;
+  const byLabel = new Map();
+  for (const c of fw.pd_ratio_candidates || []) {
+    const key = c.label || '—';
+    if (!byLabel.has(key)) byLabel.set(key, { label: key, pd_ratio: { prefill_devices: c.prefill && c.prefill.devices_per_instance, decode_devices: c.decode && c.decode.devices_per_instance }, candidates: [] });
+    byLabel.get(key).candidates.push(c);
+  }
+  return [...byLabel.values()];
+}
+
+function renderVariantsInner(fw) {
+  const vs = pdVariants(fw);
+  if (!vs.length) return '<div class="sub">无 PD 分离组合</div>';
   const tabs = vs.map((v, i) => `<button class="tab ${i === 0 ? 'active' : ''}" data-vi="${i}" onclick="selectVariant(${i})">${escapeHtml(v.label || v.mode || ('#' + (i + 1)))}</button>`).join('');
-  return `<div class="card">
-    <div class="card-title"><span class="bar"></span>PD 分离（PD-ratio 每实例卡数组合）</div>
-    <div class="tabs">${tabs}</div>
-    <div id="variant-body"></div>
-  </div>`;
+  return `<div class="tabs">${tabs}</div><div id="variant-body"></div>`;
 }
 
 /* ------------------------------------------------------------
@@ -338,11 +494,12 @@ function pdSideSummary(s) {
   return `${fmtInt(s && s.num_devices)} 卡`;
 }
 
-function pdSideCells(c) {
+function pdSideCells(c, i) {
   const p = c.prefill || {};
   const d = c.decode || {};
   const sideCell = s => `${fmtInt(s.instances)} × ${fmtInt(s.devices_per_instance)} 卡`;
   return `
+    <td class="strong">#${i + 1}</td>
     <td class="strong">${escapeHtml(c.label || '—')}</td>
     <td class="num">${sideCell(p)}</td>
     <td class="num">${sideCell(d)}</td>
@@ -361,7 +518,7 @@ function pdCandidatesTable(cands) {
   if (!cands || !cands.length) return '';
   const rows = cands.map((c, i) => {
     const top = i === 0 ? ' class="top1"' : '';
-    return `<tr${top}>${pdSideCells(c)}</tr>`;
+    return `<tr${top}>${pdSideCells(c, i)}</tr>`;
   }).join('');
   return `<table style="margin-top:12px"><thead><tr>
     <th>排名</th><th>P×D</th><th>P 实例×卡</th><th>D 实例×卡</th><th>P 并行</th><th>D 并行</th>
@@ -369,50 +526,128 @@ function pdCandidatesTable(cands) {
   </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function renderPdCandidates(fw) {
-  const cands = fw.pd_ratio_candidates || [];
-  if (!cands.length) return '';
-  const labels = [...new Set(cands.map(c => c.label).filter(Boolean))];
-  return `<details class="card" open><summary class="card-title"><span class="bar"></span>PD 分离候选汇总（${cands.length} 条 · 组合 ${labels.join(' / ')} · 按单 D 实例 decode 吞吐降序）</summary>
-    ${pdCandidatesTable(cands)}</details>`;
-}
-
 function variantBody(v) {
   const b = bestOf(v) || {};
   const pf = v.prefill || {};
   const dc = v.decode || {};
-  const pfP = pf.parallel_str || (pf.parallel ? `TP=${pf.parallel.tp} | PP=${pf.parallel.pp} | DP=${pf.parallel.dp}` : '—');
-  const dcP = dc.parallel_str || (dc.parallel ? `TP=${dc.parallel.tp} | PP=${dc.parallel.pp} | DP=${dc.parallel.dp}` : '—');
+  const pfStr = pf.parallel_str || parallelStr(pf);
+  const dcStr = dc.parallel_str || parallelStr(dc);
+  // 该组合的全部候选（条数由求解结果决定），按集群吞吐降序
+  let own = v.pd_ratio_candidates || [];
+  if (!own.length && v.candidates && v.candidates.length) own = v.candidates;
+  if (!own.length && v.label) {
+    own = ((state.currentFw && state.currentFw.pd_ratio_candidates) || []).filter(c => c.label === v.label);
+  }
+  const shown = own.slice().sort((a, b) => (b.throughput_tokens_per_s || 0) - (a.throughput_tokens_per_s || 0));
   return `
-   <div class="reco-metrics">
-     ${metric('组合吞吐', fmt(b.throughput_tokens_per_s), 'tokens/s')}
-     ${metric('单卡吞吐', fmt(b.throughput_tokens_per_s_per_device), 'tokens/s')}
-     ${metric('TPOT', b.tpot_ms == null ? '—' : fmt(b.tpot_ms, 1), 'ms')}
-     ${metric('并发', fmtInt(b.concurrency), 'req')}
-     ${metric('用卡', b.num_devices == null ? '—' : fmtInt(b.num_devices), '卡')}
-   </div>
+   <h4 class="blk">该组合最优 · 关键指标（估算）</h4>
+   ${metricsMini(b)}
    <div class="pd-grid">
-     <div class="pd-side"><div class="pd-role">Prefill 侧</div><div class="pd-p">${escapeHtml(pfP)}</div>
-       <div class="sub">${fmt(pf.throughput_tokens_per_s)} tokens/s · ${pdSideSummary(pf)}</div></div>
-     <div class="pd-side"><div class="pd-role">Decode 侧</div><div class="pd-p">${escapeHtml(dcP)}</div>
-       <div class="sub">${fmt(dc.throughput_tokens_per_s)} tokens/s · ${pdSideSummary(dc)}</div></div>
+     <div class="pd-side">
+       <div class="pd-role">Prefill 侧</div>
+       <div class="chips">${chipsHtml(parseParallel(pfStr))}</div>
+       <div class="sub">${fmt(pf.throughput_tokens_per_s)} tokens/s · ${pdSideSummary(pf)} · batch ${fmtInt(pf.batch_size)} · 并发 ${fmtInt(pf.concurrency)}</div>
+     </div>
+     <div class="pd-side">
+       <div class="pd-role">Decode 侧</div>
+       <div class="chips">${chipsHtml(parseParallel(dcStr))}</div>
+       <div class="sub">${fmt(dc.throughput_tokens_per_s)} tokens/s · ${pdSideSummary(dc)} · batch ${fmtInt(dc.batch_size)} · 并发 ${fmtInt(dc.concurrency)}</div>
+     </div>
    </div>
-   ${len(v.pd_ratio_candidates)
-     ? pdCandidatesTable(v.pd_ratio_candidates)
-     : candidatesTable(v.candidates, '该组合候选')}`;
+   ${shown.length
+     ? `<h4 class="blk">该组合候选（${shown.length} 条 · 按集群吞吐降序）</h4>${pdCandidatesTable(shown)}`
+     : '<div class="sub" style="margin-top:10px">该组合无候选明细</div>'}`;
 }
 
 function selectVariant(i) {
-  const v = (state.currentFw.disagg_variants || [])[i];
+  const v = pdVariants(state.currentFw || {})[i];
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', +t.dataset.vi === i));
   if (v) document.getElementById('variant-body').innerHTML = variantBody(v);
 }
 
+/* ------------------------------------------------------------
+ * 三、任务信息（沉底）：量化参数详细化，不再展示路由原因
+ * ---------------------------------------------------------- */
+function kvTable(pairs) {
+  return `<table class="kv">${pairs.map(([k, v]) =>
+    `<tr><th>${escapeHtml(k)}</th><td class="mono">${escapeHtml(String(v == null || v === '' ? '—' : v))}</td></tr>`).join('')}</table>`;
+}
+
+function renderMeta(data) {
+  const req = data.request || {};
+  const base = [
+    ['run_id', data.run_id],
+    ['模型', req.model],
+    ['设备', req.device],
+    ['卡数', req.num_devices],
+    ['输入 / 输出长度', `${fmtInt(req.input_length)} / ${fmtInt(req.output_length)}`],
+    ['TTFT / TPOT 上限', `${fmtInt(req.ttft_limit)} / ${fmtInt(req.tpot_limit)} ms`],
+    ['部署形态', (req.serving_modes || []).map(modeName).join(' + ') || '—'],
+    ['PD 每实例卡数', (req.pd_ratio_sizes || []).join(' / ') || '—'],
+    ['TP 候选', (req.tp_sizes || []).join(' / ') || '自动'],
+    ['并发度 jobs', req.jobs || '默认'],
+    ['top-n', req.top_n],
+    ['投机解码', req.speculative_method
+      ? `${req.speculative_method} · ${req.num_speculative_tokens} tokens · acc ${req.acceptance_length}`
+      : '关闭'],
+    ['图编译', req.compile_model ? '开启' : '关闭'],
+    ['生成时间', data.generated_at],
+  ];
+  const quant = [
+    ['量化开关', req.quantize],
+    ['专家线性层（linear）', req.quantize_linear_action],
+    ['非专家线性层（non_expert_linear）', req.quantize_non_expert_linear_action],
+    ['KV cache / attention', req.quantize_attention_action],
+    ['实际生效（best）', quantSummary(data)],
+  ];
+  return `<div class="card">
+    <div class="card-title"><span class="bar"></span>任务信息</div>
+    ${kvTable(base)}
+    <h4 class="blk">量化参数</h4>
+    ${kvTable(quant)}
+  </div>`;
+}
+
+/** 取推荐配置里真实生效的量化组合，便于核对“请求 vs 生效” */
+function quantSummary(data) {
+  const fw = pickFramework(data);
+  const b = bestOf(fw.disagg) || bestOf(fw.agg);
+  const q = (b && b.quantize) || {};
+  if (!q || (!q.linear && !q.attention)) return '—';
+  return [q.linear && `linear=${q.linear}`, q.non_expert_linear && `non_expert=${q.non_expert_linear}`, q.attention && `attention=${q.attention}`]
+    .filter(Boolean).join(' · ');
+}
+
+/* ------------------------------------------------------------
+ * 四、执行命令（沉底最后）
+ * ---------------------------------------------------------- */
 function renderCommands(data) {
   const cmds = (data.routing && data.routing.commands) || [];
   if (!cmds.length) return '';
   const items = cmds.map(c => `<li>${escapeHtml(c)}</li>`).join('');
-  return `<details class="card"><summary class="card-title"><span class="bar"></span>执行命令（${cmds.length}）</summary><ul class="cmd-list">${items}</ul></details>`;
+  return foldCard(`执行命令（${cmds.length} 条）`, `<ul class="cmd-list">${items}</ul>`, false);
+}
+
+/* ------------------------------------------------------------
+ * 二、分析过程
+ * ---------------------------------------------------------- */
+function renderAnalysis(data, fw) {
+  const blocks = [];
+  if (modeReady(fw.agg)) {
+    blocks.push(foldCard(`PD 混部候选排名（${len(fw.agg.candidates)} 条）`, candidatesTable(fw.agg.candidates), false));
+  }
+  const variants = modeReady(fw.disagg) ? pdVariants(fw) : [];
+  if (variants.length) {
+    const labels = variants.map(v => v.label).filter(Boolean);
+    const sizes = ((data.request || {}).pd_ratio_sizes || []);
+    const only = variants.length === 1
+      ? `<div class="notice"><b>本次只跑了 ${labels[0]} 一组</b>：任务的 PD 每实例卡数为 <code>${sizes.join(' / ') || '默认 8'}</code>，` +
+        `组合数 = 卡数候选的笛卡尔积，想要 P8D8 / P8D16 / P16D8 / P16D16 请填 <code>--pd-ratio-sizes 8 16</code>（新建任务表单的“PD 每实例卡数”）。</div>`
+      : '';
+    blocks.push(foldCard(`PD 分离 · 各组合最优（${variants.length} 组：${labels.join(' / ')}）`, only + renderVariantsInner(fw), true));
+  }
+  if (!blocks.length) return '<div class="card"><div class="sub">本次没有产出候选方案。</div></div>';
+  return blocks.join('');
 }
 
 function renderErrors(data) {
@@ -426,26 +661,32 @@ function renderErrors(data) {
   return `<div class="card"><div class="card-title"><span class="bar"></span>错误信息</div>${items}</div>`;
 }
 
+function sectionTitle(t, sub) {
+  return `<div class="section-title"><span class="bar"></span>${t}${sub ? ` <span class="sub">${sub}</span>` : ''}</div>`;
+}
+
 function renderDetail(data) {
   const fw = pickFramework(data);
   state.currentFw = fw;
   const req = data.request || {};
-  document.getElementById('detail-title').textContent = `${req.model || '任务'} · ${req.num_devices || ''} 卡 · ${req.quantize || ''}`;
-  document.getElementById('detail-sub').textContent = '点击各卡片查看并行策略（TP/PP/DP/EP）与候选配置';
+  document.getElementById('detail-title').textContent = `${req.model || '任务'} · ${fmtInt(req.num_devices)} 卡 · ${req.quantize || ''}`;
+  document.getElementById('detail-sub').textContent =
+    `${req.device || '—'} · 输入/输出 ${fmtInt(req.input_length)}/${fmtInt(req.output_length)} · TTFT ≤ ${fmtInt(req.ttft_limit)}ms · TPOT ≤ ${fmtInt(req.tpot_limit)}ms`;
 
-  const parts = [renderMeta(data)];
-  if (data.status === 'failed' || len(data.errors)) {
-    parts.push(renderErrors(data));
-  } else {
-    parts.push(renderRecommendation(data));
-    parts.push(cfgCard('聚合模式（agg）', fw.agg));
-    parts.push(`<details class="card"><summary class="card-title"><span class="bar"></span>聚合候选（${len(fw.agg && fw.agg.candidates)}）</summary>${candidatesTable(fw.agg && fw.agg.candidates)}</details>`);
-    parts.push(renderVariants(fw));
-    parts.push(renderPdCandidates(fw));
+  const failed = data.status === 'failed' || len(data.errors);
+  const parts = [sectionTitle('一、推理策略推荐结论', 'by 部署形态')];
+  parts.push(failed ? renderErrors(data) : renderConclusion(data, fw));
+  if (!failed) {
+    parts.push(sectionTitle('二、分析过程', '各场景候选方案与排序'));
+    parts.push(renderAnalysis(data, fw));
   }
-  parts.push(renderCommands(data));
+  parts.push(sectionTitle('三、任务信息'));
+  parts.push(renderMeta(data));
+  parts.push(sectionTitle('四、执行命令'));
+  parts.push(renderCommands(data) || '<div class="card"><div class="sub">无</div></div>');
+
   document.getElementById('detail-body').innerHTML = parts.join('');
-  if (len(fw.disagg_variants)) selectVariant(0);
+  if (!failed && len(fw.disagg_variants)) selectVariant(0);
 }
 
 /* ============================================================
@@ -670,8 +911,26 @@ document.getElementById('f-model').addEventListener('change', applyFilters);
 document.getElementById('f-status').addEventListener('change', applyFilters);
 document.getElementById('f-kw').addEventListener('input', applyFilters);
 
+/** 静态报告模式：HTML 里已内嵌 window.__REPORT_DATA__，不发任何请求。 */
+function bootReport(data) {
+  _apiMode = false;
+  state.currentId = (data && data.run_id) || '';
+  document.body.classList.add('report-mode');
+  const badge = document.getElementById('src-badge');
+  if (badge) badge.textContent = '静态报告（离线）';
+  showView('detail');
+  setCrumb('推理策略寻优', '任务详情');
+  try {
+    if (!data || !data.frameworks) { renderPending(data && data.run_id || '', data); return; }
+    renderDetail(data);
+  } catch (e) {
+    document.getElementById('detail-body').innerHTML = `<div class="err-box"><pre>${escapeHtml(e.message)}</pre></div>`;
+  }
+}
+
 (async () => {
+  if (window.__REPORT_DATA__) { bootReport(window.__REPORT_DATA__); return; }
   const api = await isApiMode();
-  document.getElementById('src-badge').textContent = api ? '数据源: API' : '数据源: results（只读）';
+  document.getElementById('src-badge').textContent = api ? '数据源: API' : `数据源: ${resultsBase()}（只读）`;
   await loadList();
 })();

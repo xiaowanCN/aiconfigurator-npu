@@ -1,0 +1,1476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>20261027-114626-ZhipuAI-GLM-5.2-ATLAS_950_486T_96G-32-9639c54a · 推理策略寻优报告</title>
+  <style>
+:root {
+  --bg: #f5f7fa;
+  --panel: #ffffff;
+  --border: #e5e9f0;
+  --text: #1f2d3d;
+  --sub: #6b7a90;
+  --blue: #2f6fed;
+  --blue-bg: #eef4ff;
+  --red: #d93026;
+  --red-bg: #fdecea;
+  --orange: #e07b00;
+  --orange-bg: #fff4e5;
+  --green: #1a7f4b;
+  --green-bg: #e9f7ef;
+  --purple: #6941c6;
+  --purple-bg: #f2ecfb;
+  --gray-bg: #f2f4f8;
+  --sidebar-bg: #10254a;
+  --sidebar-hover: #1a3a6b;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6;
+}
+a { color: var(--blue); text-decoration: none; cursor: pointer; }
+
+.layout { display: flex; min-height: 100vh; }
+
+/* 侧边栏 */
+.sidebar {
+  width: 208px; flex-shrink: 0; background: var(--sidebar-bg); color: #c7d3e3;
+  display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+}
+.logo { display: flex; align-items: center; gap: 10px; padding: 18px 20px 22px; }
+.logo-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, #2f6fed, #00c6ff);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 13px;
+}
+.logo-name { font-size: 15px; font-weight: 600; color: #fff; letter-spacing: 1px; }
+.logo-sub { font-size: 10px; color: #7d8ea6; letter-spacing: .5px; }
+.menu { flex: 1; padding: 4px 10px; }
+.menu-item {
+  display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+  border-radius: 8px; cursor: pointer; margin-bottom: 4px; font-size: 13.5px;
+  transition: background .15s;
+}
+.menu-item:hover { background: var(--sidebar-hover); color: #fff; }
+.menu-item.active { background: var(--blue); color: #fff; font-weight: 500; }
+.menu-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+/* 主区 */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar {
+  height: 48px; background: #fff; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 24px;
+  position: sticky; top: 0; z-index: 10;
+}
+.crumb { color: var(--sub); font-size: 13px; }
+.crumb b { color: var(--text); font-weight: 600; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.src-badge { background: var(--blue-bg); color: var(--blue); font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.btn-ghost {
+  border: 1px solid var(--border); background: #fff; color: var(--sub);
+  padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+}
+.btn-ghost:hover { border-color: var(--blue); color: var(--blue); }
+
+.content { padding: 20px 24px 48px; width: 100%; max-width: 1440px; }
+.page-head h1 { font-size: 20px; font-weight: 600; }
+.page-head p { color: var(--sub); margin-top: 6px; font-size: 13px; max-width: 880px; }
+
+/* 卡片 / 章节标题 */
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px 24px; margin-bottom: 16px;
+}
+.card-head { display: flex; align-items: flex-start; margin-bottom: 14px; }
+.card-head .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.bar { display: inline-block; width: 4px; height: 15px; background: var(--blue); border-radius: 2px; margin-right: 8px; vertical-align: -2px; }
+.card-title { font-size: 15px; font-weight: 600; }
+.card-desc { color: var(--sub); font-size: 12.5px; font-weight: 400; margin-left: 6px; }
+
+.section-title { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 600; margin: 28px 0 14px; }
+.section-title .bar { height: 18px; vertical-align: -3px; }
+.section-title .sub { font-size: 12px; color: var(--sub); font-weight: 400; }
+
+.btn-primary {
+  background: var(--blue); color: #fff; border: none; padding: 7px 18px;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-primary:hover { background: #2159c9; }
+.btn-primary:disabled { background: #a9bde3; cursor: not-allowed; }
+.btn-cancel { background: #fff; border: 1px solid var(--border); color: var(--sub); padding: 7px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.btn-text { background: none; border: none; color: var(--blue); cursor: pointer; font-size: 12.5px; padding: 2px 6px; }
+.btn-text.danger { color: var(--red); }
+
+/* 筛选 / 表单 */
+.filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; color: var(--sub); }
+.field select, .field input {
+  height: 32px; border: 1px solid var(--border); border-radius: 6px; padding: 0 10px;
+  font-size: 13px; min-width: 150px; color: var(--text); background: #fff; outline: none;
+}
+.field select:focus, .field input:focus { border-color: var(--blue); }
+
+/* 标签 */
+.tag { display: inline-block; padding: 1px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; }
+.tag.ok { background: var(--green-bg); color: var(--green); }
+.tag.warn { background: var(--orange-bg); color: var(--orange); }
+.tag.info { background: var(--blue-bg); color: var(--blue); }
+.tag.neutral { background: var(--gray-bg); color: var(--sub); }
+.tag.critical { background: var(--red-bg); color: var(--red); }
+.tag.purple { background: var(--purple-bg); color: var(--purple); }
+
+/* chips：并行策略 / 附加部署配置 */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 2px; }
+.chip {
+  background: var(--gray-bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 10px; font-size: 12px; font-family: Consolas, Menlo, monospace; white-space: nowrap;
+}
+.chip b { color: var(--text); margin-left: 4px; }
+.chip.hot { background: var(--blue-bg); border-color: #c9dcff; font-weight: 600; }
+.chip.hot b { color: var(--blue); }
+.chip.lg { padding: 6px 14px; font-size: 15px; font-weight: 700; border-radius: 8px; }
+.chip.lg b { font-size: 16px; }
+
+/* 并行策略：结论卡里最显眼的一块 */
+.para-block {
+  background: var(--blue-bg); border: 1px solid #c9dcff; border-radius: 10px;
+  padding: 14px 16px; margin: 4px 0 6px;
+}
+.para-head { font-size: 12px; color: var(--blue); font-weight: 600; letter-spacing: .5px; margin-bottom: 8px; }
+.para-line.lg { margin: 8px 0; align-items: center; }
+.para-line.lg .k { min-width: 88px; color: var(--text); font-weight: 600; font-size: 13px; }
+
+/* 关键指标：弱化（建模估算值，不作为决策主依据） */
+.metrics-mini { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 6px; }
+.metrics-mini .mi {
+  background: var(--gray-bg); border-radius: 6px; padding: 3px 10px;
+  font-size: 12.5px; color: var(--text); font-family: Consolas, Menlo, monospace;
+}
+.metrics-mini .mi i { font-style: normal; color: var(--sub); margin-right: 6px; font-family: inherit; }
+.metrics-mini .mi em { font-style: normal; color: var(--sub); font-size: 11px; margin-left: 2px; }
+
+/* 指标小方块 */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px; text-align: center; }
+.stat .v { font-family: Consolas, Menlo, monospace; font-size: 20px; font-weight: 700; line-height: 1.3; word-break: break-all; }
+.stat .v small { font-size: 11px; color: var(--sub); font-weight: 400; margin-left: 2px; }
+.stat .l { font-size: 12px; color: var(--sub); margin-top: 2px; }
+.stat.blue { background: var(--blue-bg); border-color: #c9dcff; }
+.stat.blue .v { color: var(--blue); }
+.stat-caption { font-size: 12.5px; color: var(--sub); margin-top: 12px; }
+.stat-caption b { font-family: Consolas, Menlo, monospace; color: var(--text); }
+
+/* 结论卡 */
+.concl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+.concl-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; border-top: 3px solid var(--sub);
+}
+.concl-card.best { border-top-color: var(--blue); box-shadow: 0 2px 10px rgba(47,111,237,.10); }
+.concl-card.empty { border-top-color: var(--border); }
+.cc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.cc-head .idx { font-size: 14px; font-weight: 600; }
+.cc-tags { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.para-line { display: flex; gap: 10px; align-items: baseline; margin: 6px 0; }
+.para-line .k { color: var(--sub); font-size: 12.5px; min-width: 78px; flex-shrink: 0; }
+.para-line .v { display: flex; flex-wrap: wrap; gap: 6px; }
+
+h4.blk { font-size: 13.5px; font-weight: 600; margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
+h4.blk::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--blue); display: inline-block; }
+
+/* 表格：候选列表 */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  background: var(--gray-bg); color: var(--sub); font-weight: 600; padding: 9px 12px;
+  text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border);
+}
+td { padding: 10px 12px; border-bottom: 1px solid #eef1f6; white-space: nowrap; }
+tr:hover td { background: #fafbfc; }
+tr.clickable { cursor: pointer; }
+tr.top1 td { background: var(--blue-bg); }
+tr.top1:hover td { background: #e3eeff; }
+td.num { font-variant-numeric: tabular-nums; font-family: Consolas, Menlo, monospace; }
+td.strong { font-weight: 600; }
+.sub { color: var(--sub); font-size: 12px; }
+.pager { display: flex; justify-content: flex-end; gap: 6px; margin-top: 14px; }
+.pager button {
+  min-width: 28px; height: 28px; border: 1px solid var(--border); background: #fff;
+  border-radius: 6px; cursor: pointer; font-size: 12.5px; color: var(--sub);
+}
+.pager button.cur { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+/* 键值表：任务信息 */
+table.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.kv th, table.kv td { border: 1px solid var(--border); padding: 7px 12px; text-align: left; vertical-align: middle; }
+table.kv th { background: var(--gray-bg); color: var(--sub); font-weight: 600; white-space: nowrap; width: 220px; }
+table.kv td.mono { font-family: Consolas, Menlo, monospace; word-break: break-all; }
+
+/* 折叠块：整行可点，状态一致 */
+details.card.fold > summary { list-style: none; cursor: pointer; user-select: none; display: flex; align-items: center; }
+details.card.fold > summary::-webkit-details-marker { display: none; }
+details.card.fold > summary:hover .fold-text { color: var(--blue); }
+.fold-ico { margin-left: auto; width: 16px; height: 16px; position: relative; flex-shrink: 0; }
+.fold-ico::after {
+  content: ""; position: absolute; left: 4px; top: 5px; width: 7px; height: 7px;
+  border-right: 2px solid var(--sub); border-bottom: 2px solid var(--sub);
+  transform: rotate(45deg); transition: transform .15s;
+}
+details.card.fold[open] > summary .fold-ico::after { transform: rotate(-135deg); top: 7px; }
+.fold-body { padding: 6px 2px 4px; }
+
+/* PD 分离 tab 与两侧 */
+.tabs { display: flex; gap: 8px; margin: 4px 0 14px; flex-wrap: wrap; }
+.tab {
+  border: 1px solid var(--border); background: #fff; color: var(--sub);
+  padding: 6px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+.pd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.pd-side { background: var(--gray-bg); border-radius: 8px; padding: 14px 16px; border-left: 3px solid var(--green); }
+.pd-role { font-size: 12px; color: var(--sub); margin-bottom: 6px; }
+.pd-side .sub { margin-top: 6px; }
+
+/* 命令 / 错误 */
+.cmd-list { margin: 6px 0 0; padding-left: 18px; }
+.cmd-list li {
+  font-family: Consolas, Menlo, monospace; font-size: 12px; color: var(--sub);
+  margin-bottom: 8px; white-space: pre-wrap; word-break: break-all;
+}
+.err-box { border: 1px solid #f5c6c2; background: #fffaf9; border-radius: 8px; padding: 14px 16px; margin-top: 10px; }
+.err-box pre {
+  background: #fff; border: 1px solid #f5c6c2; border-radius: 6px; padding: 12px 14px;
+  font-size: 12px; color: var(--sub); white-space: pre-wrap; word-break: break-all;
+  line-height: 1.7; margin: 10px 0; font-family: Consolas, Menlo, monospace;
+}
+.err-note { background: var(--orange-bg); border-radius: 6px; padding: 10px 14px; font-size: 12.5px; color: var(--sub); line-height: 1.7; }
+.err-note code { background: rgba(0,0,0,.05); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+
+.notice {
+  display: flex; align-items: center; gap: 10px; background: var(--blue-bg);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+  font-size: 12.5px; color: var(--sub); border: 1px solid #c9dcff; flex-wrap: wrap;
+}
+.notice b { color: var(--blue); font-weight: 600; }
+.nf-running { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--sub); }
+
+/* 弹窗 / 新建任务 */
+.mask { position: fixed; inset: 0; background: rgba(15,27,58,.45); display: none; align-items: center; justify-content: center; z-index: 100; }
+.mask.show { display: flex; }
+.modal { background: #fff; border-radius: 12px; width: 640px; max-height: 86vh; overflow: auto; padding: 24px; }
+.modal h3 { font-size: 16px; margin-bottom: 4px; }
+.modal .m-desc { color: var(--sub); font-size: 12.5px; margin: 12px 0 18px; line-height: 1.7; }
+.modal .m-desc code { background: var(--gray-bg); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+.form-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.nf-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.nf-grid .field select, .nf-grid .field input { min-width: 0; width: 100%; }
+.nf-checks { display: flex; gap: 20px; align-items: center; height: 32px; }
+.nf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.nf-check input { width: 14px; height: 14px; min-width: 14px; }
+.nf-preview {
+  margin-top: 16px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--gray-bg); font-size: 12px; line-height: 1.7;
+}
+.nf-preview .pv-title { font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.nf-preview ul { margin: 6px 0 0 18px; padding: 0; }
+.nf-preview li { word-break: break-all; color: var(--sub); font-family: Consolas, Menlo, monospace; font-size: 11px; }
+.nf-preview .pv-warn { color: var(--orange); }
+.nf-error {
+  margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 12.5px;
+  background: var(--red-bg); color: var(--red); border: 1px solid #f3c3c3;
+}
+
+/* 静态报告模式：单文件报告，去掉侧边栏/面包屑/返回等交互外壳 */
+body.report-mode #view-list { display: none; }
+body.report-mode #btn-report { display: none; }
+body.report-mode .sidebar { display: none; }
+body.report-mode .topbar { display: none; }
+body.report-mode #view-detail { display: block !important; }
+body.report-mode #view-detail .page-head > div:last-child { display: none; }
+body.report-mode .content { padding: 20px 24px 48px; max-width: 1280px; margin: 0 auto; }
+
+@media (max-width: 980px) {
+  .pd-grid { grid-template-columns: 1fr; }
+  .concl-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .nf-grid { grid-template-columns: 1fr; }
+  .modal { width: 92vw; }
+}
+.hide { display: none !important; }
+
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">IS</div>
+      <div>
+        <div class="logo-name">推理部署调优</div>
+        <div class="logo-sub">infer-strategy-npu</div>
+      </div>
+    </div>
+    <nav class="menu">
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        集群总览
+      </div>
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10M6 20v-6M18 20V4"/></svg>
+        调优工作台
+      </div>
+      <div class="menu-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/></svg>
+        推理策略寻优
+      </div>
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+        监控诊断
+      </div>
+      <div class="menu-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v3H4zM4 10h16v3H4zM4 16h16v3H4z"/></svg>
+        文档中心
+      </div>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <span class="crumb" id="crumb"></span>
+      <div class="topbar-right">
+        <span class="src-badge" id="src-badge"></span>
+        <button class="btn-ghost" onclick="location.reload()">刷新</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- 视图一：任务列表 -->
+      <div id="view-list">
+        <div class="page-head" style="display:flex;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <h1>推理策略寻优工具</h1>
+            <p>面向大模型推理部署的策略搜索与推荐：输入模型与硬件约束，自动在聚合（agg）与 PD 分离（disagg）模式间寻优。</p>
+          </div>
+          <div style="padding-top:4px;">
+            <button class="btn-primary" onclick="openModal()">＋ 新建任务</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="filters">
+            <div class="field">
+              <label>模型</label>
+              <select id="f-model"><option value="">全部</option></select>
+            </div>
+            <div class="field">
+              <label>状态</label>
+              <select id="f-status">
+                <option value="">全部</option>
+                <option value="ok">成功</option>
+                <option value="failed">失败</option>
+                <option value="running">运行中</option>
+                <option value="cancelled">已取消</option>
+                <option value="timeout">超时</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>run_id 关键字</label>
+              <input id="f-kw" placeholder="如 GLM-5.3-Flash" style="min-width:180px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title"><span class="bar"></span>任务记录</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>run_id</th><th>模型</th><th>设备 × 卡数</th><th>量化</th>
+                <th>框架</th><th>状态</th><th>创建时间</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="list-body"></tbody>
+          </table>
+          <div class="pager" id="pager"></div>
+        </div>
+      </div>
+
+      <!-- 视图二：任务详情 -->
+      <div id="view-detail" class="hide">
+        <div class="page-head" style="display:flex;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <h1 id="detail-title" style="font-size:18px;"></h1>
+            <p id="detail-sub"></p>
+          </div>
+          <div style="padding-top:4px;display:flex;gap:8px;">
+            <button class="btn-ghost" id="btn-report" onclick="openReport()">静态报告</button>
+            <button class="btn-ghost" onclick="backToList()">← 返回任务记录</button>
+          </div>
+        </div>
+        <div id="detail-body"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- 新建任务弹窗：提交到 POST /api/v1/tasks -->
+<div class="mask" id="mask">
+  <div class="modal">
+    <h3>新建任务</h3>
+    <div class="m-desc" id="nf-hint">填写模型与硬件约束，提交后由服务端执行寻优。结果会自动出现在任务记录里。</div>
+
+    <div class="nf-grid">
+      <div class="field">
+        <label>模型 *</label>
+        <select id="nf-model"></select>
+      </div>
+      <div class="field">
+        <label>设备 *</label>
+        <select id="nf-device"></select>
+      </div>
+      <div class="field">
+        <label>卡数 *</label>
+        <input id="nf-num-devices" type="number" min="1" value="32">
+      </div>
+      <div class="field">
+        <label>量化</label>
+        <select id="nf-quantize">
+          <option value="DISABLE">DISABLE（不量化）</option>
+          <option value="ENABLE">ENABLE（开启量化）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>输入长度</label>
+        <input id="nf-isl" type="number" min="1" value="4096">
+      </div>
+      <div class="field">
+        <label>输出长度</label>
+        <input id="nf-osl" type="number" min="1" value="1024">
+      </div>
+      <div class="field">
+        <label>TTFT 上限 (ms)</label>
+        <input id="nf-ttft" type="number" min="1" value="2000">
+      </div>
+      <div class="field">
+        <label>TPOT 上限 (ms)</label>
+        <input id="nf-tpot" type="number" min="1" value="80">
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:14px;">
+      <label>部署形态（模式）</label>
+      <div class="nf-checks">
+        <label class="nf-check"><input type="checkbox" id="nf-mode-agg" checked> PD 混部（agg）</label>
+        <label class="nf-check"><input type="checkbox" id="nf-mode-disagg" checked> PD 分离（disagg）</label>
+      </div>
+    </div>
+
+    <details style="margin-top:16px;">
+      <summary style="cursor:pointer;font-size:13px;color:var(--text-2);">高级参数</summary>
+      <div class="nf-grid" style="margin-top:12px;">
+        <div class="field">
+          <label>PD 每实例卡数（空格分隔）</label>
+          <input id="nf-pd-sizes" type="text" value="8" placeholder="8 16">
+          <span class="sub">组合数 = 该列表的笛卡尔积：填 <code>8</code> 只跑 P8D8 一组；填 <code>8 16</code> 跑 P8D8 / P8D16 / P16D8 / P16D16 四组（每组约 3 分钟）</span>
+        </div>
+        <div class="field">
+          <label>TP 候选（空格分隔，留空=自动）</label>
+          <input id="nf-tp-sizes" type="text" placeholder="如 16 32">
+        </div>
+        <div class="field">
+          <label>并发度 jobs</label>
+          <input id="nf-jobs" type="number" min="1" placeholder="默认 32">
+        </div>
+        <div class="field">
+          <label>top-n（aic-npu）</label>
+          <input id="nf-top-n" type="number" min="1" value="10">
+        </div>
+        <div class="field">
+          <label>专家线性层量化动作</label>
+          <select id="nf-q-linear">
+            <option value="">（随 quantize 默认）</option>
+            <option value="DISABLED">DISABLED</option>
+            <option value="W8A8_DYNAMIC">W8A8_DYNAMIC</option>
+            <option value="MXFP4">MXFP4</option>
+            <option value="FP8">FP8</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>KV cache 量化动作</label>
+          <select id="nf-q-attn">
+            <option value="">（随 quantize 默认）</option>
+            <option value="DISABLED">DISABLED</option>
+            <option value="INT8">INT8</option>
+            <option value="FP8">FP8</option>
+          </select>
+        </div>
+      </div>
+      <label class="nf-check" style="margin-top:10px;">
+        <input type="checkbox" id="nf-compile"> 开启图编译（--compile，更准但更慢）
+      </label>
+    </details>
+
+    <div id="nf-preview" class="nf-preview hide"></div>
+    <div id="nf-error" class="nf-error hide"></div>
+
+    <div class="form-foot">
+      <button class="btn-cancel" onclick="closeModal()">关闭</button>
+      <button class="btn-cancel" onclick="previewNewTask()">预览命令</button>
+      <button class="btn-primary" id="nf-submit" onclick="submitNewTask()">提交并运行</button>
+    </div>
+  </div>
+</div>
+
+<script>window.__REPORT_DATA__ = {"schema_version":"1.1","run_id":"20261027-114626-ZhipuAI-GLM-5.2-ATLAS_950_486T_96G-32-9639c54a","generated_at":"2026-10-27T11:46:26+08:00","status":"ok","request":{"model":"ZhipuAI/GLM-5.2","device":"ATLAS_950_486T_96G","num_devices":32,"input_length":4096,"output_length":1024,"tpot_limit":80,"ttft_limit":2000,"quantize":"ENABLE","mode":"recommend","top_n":10,"framework":"auto","local_model_root":"model_configs/msmodeling","out_dir":"_verify_results","quantize_linear_action":"MXFP4","quantize_non_expert_linear_action":"DISABLED","quantize_attention_action":"FP8","speculative_method":"dflash","num_speculative_tokens":7,"acceptance_length":5.0,"num_draft_layers":6,"tp_sizes":null,"jobs":null,"max_search_combinations":null,"compile_model":false,"serving_modes":["disagg"],"pd_ratio_sizes":[8,16],"dry_run":false},"routing":{"framework":"msmodeling","reason":"model ZhipuAI/GLM-5.2 with quantize=ENABLE is served by msmodeling (aic-npu only covers DeepSeek-R1 / Qwen3.8-27B / DeepSeek-V4-Pro with quantize=DISABLE)","aic_system":null,"aic_model_path":null,"ms_model_source":"model_configs/msmodeling/GLM5.2","commands":["python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 8 --decode-devices-per-instance 8 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000","python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 8 --decode-devices-per-instance 16 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000","python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 16 --decode-devices-per-instance 8 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000","python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 16 --decode-devices-per-instance 16 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000"]},"frameworks":[{"framework":"msmodeling","status":"ok","message":null,"commands":["python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 8 --decode-devices-per-instance 8 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000","python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 8 --decode-devices-per-instance 16 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000","python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 16 --decode-devices-per-instance 8 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000","python -m cli.inference.throughput_optimizer model_configs/msmodeling/GLM5.2 --device ATLAS_950_486T_96G --num-devices 32 --input-length 4096 --output-length 1024 --enable-optimize-prefill-decode-ratio --prefill-devices-per-instance 16 --decode-devices-per-instance 16 --quantize-linear-action MXFP4 --quantize-non-expert-linear-action DISABLED --quantize-attention-action FP8 --speculative-method dflash --num-speculative-tokens 7 --acceptance-length 5.0 --num-draft-layers 6 --tpot-limit 80 --ttft-limit 2000"],"artifacts":{"root":"_verify_results\\20261027-114626-ZhipuAI-GLM-5.2-ATLAS_950_486T_96G-32-9639c54a\\msmodeling","serving_modes":["disagg"],"pd_ratio_sizes":[8,16],"pd_ratio_grid":[{"prefill_devices":8,"decode_devices":8,"label":"P8D8"},{"prefill_devices":8,"decode_devices":16,"label":"P8D16"},{"prefill_devices":16,"decode_devices":8,"label":"P16D8"},{"prefill_devices":16,"decode_devices":16,"label":"P16D16"}]},"agg":null,"disagg":{"mode":"disagg","available":true,"best":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","throughput_tokens_per_s":23747.250636837663,"throughput_tokens_per_s_per_device":742.101582401177,"throughput_req_per_s":23.19067445003678,"ttft_ms":1379.865,"tpot_ms":41.39,"meets_slo":true,"concurrency":492,"batch_size":123,"num_devices":32,"parallel":null,"parallel_str":"prefill[TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1]/decode[TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5]","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"pd_ratio":1.0020990697882028,"label":"P8D8","tokens_per_s_per_user":23.420791922388435,"request_latency_ms":43721.835,"decode_tps_per_instance":11886.929209954094,"prefill":{"instances":2,"devices_per_instance":8,"parallel":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839},"decode":{"instances":2,"devices_per_instance":8,"parallel":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145}}},"prefill":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_prefill","throughput_tokens_per_s":47494.50127367533,"throughput_tokens_per_s_per_device":5936.812659209416,"throughput_req_per_s":11.59533722501839,"ttft_ms":1379.865,"tpot_ms":null,"meets_slo":true,"concurrency":16,"batch_size":2,"num_devices":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":2,"qps_allocated":23.19067445003678}},"decode":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_decode","throughput_tokens_per_s":11886.929209954094,"throughput_tokens_per_s_per_device":1485.8661512442618,"throughput_req_per_s":11.61967664707145,"ttft_ms":null,"tpot_ms":41.39,"meets_slo":true,"concurrency":492,"batch_size":123,"num_devices":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":2,"qps_allocated":23.2393532941429}},"candidates":[],"source_files":[],"label":"P8D8","pd_ratio":{"prefill_devices":8,"decode_devices":8},"pd_ratio_candidates":[{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.0020990697882028,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839,"qps_allocated":23.19067445003678,"ttft_ms":1379.865,"tpot_ms":null,"tokens_per_s_per_instance":47494.50127367533,"tokens_per_s_per_device":5936.812659209416,"tokens_per_s_cluster":94989.00254735065},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145,"qps_allocated":23.2393532941429,"ttft_ms":null,"tpot_ms":41.39,"tokens_per_s_per_instance":11886.929209954094,"tokens_per_s_per_device":1485.8661512442618,"tokens_per_s_cluster":23773.85841990819},"throughput_tokens_per_s":23747.250636837663,"throughput_tokens_per_s_per_device":742.101582401177,"tokens_per_s_per_user":23.420791922388435,"throughput_req_per_s":23.19067445003678,"request_latency_ms":43721.835,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11886.929209954094,"decode_tps_cluster":23773.85841990819,"ttft_ms":1379.865,"tpot_ms":41.39,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":2.9766051217342833,"prefill":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":5.703136083242974,"qps_allocated":17.109408249728922,"ttft_ms":1402.737,"tpot_ms":null,"tokens_per_s_per_instance":23360.04539696322,"tokens_per_s_per_device":2920.0056746204027,"tokens_per_s_cluster":70080.13619088967},"decode":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":85,"concurrency":680,"qps_per_instance":16.975984075328636,"qps_allocated":16.975984075328636,"ttft_ms":null,"tpot_ms":39.156,"tokens_per_s_per_instance":17366.43170906119,"tokens_per_s_per_device":2170.803963632649,"tokens_per_s_cluster":17366.43170906119},"throughput_tokens_per_s":17383.407693136523,"throughput_tokens_per_s_per_device":543.2314904105164,"tokens_per_s_per_user":24.698906699518144,"throughput_req_per_s":16.975984075328636,"request_latency_ms":41459.325,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":17366.43170906119,"decode_tps_cluster":17366.43170906119,"ttft_ms":1402.737,"tpot_ms":39.156,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.0498517172524902,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":8.072120359350617,"qps_allocated":16.144240718701234,"ttft_ms":1982.131,"tpot_ms":null,"tokens_per_s_per_instance":33063.404991900126,"tokens_per_s_per_device":4132.925623987516,"tokens_per_s_cluster":66126.80998380025},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":64,"concurrency":256,"qps_per_instance":8.474529421133033,"qps_allocated":16.949058842266066,"ttft_ms":null,"tpot_ms":29.529,"tokens_per_s_per_instance":8669.443597819092,"tokens_per_s_per_device":1083.6804497273865,"tokens_per_s_cluster":17338.887195638184},"throughput_tokens_per_s":16531.702495950063,"throughput_tokens_per_s_per_device":516.6157029984395,"tokens_per_s_per_user":31.810826976500806,"throughput_req_per_s":16.144240718701234,"request_latency_ms":32190.298000000003,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":8669.443597819092,"decode_tps_cluster":17338.887195638184,"ttft_ms":1982.131,"tpot_ms":29.529,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":0.9167574922743311,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":8.072120359350617,"qps_allocated":16.144240718701234,"ttft_ms":1982.131,"tpot_ms":null,"tokens_per_s_per_instance":33063.404991900126,"tokens_per_s_per_device":4132.925623987516,"tokens_per_s_cluster":66126.80998380025},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":144,"concurrency":288,"qps_per_instance":7.400176817974844,"qps_allocated":14.800353635949689,"ttft_ms":null,"tpot_ms":38.043,"tokens_per_s_per_instance":7570.380884788266,"tokens_per_s_per_device":946.2976105985332,"tokens_per_s_cluster":15140.761769576531},"throughput_tokens_per_s":15155.562123212481,"throughput_tokens_per_s_per_device":473.61131635039004,"tokens_per_s_per_user":25.036601359604813,"throughput_req_per_s":14.800353635949689,"request_latency_ms":40900.12,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":7570.380884788266,"decode_tps_cluster":15140.761769576531,"ttft_ms":1982.131,"tpot_ms":38.043,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":2.0374187951103835,"prefill":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":5.703136083242974,"qps_allocated":17.109408249728922,"ttft_ms":1402.737,"tpot_ms":null,"tokens_per_s_per_instance":23360.04539696322,"tokens_per_s_per_device":2920.0056746204027,"tokens_per_s_cluster":70080.13619088967},"decode":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145,"qps_allocated":11.61967664707145,"ttft_ms":null,"tpot_ms":41.39,"tokens_per_s_per_instance":11886.929209954094,"tokens_per_s_per_device":1485.8661512442618,"tokens_per_s_cluster":11886.929209954094},"throughput_tokens_per_s":11898.548886601166,"throughput_tokens_per_s_per_device":371.8296527062864,"tokens_per_s_per_user":23.40854631852946,"throughput_req_per_s":11.61967664707145,"request_latency_ms":43744.707,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11886.929209954094,"decode_tps_cluster":11886.929209954094,"ttft_ms":1402.737,"tpot_ms":41.39,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":0.33375810020815655,"prefill":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839,"qps_allocated":11.59533722501839,"ttft_ms":1379.865,"tpot_ms":null,"tokens_per_s_per_instance":47494.50127367533,"tokens_per_s_per_device":5936.812659209416,"tokens_per_s_cluster":47494.50127367533},"decode":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":128,"qps_per_instance":3.870037723495056,"qps_allocated":11.610113170485167,"ttft_ms":null,"tpot_ms":32.331,"tokens_per_s_per_instance":3959.0485911354426,"tokens_per_s_per_device":494.8810738919303,"tokens_per_s_cluster":11877.145773406328},"throughput_tokens_per_s":11873.625318418832,"throughput_tokens_per_s_per_device":371.0507912005885,"tokens_per_s_per_user":29.7203748087549,"throughput_req_per_s":11.59533722501839,"request_latency_ms":34454.478,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":3959.0485911354426,"decode_tps_cluster":11877.145773406328,"ttft_ms":1379.865,"tpot_ms":32.331,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.2142665997383573,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":5,"concurrency":10,"qps_per_instance":5.775329294838069,"qps_allocated":11.550658589676138,"ttft_ms":1731.503,"tpot_ms":null,"tokens_per_s_per_instance":23655.74879165673,"tokens_per_s_per_device":2956.968598957091,"tokens_per_s_cluster":47311.49758331346},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":256,"qps_per_instance":7.012789465212347,"qps_allocated":14.025578930424693,"ttft_ms":null,"tpot_ms":35.684,"tokens_per_s_per_instance":7174.08362291223,"tokens_per_s_per_device":896.7604528640287,"tokens_per_s_cluster":14348.16724582446},"throughput_tokens_per_s":11827.874395828365,"throughput_tokens_per_s_per_device":369.6210748696364,"tokens_per_s_per_user":26.780879445897334,"throughput_req_per_s":11.550658589676138,"request_latency_ms":38236.23499999999,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":7174.08362291223,"decode_tps_cluster":14348.16724582446,"ttft_ms":1731.503,"tpot_ms":35.684,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":3.0062745720306356,"prefill":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.71799931270127,"qps_allocated":11.15399793810381,"ttft_ms":1882.733,"tpot_ms":null,"tokens_per_s_per_instance":15228.925184824402,"tokens_per_s_per_device":1903.6156481030503,"tokens_per_s_cluster":45686.775554473206},"decode":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":112,"concurrency":448,"qps_per_instance":11.177326792601209,"qps_allocated":11.177326792601209,"ttft_ms":null,"tpot_ms":39.18,"tokens_per_s_per_instance":11434.405308831037,"tokens_per_s_per_device":1429.3006636038797,"tokens_per_s_cluster":11434.405308831037},"throughput_tokens_per_s":11421.693888618302,"throughput_tokens_per_s_per_device":356.9279340193219,"tokens_per_s_per_user":24.401942118164357,"throughput_req_per_s":11.15399793810381,"request_latency_ms":41963.873,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11434.405308831037,"decode_tps_cluster":11434.405308831037,"ttft_ms":1882.733,"tpot_ms":39.18,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":0.7580942335782243,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":5.703136083242974,"qps_allocated":11.406272166485948,"ttft_ms":1402.737,"tpot_ms":null,"tokens_per_s_per_instance":23360.04539696322,"tokens_per_s_per_device":2920.0056746204027,"tokens_per_s_cluster":46720.09079392644},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":161,"concurrency":161,"qps_per_instance":4.323514578018398,"qps_allocated":8.647029156036796,"ttft_ms":null,"tpot_ms":36.401,"tokens_per_s_per_instance":4422.95541331282,"tokens_per_s_per_device":552.8694266641025,"tokens_per_s_cluster":8845.91082662564},"throughput_tokens_per_s":8854.557855781679,"throughput_tokens_per_s_per_device":276.70493299317747,"tokens_per_s_per_user":26.50037680223265,"throughput_req_per_s":8.647029156036796,"request_latency_ms":38640.96000000001,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":4422.95541331282,"decode_tps_cluster":8845.91082662564,"ttft_ms":1402.737,"tpot_ms":36.401,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.0408925333241452,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.71799931270127,"qps_allocated":7.43599862540254,"ttft_ms":1882.733,"tpot_ms":null,"tokens_per_s_per_instance":15228.925184824402,"tokens_per_s_per_device":1903.6156481030503,"tokens_per_s_cluster":30457.850369648804},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":128,"qps_per_instance":3.870037723495056,"qps_allocated":7.740075446990112,"ttft_ms":null,"tpot_ms":32.331,"tokens_per_s_per_instance":3959.0485911354426,"tokens_per_s_per_device":494.8810738919303,"tokens_per_s_cluster":7918.097182270885},"throughput_tokens_per_s":7614.462592412201,"throughput_tokens_per_s_per_device":237.95195601288128,"tokens_per_s_per_user":29.292841624761785,"throughput_req_per_s":7.43599862540254,"request_latency_ms":34957.346000000005,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":3959.0485911354426,"decode_tps_cluster":7918.097182270885,"ttft_ms":1882.733,"tpot_ms":32.331,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}}]},"disagg_variants":[{"mode":"disagg","available":true,"best":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","throughput_tokens_per_s":23747.250636837663,"throughput_tokens_per_s_per_device":742.101582401177,"throughput_req_per_s":23.19067445003678,"ttft_ms":1379.865,"tpot_ms":41.39,"meets_slo":true,"concurrency":492,"batch_size":123,"num_devices":32,"parallel":null,"parallel_str":"prefill[TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1]/decode[TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5]","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"pd_ratio":1.0020990697882028,"label":"P8D8","tokens_per_s_per_user":23.420791922388435,"request_latency_ms":43721.835,"decode_tps_per_instance":11886.929209954094,"prefill":{"instances":2,"devices_per_instance":8,"parallel":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839},"decode":{"instances":2,"devices_per_instance":8,"parallel":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145}}},"prefill":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_prefill","throughput_tokens_per_s":47494.50127367533,"throughput_tokens_per_s_per_device":5936.812659209416,"throughput_req_per_s":11.59533722501839,"ttft_ms":1379.865,"tpot_ms":null,"meets_slo":true,"concurrency":16,"batch_size":2,"num_devices":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":2,"qps_allocated":23.19067445003678}},"decode":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_decode","throughput_tokens_per_s":11886.929209954094,"throughput_tokens_per_s_per_device":1485.8661512442618,"throughput_req_per_s":11.61967664707145,"ttft_ms":null,"tpot_ms":41.39,"meets_slo":true,"concurrency":492,"batch_size":123,"num_devices":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":2,"qps_allocated":23.2393532941429}},"candidates":[],"source_files":[],"label":"P8D8","pd_ratio":{"prefill_devices":8,"decode_devices":8},"pd_ratio_candidates":[{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.0020990697882028,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839,"qps_allocated":23.19067445003678,"ttft_ms":1379.865,"tpot_ms":null,"tokens_per_s_per_instance":47494.50127367533,"tokens_per_s_per_device":5936.812659209416,"tokens_per_s_cluster":94989.00254735065},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145,"qps_allocated":23.2393532941429,"ttft_ms":null,"tpot_ms":41.39,"tokens_per_s_per_instance":11886.929209954094,"tokens_per_s_per_device":1485.8661512442618,"tokens_per_s_cluster":23773.85841990819},"throughput_tokens_per_s":23747.250636837663,"throughput_tokens_per_s_per_device":742.101582401177,"tokens_per_s_per_user":23.420791922388435,"throughput_req_per_s":23.19067445003678,"request_latency_ms":43721.835,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11886.929209954094,"decode_tps_cluster":23773.85841990819,"ttft_ms":1379.865,"tpot_ms":41.39,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":2.9766051217342833,"prefill":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":5.703136083242974,"qps_allocated":17.109408249728922,"ttft_ms":1402.737,"tpot_ms":null,"tokens_per_s_per_instance":23360.04539696322,"tokens_per_s_per_device":2920.0056746204027,"tokens_per_s_cluster":70080.13619088967},"decode":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":85,"concurrency":680,"qps_per_instance":16.975984075328636,"qps_allocated":16.975984075328636,"ttft_ms":null,"tpot_ms":39.156,"tokens_per_s_per_instance":17366.43170906119,"tokens_per_s_per_device":2170.803963632649,"tokens_per_s_cluster":17366.43170906119},"throughput_tokens_per_s":17383.407693136523,"throughput_tokens_per_s_per_device":543.2314904105164,"tokens_per_s_per_user":24.698906699518144,"throughput_req_per_s":16.975984075328636,"request_latency_ms":41459.325,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":17366.43170906119,"decode_tps_cluster":17366.43170906119,"ttft_ms":1402.737,"tpot_ms":39.156,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.0498517172524902,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":8.072120359350617,"qps_allocated":16.144240718701234,"ttft_ms":1982.131,"tpot_ms":null,"tokens_per_s_per_instance":33063.404991900126,"tokens_per_s_per_device":4132.925623987516,"tokens_per_s_cluster":66126.80998380025},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":64,"concurrency":256,"qps_per_instance":8.474529421133033,"qps_allocated":16.949058842266066,"ttft_ms":null,"tpot_ms":29.529,"tokens_per_s_per_instance":8669.443597819092,"tokens_per_s_per_device":1083.6804497273865,"tokens_per_s_cluster":17338.887195638184},"throughput_tokens_per_s":16531.702495950063,"throughput_tokens_per_s_per_device":516.6157029984395,"tokens_per_s_per_user":31.810826976500806,"throughput_req_per_s":16.144240718701234,"request_latency_ms":32190.298000000003,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":8669.443597819092,"decode_tps_cluster":17338.887195638184,"ttft_ms":1982.131,"tpot_ms":29.529,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":0.9167574922743311,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":8.072120359350617,"qps_allocated":16.144240718701234,"ttft_ms":1982.131,"tpot_ms":null,"tokens_per_s_per_instance":33063.404991900126,"tokens_per_s_per_device":4132.925623987516,"tokens_per_s_cluster":66126.80998380025},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":144,"concurrency":288,"qps_per_instance":7.400176817974844,"qps_allocated":14.800353635949689,"ttft_ms":null,"tpot_ms":38.043,"tokens_per_s_per_instance":7570.380884788266,"tokens_per_s_per_device":946.2976105985332,"tokens_per_s_cluster":15140.761769576531},"throughput_tokens_per_s":15155.562123212481,"throughput_tokens_per_s_per_device":473.61131635039004,"tokens_per_s_per_user":25.036601359604813,"throughput_req_per_s":14.800353635949689,"request_latency_ms":40900.12,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":7570.380884788266,"decode_tps_cluster":15140.761769576531,"ttft_ms":1982.131,"tpot_ms":38.043,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":2.0374187951103835,"prefill":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":5.703136083242974,"qps_allocated":17.109408249728922,"ttft_ms":1402.737,"tpot_ms":null,"tokens_per_s_per_instance":23360.04539696322,"tokens_per_s_per_device":2920.0056746204027,"tokens_per_s_cluster":70080.13619088967},"decode":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145,"qps_allocated":11.61967664707145,"ttft_ms":null,"tpot_ms":41.39,"tokens_per_s_per_instance":11886.929209954094,"tokens_per_s_per_device":1485.8661512442618,"tokens_per_s_cluster":11886.929209954094},"throughput_tokens_per_s":11898.548886601166,"throughput_tokens_per_s_per_device":371.8296527062864,"tokens_per_s_per_user":23.40854631852946,"throughput_req_per_s":11.61967664707145,"request_latency_ms":43744.707,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11886.929209954094,"decode_tps_cluster":11886.929209954094,"ttft_ms":1402.737,"tpot_ms":41.39,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":0.33375810020815655,"prefill":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839,"qps_allocated":11.59533722501839,"ttft_ms":1379.865,"tpot_ms":null,"tokens_per_s_per_instance":47494.50127367533,"tokens_per_s_per_device":5936.812659209416,"tokens_per_s_cluster":47494.50127367533},"decode":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":128,"qps_per_instance":3.870037723495056,"qps_allocated":11.610113170485167,"ttft_ms":null,"tpot_ms":32.331,"tokens_per_s_per_instance":3959.0485911354426,"tokens_per_s_per_device":494.8810738919303,"tokens_per_s_cluster":11877.145773406328},"throughput_tokens_per_s":11873.625318418832,"throughput_tokens_per_s_per_device":371.0507912005885,"tokens_per_s_per_user":29.7203748087549,"throughput_req_per_s":11.59533722501839,"request_latency_ms":34454.478,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":3959.0485911354426,"decode_tps_cluster":11877.145773406328,"ttft_ms":1379.865,"tpot_ms":32.331,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.2142665997383573,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":5,"concurrency":10,"qps_per_instance":5.775329294838069,"qps_allocated":11.550658589676138,"ttft_ms":1731.503,"tpot_ms":null,"tokens_per_s_per_instance":23655.74879165673,"tokens_per_s_per_device":2956.968598957091,"tokens_per_s_cluster":47311.49758331346},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":256,"qps_per_instance":7.012789465212347,"qps_allocated":14.025578930424693,"ttft_ms":null,"tpot_ms":35.684,"tokens_per_s_per_instance":7174.08362291223,"tokens_per_s_per_device":896.7604528640287,"tokens_per_s_cluster":14348.16724582446},"throughput_tokens_per_s":11827.874395828365,"throughput_tokens_per_s_per_device":369.6210748696364,"tokens_per_s_per_user":26.780879445897334,"throughput_req_per_s":11.550658589676138,"request_latency_ms":38236.23499999999,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":7174.08362291223,"decode_tps_cluster":14348.16724582446,"ttft_ms":1731.503,"tpot_ms":35.684,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":3.0062745720306356,"prefill":{"instances":3,"devices_per_instance":8,"devices_total":24,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.71799931270127,"qps_allocated":11.15399793810381,"ttft_ms":1882.733,"tpot_ms":null,"tokens_per_s_per_instance":15228.925184824402,"tokens_per_s_per_device":1903.6156481030503,"tokens_per_s_cluster":45686.775554473206},"decode":{"instances":1,"devices_per_instance":8,"devices_total":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":112,"concurrency":448,"qps_per_instance":11.177326792601209,"qps_allocated":11.177326792601209,"ttft_ms":null,"tpot_ms":39.18,"tokens_per_s_per_instance":11434.405308831037,"tokens_per_s_per_device":1429.3006636038797,"tokens_per_s_cluster":11434.405308831037},"throughput_tokens_per_s":11421.693888618302,"throughput_tokens_per_s_per_device":356.9279340193219,"tokens_per_s_per_user":24.401942118164357,"throughput_req_per_s":11.15399793810381,"request_latency_ms":41963.873,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11434.405308831037,"decode_tps_cluster":11434.405308831037,"ttft_ms":1882.733,"tpot_ms":39.18,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":0.7580942335782243,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":5.703136083242974,"qps_allocated":11.406272166485948,"ttft_ms":1402.737,"tpot_ms":null,"tokens_per_s_per_instance":23360.04539696322,"tokens_per_s_per_device":2920.0056746204027,"tokens_per_s_cluster":46720.09079392644},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":161,"concurrency":161,"qps_per_instance":4.323514578018398,"qps_allocated":8.647029156036796,"ttft_ms":null,"tpot_ms":36.401,"tokens_per_s_per_instance":4422.95541331282,"tokens_per_s_per_device":552.8694266641025,"tokens_per_s_cluster":8845.91082662564},"throughput_tokens_per_s":8854.557855781679,"throughput_tokens_per_s_per_device":276.70493299317747,"tokens_per_s_per_user":26.50037680223265,"throughput_req_per_s":8.647029156036796,"request_latency_ms":38640.96000000001,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":4422.95541331282,"decode_tps_cluster":8845.91082662564,"ttft_ms":1402.737,"tpot_ms":36.401,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D8","pd_ratio":1.0408925333241452,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.71799931270127,"qps_allocated":7.43599862540254,"ttft_ms":1882.733,"tpot_ms":null,"tokens_per_s_per_instance":15228.925184824402,"tokens_per_s_per_device":1903.6156481030503,"tokens_per_s_cluster":30457.850369648804},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":128,"qps_per_instance":3.870037723495056,"qps_allocated":7.740075446990112,"ttft_ms":null,"tpot_ms":32.331,"tokens_per_s_per_instance":3959.0485911354426,"tokens_per_s_per_device":494.8810738919303,"tokens_per_s_cluster":7918.097182270885},"throughput_tokens_per_s":7614.462592412201,"throughput_tokens_per_s_per_device":237.95195601288128,"tokens_per_s_per_user":29.292841624761785,"throughput_req_per_s":7.43599862540254,"request_latency_ms":34957.346000000005,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":3959.0485911354426,"decode_tps_cluster":7918.097182270885,"ttft_ms":1882.733,"tpot_ms":32.331,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}}]},{"mode":"disagg","available":true,"best":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","throughput_tokens_per_s":22352.466083843574,"throughput_tokens_per_s_per_device":698.5145651201117,"throughput_req_per_s":21.82858016000349,"ttft_ms":732.984,"tpot_ms":39.207,"meets_slo":true,"concurrency":1024,"batch_size":128,"num_devices":32,"parallel":null,"parallel_str":"prefill[TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1]/decode[TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5]","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"pd_ratio":2.339188488021358,"label":"P8D16","tokens_per_s_per_user":25.07238610886974,"request_latency_ms":40841.744999999995,"decode_tps_per_instance":26117.7850893973,"prefill":{"instances":2,"devices_per_instance":8,"parallel":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":1,"concurrency":8,"qps_per_instance":10.914290080001745},"decode":{"instances":1,"devices_per_instance":16,"parallel":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":1024,"qps_per_instance":25.53058171006579}}},"prefill":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_prefill","throughput_tokens_per_s":44704.93216768715,"throughput_tokens_per_s_per_device":5588.1165209608935,"throughput_req_per_s":10.914290080001745,"ttft_ms":732.984,"tpot_ms":null,"meets_slo":true,"concurrency":8,"batch_size":1,"num_devices":8,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":2,"qps_allocated":21.82858016000349}},"decode":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_decode","throughput_tokens_per_s":26117.7850893973,"throughput_tokens_per_s_per_device":1632.3615680873313,"throughput_req_per_s":25.53058171006579,"ttft_ms":null,"tpot_ms":39.207,"meets_slo":true,"concurrency":1024,"batch_size":128,"num_devices":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":1,"qps_allocated":25.53058171006579}},"candidates":[],"source_files":[],"label":"P8D16","pd_ratio":{"prefill_devices":8,"decode_devices":16},"pd_ratio_candidates":[{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":2.339188488021358,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":1,"concurrency":8,"qps_per_instance":10.914290080001745,"qps_allocated":21.82858016000349,"ttft_ms":732.984,"tpot_ms":null,"tokens_per_s_per_instance":44704.93216768715,"tokens_per_s_per_device":5588.1165209608935,"tokens_per_s_cluster":89409.8643353743},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":1024,"qps_per_instance":25.53058171006579,"qps_allocated":25.53058171006579,"ttft_ms":null,"tpot_ms":39.207,"tokens_per_s_per_instance":26117.7850893973,"tokens_per_s_per_device":1632.3615680873313,"tokens_per_s_cluster":26117.7850893973},"throughput_tokens_per_s":22352.466083843574,"throughput_tokens_per_s_per_device":698.5145651201117,"tokens_per_s_per_user":25.07238610886974,"throughput_req_per_s":21.82858016000349,"request_latency_ms":40841.744999999995,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":26117.7850893973,"decode_tps_cluster":26117.7850893973,"ttft_ms":732.984,"tpot_ms":39.207,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":1.7704134751256628,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":8,"ep":8},"parallel_str":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":1,"concurrency":8,"qps_per_instance":10.914290080001745,"qps_allocated":21.82858016000349,"ttft_ms":732.984,"tpot_ms":null,"tokens_per_s_per_instance":44704.93216768715,"tokens_per_s_per_device":5588.1165209608935,"tokens_per_s_cluster":89409.8643353743},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":245,"concurrency":980,"qps_per_instance":19.32280622906544,"qps_allocated":19.32280622906544,"ttft_ms":null,"tpot_ms":49.577,"tokens_per_s_per_instance":19767.230772333947,"tokens_per_s_per_device":1235.4519232708717,"tokens_per_s_cluster":19767.230772333947},"throughput_tokens_per_s":19786.55357856301,"throughput_tokens_per_s_per_device":618.329799330094,"tokens_per_s_per_user":19.9027196269484,"throughput_req_per_s":19.32280622906544,"request_latency_ms":51450.255,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":19767.230772333947,"decode_tps_cluster":19767.230772333947,"ttft_ms":732.984,"tpot_ms":49.577,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":2.030660030704404,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":8.072120359350617,"qps_allocated":16.144240718701234,"ttft_ms":1982.131,"tpot_ms":null,"tokens_per_s_per_instance":33063.404991900126,"tokens_per_s_per_device":4132.925623987516,"tokens_per_s_cluster":66126.80998380025},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":512,"qps_per_instance":16.391732176768567,"qps_allocated":16.391732176768567,"ttft_ms":null,"tpot_ms":30.533,"tokens_per_s_per_instance":16768.742016834247,"tokens_per_s_per_device":1048.0463760521404,"tokens_per_s_cluster":16768.742016834247},"throughput_tokens_per_s":16531.702495950063,"throughput_tokens_per_s_per_device":516.6157029984395,"tokens_per_s_per_user":30.827226341383234,"throughput_req_per_s":16.144240718701234,"request_latency_ms":33217.39,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":16768.742016834247,"decode_tps_cluster":16768.742016834247,"ttft_ms":1982.131,"tpot_ms":30.533,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":1.4561324619296696,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":8.072120359350617,"qps_allocated":16.144240718701234,"ttft_ms":1982.131,"tpot_ms":null,"tokens_per_s_per_instance":33063.404991900126,"tokens_per_s_per_device":4132.925623987516,"tokens_per_s_cluster":66126.80998380025},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":259,"concurrency":518,"qps_per_instance":11.754076491853823,"qps_allocated":11.754076491853823,"ttft_ms":null,"tpot_ms":43.079,"tokens_per_s_per_instance":12024.42025116646,"tokens_per_s_per_device":751.5262656979038,"tokens_per_s_cluster":12024.42025116646},"throughput_tokens_per_s":12036.174327658315,"throughput_tokens_per_s_per_device":376.13044773932234,"tokens_per_s_per_user":22.23575862632347,"throughput_req_per_s":11.754076491853823,"request_latency_ms":46051.948000000004,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":12024.42025116646,"decode_tps_cluster":12024.42025116646,"ttft_ms":1982.131,"tpot_ms":43.079,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":2.0289803256802013,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":5,"concurrency":10,"qps_per_instance":5.775329294838069,"qps_allocated":11.550658589676138,"ttft_ms":1731.503,"tpot_ms":null,"tokens_per_s_per_instance":23655.74879165673,"tokens_per_s_per_device":2956.968598957091,"tokens_per_s_cluster":47311.49758331346},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":256,"concurrency":512,"qps_per_instance":11.718029513550952,"qps_allocated":11.718029513550952,"ttft_ms":null,"tpot_ms":42.711,"tokens_per_s_per_instance":11987.544192362624,"tokens_per_s_per_device":749.221512022664,"tokens_per_s_cluster":11987.544192362624},"throughput_tokens_per_s":11827.874395828365,"throughput_tokens_per_s_per_device":369.6210748696364,"tokens_per_s_per_user":22.542724186071172,"throughput_req_per_s":11.550658589676138,"request_latency_ms":45424.85599999999,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11987.544192362624,"decode_tps_cluster":11987.544192362624,"ttft_ms":1731.503,"tpot_ms":42.711,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":3.151702980019475,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.71799931270127,"qps_allocated":7.43599862540254,"ttft_ms":1882.733,"tpot_ms":null,"tokens_per_s_per_instance":15228.925184824402,"tokens_per_s_per_device":1903.6156481030503,"tokens_per_s_cluster":30457.850369648804},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":256,"concurrency":512,"qps_per_instance":11.718029513550952,"qps_allocated":11.718029513550952,"ttft_ms":null,"tpot_ms":42.711,"tokens_per_s_per_instance":11987.544192362624,"tokens_per_s_per_device":749.221512022664,"tokens_per_s_cluster":11987.544192362624},"throughput_tokens_per_s":7614.462592412201,"throughput_tokens_per_s_per_device":237.95195601288128,"tokens_per_s_per_user":22.46792319989918,"throughput_req_per_s":7.43599862540254,"request_latency_ms":45576.085999999996,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11987.544192362624,"decode_tps_cluster":11987.544192362624,"ttft_ms":1882.733,"tpot_ms":42.711,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P8D16","pd_ratio":1.6895309108647292,"prefill":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":4,"qps_per_instance":3.59144123638956,"qps_allocated":7.18288247277912,"ttft_ms":1113.759,"tpot_ms":null,"tokens_per_s_per_instance":14710.543304251638,"tokens_per_s_per_device":1838.8179130314547,"tokens_per_s_cluster":29421.086608503276},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":16,"pp":1,"dp":1,"ep":16},"parallel_str":"TP=16 | PP=1 | DP=1 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":266,"concurrency":266,"qps_per_instance":6.067850983434402,"qps_allocated":6.067850983434402,"ttft_ms":null,"tpot_ms":42.852,"tokens_per_s_per_instance":6207.411556053393,"tokens_per_s_per_device":387.96322225333705,"tokens_per_s_cluster":6207.411556053393},"throughput_tokens_per_s":6213.479407036828,"throughput_tokens_per_s_per_device":194.17123146990087,"tokens_per_s_per_user":22.780180931142123,"throughput_req_per_s":6.067850983434402,"request_latency_ms":44951.354999999996,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":6207.411556053393,"decode_tps_cluster":6207.411556053393,"ttft_ms":1113.759,"tpot_ms":42.852,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":8,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}}]},{"mode":"disagg","available":true,"best":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","throughput_tokens_per_s":21710.726827005896,"throughput_tokens_per_s_per_device":678.4602133439342,"throughput_req_per_s":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":39.18,"meets_slo":true,"concurrency":448,"batch_size":112,"num_devices":32,"parallel":null,"parallel_str":"prefill[TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1]/decode[TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5]","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"pd_ratio":0.5271856040022814,"label":"P16D8","tokens_per_s_per_user":24.621042720394396,"request_latency_ms":41590.44,"decode_tps_per_instance":11434.405308831037,"prefill":{"instances":1,"devices_per_instance":16,"parallel":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":32,"qps_per_instance":21.201881666997945},"decode":{"instances":2,"devices_per_instance":8,"parallel":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":112,"concurrency":448,"qps_per_instance":11.177326792601209}}},"prefill":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_prefill","throughput_tokens_per_s":86842.90730802358,"throughput_tokens_per_s_per_device":5427.681706751474,"throughput_req_per_s":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":null,"meets_slo":true,"concurrency":32,"batch_size":2,"num_devices":16,"parallel":{"tp":1,"pp":1,"dp":16,"ep":16},"parallel_str":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":1,"qps_allocated":21.201881666997945}},"decode":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_decode","throughput_tokens_per_s":11434.405308831037,"throughput_tokens_per_s_per_device":1429.3006636038797,"throughput_req_per_s":11.177326792601209,"ttft_ms":null,"tpot_ms":39.18,"meets_slo":true,"concurrency":448,"batch_size":112,"num_devices":8,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":2,"qps_allocated":22.354653585202417}},"candidates":[],"source_files":[],"label":"P16D8","pd_ratio":{"prefill_devices":16,"decode_devices":8},"pd_ratio_candidates":[{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.5271856040022814,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":16,"ep":16},"parallel_str":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":32,"qps_per_instance":21.201881666997945,"qps_allocated":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":null,"tokens_per_s_per_instance":86842.90730802358,"tokens_per_s_per_device":5427.681706751474,"tokens_per_s_cluster":86842.90730802358},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":112,"concurrency":448,"qps_per_instance":11.177326792601209,"qps_allocated":22.354653585202417,"ttft_ms":null,"tpot_ms":39.18,"tokens_per_s_per_instance":11434.405308831037,"tokens_per_s_per_device":1429.3006636038797,"tokens_per_s_cluster":22868.810617662075},"throughput_tokens_per_s":21710.726827005896,"throughput_tokens_per_s_per_device":678.4602133439342,"tokens_per_s_per_user":24.621042720394396,"throughput_req_per_s":21.201881666997945,"request_latency_ms":41590.44,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11434.405308831037,"decode_tps_cluster":22868.810617662075,"ttft_ms":1509.3,"tpot_ms":39.18,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.5646525987492058,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":3,"concurrency":24,"qps_per_instance":15.008395321132758,"qps_allocated":15.008395321132758,"ttft_ms":1599.105,"tpot_ms":null,"tokens_per_s_per_instance":61474.387235359776,"tokens_per_s_per_device":3842.149202209986,"tokens_per_s_cluster":61474.387235359776},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":4,"ep":8},"parallel_str":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":64,"concurrency":256,"qps_per_instance":8.474529421133033,"qps_allocated":16.949058842266066,"ttft_ms":null,"tpot_ms":29.529,"tokens_per_s_per_instance":8669.443597819092,"tokens_per_s_per_device":1083.6804497273865,"tokens_per_s_cluster":17338.887195638184},"throughput_tokens_per_s":15368.596808839944,"throughput_tokens_per_s_per_device":480.26865027624825,"tokens_per_s_per_user":32.19389578584419,"throughput_req_per_s":15.008395321132758,"request_latency_ms":31807.272,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":8669.443597819092,"decode_tps_cluster":17338.887195638184,"ttft_ms":1599.105,"tpot_ms":29.529,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.495695658442626,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":3,"concurrency":24,"qps_per_instance":15.008395321132758,"qps_allocated":15.008395321132758,"ttft_ms":1599.105,"tpot_ms":null,"tokens_per_s_per_instance":61474.387235359776,"tokens_per_s_per_device":3842.149202209986,"tokens_per_s_cluster":61474.387235359776},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":146,"concurrency":292,"qps_per_instance":7.4395964008761295,"qps_allocated":14.879192801752259,"ttft_ms":null,"tpot_ms":38.367,"tokens_per_s_per_instance":7610.707118096281,"tokens_per_s_per_device":951.3383897620351,"tokens_per_s_cluster":15221.414236192562},"throughput_tokens_per_s":15236.293428994313,"throughput_tokens_per_s_per_device":476.1341696560723,"tokens_per_s_per_user":25.068211730229027,"throughput_req_per_s":14.879192801752259,"request_latency_ms":40848.546,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":7610.707118096281,"decode_tps_cluster":15221.414236192562,"ttft_ms":1599.105,"tpot_ms":38.367,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.6320984797258614,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":5,"concurrency":20,"qps_per_instance":11.094457098289123,"qps_allocated":11.094457098289123,"ttft_ms":1802.702,"tpot_ms":null,"tokens_per_s_per_instance":45442.89627459225,"tokens_per_s_per_device":2840.1810171620155,"tokens_per_s_cluster":45442.89627459225},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":2,"ep":8},"parallel_str":"TP=4 | PP=1 | DP=2 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":256,"qps_per_instance":7.012789465212347,"qps_allocated":14.025578930424693,"ttft_ms":null,"tpot_ms":35.684,"tokens_per_s_per_instance":7174.08362291223,"tokens_per_s_per_device":896.7604528640287,"tokens_per_s_cluster":14348.16724582446},"throughput_tokens_per_s":11360.724068648062,"throughput_tokens_per_s_per_device":355.02262714525193,"tokens_per_s_per_user":26.731103941861523,"throughput_req_per_s":11.094457098289123,"request_latency_ms":38307.433999999994,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":7174.08362291223,"decode_tps_cluster":14348.16724582446,"ttft_ms":1802.702,"tpot_ms":35.684,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.38921591486595647,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":16,"qps_per_instance":11.001228699730401,"qps_allocated":11.001228699730401,"ttft_ms":1454.383,"tpot_ms":null,"tokens_per_s_per_instance":45061.03275409572,"tokens_per_s_per_device":2816.3145471309826,"tokens_per_s_cluster":45061.03275409572},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":157,"concurrency":157,"qps_per_instance":4.2818532930151845,"qps_allocated":8.563706586030369,"ttft_ms":null,"tpot_ms":35.842,"tokens_per_s_per_instance":4380.335918754535,"tokens_per_s_per_device":547.5419898443168,"tokens_per_s_cluster":8760.67183750907},"throughput_tokens_per_s":8769.235544095098,"throughput_tokens_per_s_per_device":274.0386107529718,"tokens_per_s_per_user":26.862011551766727,"throughput_req_per_s":8.563706586030369,"request_latency_ms":38120.749,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":4380.335918754535,"decode_tps_cluster":8760.67183750907,"ttft_ms":1454.383,"tpot_ms":35.842,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.5319961178165776,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":14,"qps_per_instance":7.274560083969208,"qps_allocated":7.274560083969208,"ttft_ms":1924.515,"tpot_ms":null,"tokens_per_s_per_instance":29796.598103937875,"tokens_per_s_per_device":1862.2873814961172,"tokens_per_s_cluster":29796.598103937875},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":128,"qps_per_instance":3.870037723495056,"qps_allocated":7.740075446990112,"ttft_ms":null,"tpot_ms":32.331,"tokens_per_s_per_instance":3959.0485911354426,"tokens_per_s_per_device":494.8810738919303,"tokens_per_s_cluster":7918.097182270885},"throughput_tokens_per_s":7449.149525984469,"throughput_tokens_per_s_per_device":232.78592268701465,"tokens_per_s_per_user":29.257871796120174,"throughput_req_per_s":7.274560083969208,"request_latency_ms":34999.128000000004,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":3959.0485911354426,"decode_tps_cluster":7918.097182270885,"ttft_ms":1924.515,"tpot_ms":32.331,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D8","pd_ratio":0.9945853205123992,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":16,"pp":1,"dp":1,"ep":16},"parallel_str":"TP=16 | PP=1 | DP=1 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.8911068197761614,"qps_allocated":3.8911068197761614,"ttft_ms":1798.974,"tpot_ms":null,"tokens_per_s_per_instance":15937.973533803157,"tokens_per_s_per_device":996.1233458626973,"tokens_per_s_cluster":15937.973533803157},"decode":{"instances":2,"devices_per_instance":8,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":1,"ep":8},"parallel_str":"TP=8 | PP=1 | DP=1 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":128,"qps_per_instance":3.870037723495056,"qps_allocated":7.740075446990112,"ttft_ms":null,"tpot_ms":32.331,"tokens_per_s_per_instance":3959.0485911354426,"tokens_per_s_per_device":494.8810738919303,"tokens_per_s_cluster":7918.097182270885},"throughput_tokens_per_s":3984.493383450789,"throughput_tokens_per_s_per_device":124.51541823283716,"tokens_per_s_per_user":29.36319685153121,"throughput_req_per_s":3.8911068197761614,"request_latency_ms":34873.58700000001,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":3959.0485911354426,"decode_tps_cluster":7918.097182270885,"ttft_ms":1798.974,"tpot_ms":32.331,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":8,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}}]},{"mode":"disagg","available":true,"best":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","throughput_tokens_per_s":21710.726827005896,"throughput_tokens_per_s_per_device":678.4602133439342,"throughput_req_per_s":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":39.207,"meets_slo":true,"concurrency":1024,"batch_size":128,"num_devices":32,"parallel":null,"parallel_str":"prefill[TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1]/decode[TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5]","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"pd_ratio":1.2041658429688218,"label":"P16D16","tokens_per_s_per_user":24.604702270968364,"request_latency_ms":41618.061,"decode_tps_per_instance":26117.7850893973,"prefill":{"instances":1,"devices_per_instance":16,"parallel":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":32,"qps_per_instance":21.201881666997945},"decode":{"instances":1,"devices_per_instance":16,"parallel":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":1024,"qps_per_instance":25.53058171006579}}},"prefill":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_prefill","throughput_tokens_per_s":86842.90730802358,"throughput_tokens_per_s_per_device":5427.681706751474,"throughput_req_per_s":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":null,"meets_slo":true,"concurrency":32,"batch_size":2,"num_devices":16,"parallel":{"tp":1,"pp":1,"dp":16,"ep":16},"parallel_str":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":1,"qps_allocated":21.201881666997945}},"decode":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg_decode","throughput_tokens_per_s":26117.7850893973,"throughput_tokens_per_s_per_device":1632.3615680873313,"throughput_req_per_s":25.53058171006579,"ttft_ms":null,"tpot_ms":39.207,"meets_slo":true,"concurrency":1024,"batch_size":128,"num_devices":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"instances":1,"qps_allocated":25.53058171006579}},"candidates":[],"source_files":[],"label":"P16D16","pd_ratio":{"prefill_devices":16,"decode_devices":16},"pd_ratio_candidates":[{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":1.2041658429688218,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":16,"ep":16},"parallel_str":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":32,"qps_per_instance":21.201881666997945,"qps_allocated":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":null,"tokens_per_s_per_instance":86842.90730802358,"tokens_per_s_per_device":5427.681706751474,"tokens_per_s_cluster":86842.90730802358},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":1024,"qps_per_instance":25.53058171006579,"qps_allocated":25.53058171006579,"ttft_ms":null,"tpot_ms":39.207,"tokens_per_s_per_instance":26117.7850893973,"tokens_per_s_per_device":1632.3615680873313,"tokens_per_s_cluster":26117.7850893973},"throughput_tokens_per_s":21710.726827005896,"throughput_tokens_per_s_per_device":678.4602133439342,"tokens_per_s_per_user":24.604702270968364,"throughput_req_per_s":21.201881666997945,"request_latency_ms":41618.061,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":26117.7850893973,"decode_tps_cluster":26117.7850893973,"ttft_ms":1509.3,"tpot_ms":39.207,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":0.9138282712279956,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":1,"pp":1,"dp":16,"ep":16},"parallel_str":"TP=1 | PP=1 | DP=16 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":32,"qps_per_instance":21.201881666997945,"qps_allocated":21.201881666997945,"ttft_ms":1509.3,"tpot_ms":null,"tokens_per_s_per_instance":86842.90730802358,"tokens_per_s_per_device":5427.681706751474,"tokens_per_s_cluster":86842.90730802358},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":249,"concurrency":996,"qps_per_instance":19.374878870533266,"qps_allocated":19.374878870533266,"ttft_ms":null,"tpot_ms":50.251,"tokens_per_s_per_instance":19820.50108455553,"tokens_per_s_per_device":1238.7813177847206,"tokens_per_s_cluster":19820.50108455553},"throughput_tokens_per_s":19839.875963426064,"throughput_tokens_per_s_per_device":619.9961238570645,"tokens_per_s_per_user":19.3513982037178,"throughput_req_per_s":19.374878870533266,"request_latency_ms":52916.073000000004,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":19820.50108455553,"decode_tps_cluster":19820.50108455553,"ttft_ms":1509.3,"tpot_ms":50.251,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":1.0921708701054793,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":3,"concurrency":24,"qps_per_instance":15.008395321132758,"qps_allocated":15.008395321132758,"ttft_ms":1599.105,"tpot_ms":null,"tokens_per_s_per_instance":61474.387235359776,"tokens_per_s_per_device":3842.149202209986,"tokens_per_s_cluster":61474.387235359776},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":128,"concurrency":512,"qps_per_instance":16.391732176768567,"qps_allocated":16.391732176768567,"ttft_ms":null,"tpot_ms":30.533,"tokens_per_s_per_instance":16768.742016834247,"tokens_per_s_per_device":1048.0463760521404,"tokens_per_s_cluster":16768.742016834247},"throughput_tokens_per_s":15368.596808839944,"throughput_tokens_per_s_per_device":480.26865027624825,"tokens_per_s_per_user":31.18683827711723,"throughput_req_per_s":15.008395321132758,"request_latency_ms":32834.364,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":16768.742016834247,"decode_tps_cluster":16768.742016834247,"ttft_ms":1599.105,"tpot_ms":30.533,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":0.7980239230401162,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":2,"pp":1,"dp":8,"ep":16},"parallel_str":"TP=2 | PP=1 | DP=8 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":14.72897760643067,"qps_allocated":14.72897760643067,"ttft_ms":1086.294,"tpot_ms":null,"tokens_per_s_per_instance":60329.89227594002,"tokens_per_s_per_device":3770.6182672462514,"tokens_per_s_cluster":60329.89227594002},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":259,"concurrency":518,"qps_per_instance":11.754076491853823,"qps_allocated":11.754076491853823,"ttft_ms":null,"tpot_ms":43.079,"tokens_per_s_per_instance":12024.42025116646,"tokens_per_s_per_device":751.5262656979038,"tokens_per_s_cluster":12024.42025116646},"throughput_tokens_per_s":12036.174327658315,"throughput_tokens_per_s_per_device":376.13044773932234,"tokens_per_s_per_user":22.676886413003988,"throughput_req_per_s":11.754076491853823,"request_latency_ms":45156.111000000004,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":12024.42025116646,"decode_tps_cluster":12024.42025116646,"ttft_ms":1086.294,"tpot_ms":43.079,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":1.0562057620068666,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":4,"pp":1,"dp":4,"ep":16},"parallel_str":"TP=4 | PP=1 | DP=4 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":5,"concurrency":20,"qps_per_instance":11.094457098289123,"qps_allocated":11.094457098289123,"ttft_ms":1802.702,"tpot_ms":null,"tokens_per_s_per_instance":45442.89627459225,"tokens_per_s_per_device":2840.1810171620155,"tokens_per_s_cluster":45442.89627459225},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":256,"concurrency":512,"qps_per_instance":11.718029513550952,"qps_allocated":11.718029513550952,"ttft_ms":null,"tpot_ms":42.711,"tokens_per_s_per_instance":11987.544192362624,"tokens_per_s_per_device":749.221512022664,"tokens_per_s_cluster":11987.544192362624},"throughput_tokens_per_s":11360.724068648062,"throughput_tokens_per_s_per_device":355.02262714525193,"tokens_per_s_per_user":22.507445975260936,"throughput_req_per_s":11.094457098289123,"request_latency_ms":45496.05499999999,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11987.544192362624,"decode_tps_cluster":11987.544192362624,"ttft_ms":1802.702,"tpot_ms":42.711,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":1.6108231120908223,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":14,"qps_per_instance":7.274560083969208,"qps_allocated":7.274560083969208,"ttft_ms":1924.515,"tpot_ms":null,"tokens_per_s_per_instance":29796.598103937875,"tokens_per_s_per_device":1862.2873814961172,"tokens_per_s_cluster":29796.598103937875},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":256,"concurrency":512,"qps_per_instance":11.718029513550952,"qps_allocated":11.718029513550952,"ttft_ms":null,"tpot_ms":42.711,"tokens_per_s_per_instance":11987.544192362624,"tokens_per_s_per_device":749.221512022664,"tokens_per_s_cluster":11987.544192362624},"throughput_tokens_per_s":7449.149525984469,"throughput_tokens_per_s_per_device":232.78592268701465,"tokens_per_s_per_user":22.447344536136587,"throughput_req_per_s":7.274560083969208,"request_latency_ms":45617.867999999995,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":11987.544192362624,"decode_tps_cluster":11987.544192362624,"ttft_ms":1924.515,"tpot_ms":42.711,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":0.8553454989986685,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":8,"pp":1,"dp":2,"ep":16},"parallel_str":"TP=8 | PP=1 | DP=2 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":4,"concurrency":8,"qps_per_instance":7.106247279639714,"qps_allocated":7.106247279639714,"ttft_ms":1125.77,"tpot_ms":null,"tokens_per_s_per_instance":29107.188857404268,"tokens_per_s_per_device":1819.1993035877667,"tokens_per_s_cluster":29107.188857404268},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":16,"pp":1,"dp":1,"ep":16},"parallel_str":"TP=16 | PP=1 | DP=1 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":268,"concurrency":268,"qps_per_instance":6.078296625411362,"qps_allocated":6.078296625411362,"ttft_ms":null,"tpot_ms":43.1,"tokens_per_s_per_instance":6218.097447795823,"tokens_per_s_per_device":388.63109048723896,"tokens_per_s_cluster":6218.097447795823},"throughput_tokens_per_s":6224.175744421234,"throughput_tokens_per_s_per_device":194.50549201316358,"tokens_per_s_per_user":22.646314765640497,"throughput_req_per_s":6.078296625411362,"request_latency_ms":45217.07,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":6218.097447795823,"decode_tps_cluster":6218.097447795823,"ttft_ms":1125.77,"tpot_ms":43.1,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}},{"framework":"msmodeling","serving_mode":"disagg","mode":"pd_ratio","label":"P16D16","pd_ratio":1.5438802572251962,"prefill":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":16,"pp":1,"dp":1,"ep":16},"parallel_str":"TP=16 | PP=1 | DP=1 | EP=16 | MOE-TP=1 | MOE-DP=1","batch_size":7,"concurrency":7,"qps_per_instance":3.8911068197761614,"qps_allocated":3.8911068197761614,"ttft_ms":1798.974,"tpot_ms":null,"tokens_per_s_per_instance":15937.973533803157,"tokens_per_s_per_device":996.1233458626973,"tokens_per_s_cluster":15937.973533803157},"decode":{"instances":1,"devices_per_instance":16,"devices_total":16,"parallel":{"tp":16,"pp":1,"dp":1,"ep":16},"parallel_str":"TP=16 | PP=1 | DP=1 | EP=16 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":256,"concurrency":256,"qps_per_instance":6.007402997806735,"qps_allocated":6.007402997806735,"ttft_ms":null,"tpot_ms":41.656,"tokens_per_s_per_instance":6145.57326675629,"tokens_per_s_per_device":384.0983291722681,"tokens_per_s_cluster":6145.57326675629},"throughput_tokens_per_s":3984.493383450789,"throughput_tokens_per_s_per_device":124.51541823283716,"tokens_per_s_per_user":23.056280154698634,"throughput_req_per_s":3.8911068197761614,"request_latency_ms":44413.062,"devices_used":32,"num_devices":32,"meets_slo":true,"decode_tps_per_instance":6145.57326675629,"decode_tps_cluster":6145.57326675629,"ttft_ms":1798.974,"tpot_ms":41.656,"quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"system":"ATLAS_950_486T_96G","backend":"msmodeling","extra":{"prefill_devices_per_instance":16,"decode_devices_per_instance":16,"prefill_moe":{"moe_tp":1,"moe_dp":1},"decode_moe":{"moe_tp":1,"moe_dp":1}}}]}]}],"recommendation":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","best":{"framework":"msmodeling","serving_mode":"disagg","mode":"disagg","throughput_tokens_per_s":23747.250636837663,"throughput_tokens_per_s_per_device":742.101582401177,"throughput_req_per_s":23.19067445003678,"ttft_ms":1379.865,"tpot_ms":41.39,"meets_slo":true,"concurrency":492,"batch_size":123,"num_devices":32,"parallel":null,"parallel_str":"prefill[TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1]/decode[TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5]","quantize":{"linear":"MXFP4","non_expert_linear":"DISABLED","attention":"FP8"},"backend":"msmodeling","backend_version":null,"system":"ATLAS_950_486T_96G","extra":{"pd_ratio":1.0020990697882028,"label":"P8D8","tokens_per_s_per_user":23.420791922388435,"request_latency_ms":43721.835,"decode_tps_per_instance":11886.929209954094,"prefill":{"instances":2,"devices_per_instance":8,"parallel":"TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1","batch_size":2,"concurrency":16,"qps_per_instance":11.59533722501839},"decode":{"instances":2,"devices_per_instance":8,"parallel":"TP=2 | PP=1 | DP=4 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5","batch_size":123,"concurrency":492,"qps_per_instance":11.61967664707145}}},"reason":"highest throughput (tokens/s) among the agg / disagg best configurations"},"errors":[],"artifacts":{"run_dir":"_verify_results\\20261027-114626-ZhipuAI-GLM-5.2-ATLAS_950_486T_96G-32-9639c54a","logs_dir":"_verify_results\\20261027-114626-ZhipuAI-GLM-5.2-ATLAS_950_486T_96G-32-9639c54a\\logs"}};</script>
+<script>
+'use strict';
+
+/* ============================================================
+ * 数据源抽象
+ *   - API 模式：调用 infer-strategy-npu-server 的 /api/v1（支持新建任务）
+ *   - 静态模式：直接读 results/infer-strategy-npu/index.json（只读）
+ * 模式自动探测（探测 /api/v1/health）；也可用 ?source=api / ?source=static 强制。
+ * 两者返回的“单任务结构”都是 run.json，因此渲染逻辑无需改动。
+ * ============================================================ */
+const API_BASE = '/api/v1';
+
+// 结果根目录：默认 ../results/infer-strategy-npu；
+// 用 --out-dir _verify_results 跑出来时，可在 URL 上加 ?dir=_verify_results 覆盖；
+// 若由 infer-strategy-npu-server 托管（out_dir 挂在 /results），直接用服务端给的路径。
+const _dirParam = new URLSearchParams(location.search).get('dir');
+const _resultsBase = _dirParam ? `../${String(_dirParam).replace(/^\/+|\/+$/g, '')}` : '../results/infer-strategy-npu';
+let _apiResultsUrl = null;
+const resultsBase = () => _apiResultsUrl || _resultsBase;
+const RESULTS_INDEX = () => `${resultsBase()}/index.json`;
+const RESULTS_RUN = (id) => `${resultsBase()}/${id}/run.json`;
+
+const _forcedSource = new URLSearchParams(location.search).get('source'); // api | static | null
+let _apiMode = _forcedSource ? _forcedSource === 'api' : null; // null = 未探测
+
+async function isApiMode() {
+  if (_apiMode !== null) return _apiMode;
+  try {
+    const r = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
+    const j = r.ok ? await r.json() : null;
+    _apiMode = !!(j && j.code === 200);
+    if (_apiMode && j.data && j.data.results_url) _apiResultsUrl = j.data.results_url;
+  } catch (e) {
+    _apiMode = false;
+  }
+  return _apiMode;
+}
+
+const DataSource = {
+  async listTasks() {
+    if (await isApiMode()) {
+      const r = await fetch(`${API_BASE}/tasks?page_size=200`);
+      const j = await r.json();
+      return (j.data && j.data.items || []).map(apiTaskToSummary);
+    }
+    const r = await fetch(RESULTS_INDEX());
+    if (!r.ok) throw new Error(
+      `无法读取 ${RESULTS_INDEX()}。两种解法：① 启动服务后从服务端打开本页 —— ` +
+      '`infer-strategy-npu-server --port 8000`，浏览器访问 http://<host>:8000/ ；' +
+      `② 或在仓库根目录执行 \`python -m http.server\` 后再访问（浏览器 file:// 直接打开会因 CORS 拒绝读取本地文件）；` +
+      '结果目录不是默认位置时，在 URL 上加 ?dir=<结果目录名>，如 ?dir=_verify_results。'
+    );
+    const j = await r.json();
+    return j.tasks || [];
+  },
+  async getTask(id) {
+    if (await isApiMode()) {
+      const r = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j.code !== 200) throw new Error(j.msg || '任务不存在');
+      return j.data.result;
+    }
+    const r = await fetch(RESULTS_RUN(id));
+    if (!r.ok) throw new Error('找不到该任务结果: ' + id);
+    return await r.json();
+  }
+};
+
+function apiTaskToSummary(t) {
+  // API 列表项是精简视图，这里做最小映射（详情仍走 getTask）
+  return {
+    task_id: t.task_id, status: t.status, created_at: t.created_at,
+    model: (t.request && t.request.model) || '', device: (t.request && t.request.device) || '',
+    num_devices: (t.request && t.request.num_devices), quantize: (t.request && t.request.quantize),
+    framework: (t.status === 'RUNNING' ? '运行中' : ''),
+  };
+}
+
+/* ============================================================
+ * 工具
+ * ============================================================ */
+const state = { tasks: [], filtered: [], page: 1, pageSize: 8, currentFw: null, currentId: null };
+
+/** 状态归一：run.json 用 ok/failed，HTTP 任务用 SUCCESS/FAILED/… */
+function normStatus(s) {
+  const m = { SUCCESS: 'ok', FAILED: 'failed', RUNNING: 'running', PENDING: 'running', CANCELLED: 'cancelled', TIMEOUT: 'timeout' };
+  return m[s] || String(s || '').toLowerCase();
+}
+
+const fmt = (n, d = 2) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: d }));
+const fmtInt = (n) => (n == null || isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN'));
+const len = (x) => (x && x.length ? x.length : 0);
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function shortId(id) { return id.length > 42 ? id.slice(0, 22) + '…' + id.slice(-16) : id; }
+
+function statusTag(s) {
+  const n = normStatus(s);
+  if (n === 'ok') return '<span class="tag ok">成功</span>';
+  if (n === 'failed') return '<span class="tag critical">失败</span>';
+  if (n === 'running') return '<span class="tag info">运行中</span>';
+  if (n === 'cancelled') return '<span class="tag neutral">已取消</span>';
+  if (n === 'timeout') return '<span class="tag warn">超时</span>';
+  return `<span class="tag neutral">${escapeHtml(s || '未知')}</span>`;
+}
+
+function metric(k, v, unit) {
+  return `<div class="metric"><div class="k">${k}</div><div class="v">${v}${unit ? `<small>${unit}</small>` : ''}</div></div>`;
+}
+
+/* ============================================================
+ * 列表视图
+ * ============================================================ */
+async function loadList() {
+  showView('list');
+  setCrumb('推理策略寻优', '任务记录');
+  const body = document.getElementById('list-body');
+  body.innerHTML = '<tr><td colspan="8" class="sub">加载中…</td></tr>';
+  try {
+    state.tasks = await DataSource.listTasks();
+    fillModelFilter();
+    applyFilters();
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="8" class="err-note" style="padding:14px">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function fillModelFilter() {
+  const sel = document.getElementById('f-model');
+  const models = [...new Set(state.tasks.map(t => t.model).filter(Boolean))].sort();
+  models.forEach(m => {
+    const o = document.createElement('option');
+    o.value = m; o.textContent = m; sel.appendChild(o);
+  });
+}
+
+function applyFilters() {
+  const m = document.getElementById('f-model').value;
+  const st = document.getElementById('f-status').value;
+  const kw = document.getElementById('f-kw').value.trim().toLowerCase();
+  state.filtered = state.tasks.filter(t =>
+    (!m || t.model === m) &&
+    (!st || normStatus(t.status) === st) &&
+    (!kw || (t.task_id || '').toLowerCase().includes(kw) || (t.model || '').toLowerCase().includes(kw))
+  );
+  state.page = 1;
+  renderList();
+}
+
+function renderList() {
+  const body = document.getElementById('list-body');
+  const items = state.filtered;
+  if (!items.length) { body.innerHTML = '<tr><td colspan="8" class="sub">无匹配任务</td></tr>'; document.getElementById('pager').innerHTML = ''; return; }
+  const totalPages = Math.max(1, Math.ceil(items.length / state.pageSize));
+  state.page = Math.min(state.page, totalPages);
+  const start = (state.page - 1) * state.pageSize;
+  const chunk = items.slice(start, start + state.pageSize);
+  body.innerHTML = chunk.map(t => `
+    <tr class="clickable" onclick="openDetail('${encodeURIComponent(t.task_id)}')">
+      <td class="strong" title="${escapeHtml(t.task_id)}">${shortId(t.task_id)}</td>
+      <td>${escapeHtml(t.model || '—')}</td>
+      <td class="num">${escapeHtml(t.device || '—')} × ${fmtInt(t.num_devices)}</td>
+      <td>${escapeHtml(t.quantize || '—')}</td>
+      <td>${escapeHtml(t.framework || '—')}</td>
+      <td>${statusTag(t.status)}</td>
+      <td class="sub">${escapeHtml(t.created_at || '—')}</td>
+      <td><button class="btn-text" onclick="event.stopPropagation();openDetail('${encodeURIComponent(t.task_id)}')">查看</button></td>
+    </tr>`).join('');
+  const pager = document.getElementById('pager');
+  pager.innerHTML = totalPages > 1
+    ? ['‹', ...Array.from({ length: totalPages }, (_, i) => i + 1), '›']
+        .map((p, i) => `<button class="${p === state.page ? 'cur' : ''}" onclick="gotoPage(${i === 0 ? Math.max(1, state.page - 1) : i === totalPages ? Math.min(totalPages, state.page + 1) : p})">${p}</button>`).join('')
+    : '';
+}
+function gotoPage(p) { state.page = p; renderList(); }
+
+/* ============================================================
+ * 详情视图
+ * ============================================================ */
+/** 打开单文件静态报告：优先走服务端接口，静态模式下直接读 report.html */
+async function openReport() {
+  const id = state.currentId;
+  if (!id) return;
+  if (await isApiMode()) { window.open(`${API_BASE}/tasks/${encodeURIComponent(id)}/report`, '_blank'); return; }
+  window.open(`${resultsBase()}/${id}/report.html`, '_blank');
+}
+
+async function openDetail(encId) {
+  const id = decodeURIComponent(encId);
+  state.currentId = id;
+  stopPendingTimer();
+  showView('detail');
+  setCrumb('推理策略寻优', '任务详情');
+  const body = document.getElementById('detail-body');
+  body.innerHTML = '<div class="notice">加载中…</div>';
+  try {
+    const data = await DataSource.getTask(id);
+    // 任务尚在执行时 run.json 还没落盘，result 为 null —— 此时展示进度而不是崩
+    if (!data || !data.frameworks) {
+      renderPending(id, data);
+      return;
+    }
+    renderDetail(data);
+  } catch (e) {
+    body.innerHTML = `<div class="err-box"><pre>${escapeHtml(e.message)}</pre></div>`;
+  }
+}
+
+/** 任务未完成（无 run.json）时的占位视图：展示状态与进度。 */
+async function renderPending(id, data) {
+  const body = document.getElementById('detail-body');
+  document.getElementById('detail-title').textContent = `任务 ${id}`;
+  document.getElementById('detail-sub').textContent = '结果尚未生成';
+
+  let status = (data && data.status) || 'RUNNING';
+  let pg = (data && data.progress) || {};
+  if (await isApiMode()) {
+    try {
+      const r = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j && j.code === 200) {
+        status = j.data.status || status;
+        pg = j.data.progress || pg;
+      }
+    } catch (e) { /* 探测失败就用已有信息 */ }
+  }
+
+  const done = TERMINAL.includes(status);
+  const stage = pg.label ? `${pg.label}（${pg.kind || ''}）` : (pg.stage || '—');
+  const bar = pg.total
+    ? `<div class="nf-running">进度：${pg.done || 0} / ${pg.total}（${pg.percent || 0}%）</div>`
+    : '';
+  const tip = done
+    ? '任务已结束，但没有生成结果文件（run.json）。可能是失败、被取消或超时，可回到列表查看状态。'
+    : 'PD 分离每组 PD-ratio 实测约 177s；<code>--pd-ratio-sizes 8 16 32</code>（9 组）约 27 分钟。页面每 10 秒自动刷新，结果出来后会自动展示。';
+  body.innerHTML =
+    `<div class="card"><div class="card-title"><span class="bar"></span>${done ? '任务已结束（无结果）' : '任务执行中'}</div>
+      <div class="stat-grid">
+        ${statItem('状态', statusTag(status), '')}
+        ${statItem('当前阶段', escapeHtml(stage), '')}
+      </div>
+      ${bar}
+      <div class="sub" style="margin-top:12px">${tip}</div>
+      <div class="form-foot">
+        <button class="btn-cancel" onclick="backToList()">← 返回任务记录</button>
+        <button class="btn-cancel" onclick="openDetail('${encodeURIComponent(id)}')">刷新</button>
+      </div>
+    </div>`;
+
+  // 未结束的任务自动轮询，结果落盘后自动切换到详情
+  if (!done && await isApiMode()) {
+    stopPendingTimer();
+    _pendingTimer = setInterval(() => openDetail(encodeURIComponent(id)), 10000);
+  }
+}
+
+function pickFramework(data) {
+  const fws = (data && data.frameworks) || [];
+  return fws.find(f => (f.agg && f.agg.available) || (f.disagg && f.disagg.available)) || fws[0] || {};
+}
+function bestOf(m) { return m ? (m.best || (m.candidates && m.candidates[0]) || null) : null; }
+/** 该部署形态是否真的产出了可用配置 */
+function modeReady(m) { return !!(m && m.available && bestOf(m)); }
+function modeName(m) { return m === 'disagg' ? 'PD 分离（disagg）' : 'PD 混部（agg）'; }
+
+/* ------------------------------------------------------------
+ * 并行策略解析
+ *   parallel_str 有两种写法，统一拆成 [{key, value, hot}]：
+ *     msmodeling : "TP=1 | PP=1 | DP=8 | EP=8 | MOE-TP=1 | MOE-DP=1 | DFlash=8/acc=5"
+ *     aic-npu    : "tp4pp1dp8etp1ep32"
+ *   hot=true 的项（TP/PP/DP/EP/MOE-*）在结论卡里重点标记。
+ * ---------------------------------------------------------- */
+const PP_ALIAS = {
+  TP: 'TP', PP: 'PP', DP: 'DP', EP: 'EP',
+  'MOE-TP': 'MOE-TP', 'MOE-DP': 'MOE-DP', 'MOE-EP': 'MOE-EP',
+  ETP: 'MOE-TP', EDP: 'MOE-DP', MOE_TP: 'MOE-TP', MOE_DP: 'MOE-DP', MOE_EP: 'MOE-EP',
+  DFLASH: 'DFlash',
+};
+const KEY_PARALLEL = { TP: 1, PP: 1, DP: 1, EP: 1, 'MOE-TP': 1, 'MOE-DP': 1, 'MOE-EP': 1 };
+
+function parseParallel(s) {
+  if (!s) return [];
+  const out = [];
+  for (const it of String(s).split('|').map(x => x.trim()).filter(Boolean)) {
+    const kv = /^([A-Za-z][A-Za-z0-9_ -]*?)\s*[:=]\s*(.+)$/.exec(it);
+    if (kv) { out.push([kv[1].trim().toUpperCase(), kv[2].trim()]); continue; }
+    // 紧凑写法（aic-npu）："tp4pp1dp8etp1ep32" —— key 只吃字母，避免贪婪回溯把 "ep32" 切成 "ep3"+"2"
+    const tight = [...it.matchAll(/([A-Za-z_][A-Za-z_]*)\s*(\d+(?:\.\d+)?)/g)];
+    if (tight.length) { tight.forEach(t => out.push([t[1].toUpperCase(), t[2]])); continue; }
+    out.push([null, it]);
+  }
+  return out.map(([k, v]) => {
+    const key = PP_ALIAS[k] || k || '';
+    return { key: key || '配置', value: v, hot: !!KEY_PARALLEL[key] };
+  });
+}
+
+function chipsHtml(list, large) {
+  if (!list || !list.length) return '<span class="sub">—</span>';
+  return list.map(c => `<span class="chip${c.hot ? ' hot' : ''}${large ? ' lg' : ''}">${escapeHtml(c.key)}<b>${escapeHtml(c.value)}</b></span>`).join('');
+}
+
+/** 兼容 parallel 为字典的情况（aic-npu / 部分 msmodeling 结构） */
+function parallelStr(b) {
+  if (!b) return '';
+  if (b.parallel_str) return b.parallel_str;
+  const p = b.parallel;
+  if (!p) return '';
+  const order = [['tp', 'TP'], ['pp', 'PP'], ['dp', 'DP'], ['ep', 'EP'], ['moe_tp', 'MOE-TP'], ['moe_dp', 'MOE-DP'], ['moe_ep', 'MOE-EP']];
+  return order.filter(([k]) => p[k] != null).map(([k, label]) => `${label}=${p[k]}`).join(' | ');
+}
+
+/** disagg：拆出 P/D 两侧的并行串与实例信息（优先取 extra.prefill / extra.decode） */
+function pdSides(b) {
+  const ex = (b && b.extra) || {};
+  const ps = ex.prefill || {}, ds = ex.decode || {};
+  let pStr = ps.parallel || null, dStr = ds.parallel || null;
+  if (!pStr || !dStr) {
+    const m = /prefill\[([^\]]*)\][\s/]*decode\[([^\]]*)\]/i.exec((b && b.parallel_str) || '');
+    if (m) { pStr = pStr || m[1]; dStr = dStr || m[2]; }
+  }
+  const pack = (o, str) => ({
+    str, instances: o.instances, per: o.devices_per_instance,
+    batch_size: o.batch_size, concurrency: o.concurrency, qps: o.qps_per_instance,
+  });
+  return { p: pack(ps, pStr), d: pack(ds, dStr) };
+}
+
+/* ------------------------------------------------------------
+ * 一、推理策略推荐结论：agg / disagg 各出一张结论卡
+ * ---------------------------------------------------------- */
+function statItem(k, v, unit, cls) {
+  return `<div class="stat${cls ? ' ' + cls : ''}"><div class="v">${v}${unit ? `<small>${unit}</small>` : ''}</div><div class="l">${k}</div></div>`;
+}
+
+/** 关键指标：建模估算值，刻意做成弱化排版（结论以并行策略为准）。 */
+function metricsMini(b) {
+  const items = [
+    ['集群吞吐', fmt(b.throughput_tokens_per_s), 'tokens/s'],
+    ['单卡吞吐', fmt(b.throughput_tokens_per_s_per_device), 'tokens/s'],
+    ['TTFT', b.ttft_ms == null ? '—' : fmt(b.ttft_ms, 1), 'ms'],
+    ['TPOT', b.tpot_ms == null ? '—' : fmt(b.tpot_ms, 1), 'ms'],
+    ['并发', fmtInt(b.concurrency), 'req'],
+    ['批大小', fmtInt(b.batch_size), ''],
+    ['req/s', fmt(b.throughput_req_per_s, 3), ''],
+    ['用卡', b.num_devices == null ? '—' : fmtInt(b.num_devices), '卡'],
+  ];
+  return `<div class="metrics-mini">${items.map(([k, v, u]) =>
+    `<span class="mi"><i>${k}</i>${v}${u ? `<em>${u}</em>` : ''}</span>`).join('')}</div>
+    <div class="sub">指标为建模估算值，仅作辅助参考；策略取舍以并行配置为准。</div>`;
+}
+
+function conclCard(mode, m, isBest) {
+  const b = bestOf(m);
+  if (!b) {
+    return `<div class="concl-card empty"><div class="cc-head"><div class="idx">${modeName(mode)}</div></div>
+      <div class="sub">本次未产出可用配置</div></div>`;
+  }
+  const ex = b.extra || {};
+  const q = b.quantize || {};
+  let paraBlock, extraPairs;
+
+  if (mode === 'disagg') {
+    const s = pdSides(b);
+    paraBlock = `<div class="para-block">
+      <div class="para-head">并行策略（推荐配置）</div>
+      <div class="para-line lg"><span class="k">Prefill 并行</span><span class="v">${chipsHtml(parseParallel(s.p.str), true)}</span></div>
+      <div class="para-line lg"><span class="k">Decode 并行</span><span class="v">${chipsHtml(parseParallel(s.d.str), true)}</span></div>
+    </div>`;
+    extraPairs = [
+      ['PD 组合', ex.label || '—'],
+      ['实例 × 卡数', `${fmtInt(s.p.instances)} × ${fmtInt(s.p.per)}卡 / ${fmtInt(s.d.instances)} × ${fmtInt(s.d.per)}卡`],
+      ['P/D batch', `${fmtInt(s.p.batch_size)} / ${fmtInt(s.d.batch_size)}`],
+      ['PD 比值', fmt(ex.pd_ratio, 3)],
+      ['单用户吞吐', fmt(ex.tokens_per_s_per_user, 2) + ' tokens/s'],
+      ['请求时延', fmt(ex.request_latency_ms, 0) + ' ms'],
+    ];
+  } else {
+    paraBlock = `<div class="para-block">
+      <div class="para-head">并行策略（推荐配置）</div>
+      <div class="para-line lg"><span class="k">TP / PP / DP</span><span class="v">${chipsHtml(parseParallel(parallelStr(b)), true)}</span></div>
+    </div>`;
+    extraPairs = [
+      ['实例 × 卡数', ex.instances && ex.devices_per_instance ? `${fmtInt(ex.instances)} × ${fmtInt(ex.devices_per_instance)}卡` : `${fmtInt(b.num_devices)} 卡`],
+      ['GEMM / KV 量化', (ex.gemm_quant || ex.kvcache_quant) ? `${ex.gemm_quant || '—'} / ${ex.kvcache_quant || '—'}` : null],
+      ['单卡集群吞吐', ex.tokens_per_s_gpu_cluster == null ? null : fmt(ex.tokens_per_s_gpu_cluster)],
+      ['整机功耗', ex.power_w ? fmt(ex.power_w, 0) + ' W' : null],
+    ].filter(x => x[1]);
+  }
+
+  const qPairs = [
+    ['线性层量化', q.linear], ['非专家线性层', q.non_expert_linear], ['KV cache', q.attention],
+  ].filter(x => x[1]);
+
+  const chipList = (pairs) => pairs.map(([k, v]) => `<span class="chip">${escapeHtml(k)}<b>${escapeHtml(String(v))}</b></span>`).join('');
+
+  return `<div class="concl-card${isBest ? ' best' : ''}">
+    <div class="cc-head">
+      <div class="idx">${modeName(mode)}</div>
+      <div class="cc-tags">
+        ${isBest ? '<span class="tag info">推荐</span>' : ''}
+        ${b.meets_slo ? '<span class="tag ok">SLO 达标</span>' : '<span class="tag warn">SLO 未达标</span>'}
+      </div>
+    </div>
+    ${paraBlock}
+    <h4 class="blk">附加部署配置</h4>
+    <div class="chips">${chipList(extraPairs.concat(qPairs))}</div>
+    <h4 class="blk">关键指标（估算）</h4>
+    ${metricsMini(b)}
+  </div>`;
+}
+
+function renderConclusion(data, fw) {
+  const rec = data.recommendation || {};
+  const modes = [];
+  if (modeReady(fw.agg)) modes.push('agg');
+  if (modeReady(fw.disagg)) modes.push('disagg');
+  if (!modes.length) {
+    return `<div class="card"><div class="card-title"><span class="bar"></span>推理策略推荐结论</div>
+      <div class="sub">本次任务没有产出可用配置，请查看“分析过程 / 错误信息”。</div></div>`;
+  }
+  const cards = modes.map(m => conclCard(m, m === 'agg' ? fw.agg : fw.disagg, rec.serving_mode === m)).join('');
+  return `<div class="card">
+    <div class="card-title"><span class="bar"></span>推理策略推荐结论 <span class="card-desc">按部署形态分别给出最优配置</span></div>
+    <div class="concl-grid">${cards}</div>
+    ${rec.reason ? `<div class="stat-caption">择优口径：${escapeHtml(rec.reason)}</div>` : ''}
+  </div>`;
+}
+
+/* ------------------------------------------------------------
+ * 候选表（排名列统一在最左，避免列错位）
+ * ---------------------------------------------------------- */
+function candidatesTable(cands, title) {
+  if (!cands || !cands.length) return `<div class="sub" style="margin-top:12px">${title || '候选'}：无</div>`;
+  const rows = cands.map((c, i) => {
+    const sla = c.meets_slo ? '<span class="tag ok">达标</span>' : '<span class="tag warn">未达标</span>';
+    const top = i === 0 ? ' class="top1"' : '';
+    return `<tr${top}>
+      <td class="strong">#${i + 1}</td>
+      <td>${chipsHtml(parseParallel(parallelStr(c)))}</td>
+      <td class="num">${fmt(c.throughput_tokens_per_s)}</td>
+      <td class="num">${fmt(c.throughput_tokens_per_s_per_device)}</td>
+      <td class="num">${c.ttft_ms == null ? '—' : fmt(c.ttft_ms, 1)}</td>
+      <td class="num">${c.tpot_ms == null ? '—' : fmt(c.tpot_ms, 1)}</td>
+      <td class="num">${fmtInt(c.concurrency)}</td>
+      <td class="num">${fmtInt(c.batch_size)}</td>
+      <td>${sla}</td>
+    </tr>`;
+  }).join('');
+  return `<table style="margin-top:12px"><thead><tr>
+    <th>排名</th><th>并行策略</th><th>集群吞吐</th><th>单卡吞吐</th><th>TTFT</th><th>TPOT</th><th>并发</th><th>批大小</th><th>SLO</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+/* 二、分析过程的折叠块：整行 summary 都能点开/收起，交互统一 */
+function foldCard(title, inner, open) {
+  return `<details class="card fold"${open ? ' open' : ''}>
+    <summary class="card-title"><span class="bar"></span><span class="fold-text">${title}</span><span class="fold-ico"></span></summary>
+    <div class="fold-body">${inner}</div>
+  </details>`;
+}
+
+/** 组合列表：优先 disagg_variants；缺失时按 framework 级候选的 label 兜底，保证每个 P×D 都出现。 */
+function pdVariants(fw) {
+  const vs = (fw.disagg_variants || []).filter(v => v && (v.label || v.pd_ratio));
+  if (vs.length) return vs;
+  const byLabel = new Map();
+  for (const c of fw.pd_ratio_candidates || []) {
+    const key = c.label || '—';
+    if (!byLabel.has(key)) byLabel.set(key, { label: key, pd_ratio: { prefill_devices: c.prefill && c.prefill.devices_per_instance, decode_devices: c.decode && c.decode.devices_per_instance }, candidates: [] });
+    byLabel.get(key).candidates.push(c);
+  }
+  return [...byLabel.values()];
+}
+
+function renderVariantsInner(fw) {
+  const vs = pdVariants(fw);
+  if (!vs.length) return '<div class="sub">无 PD 分离组合</div>';
+  const tabs = vs.map((v, i) => `<button class="tab ${i === 0 ? 'active' : ''}" data-vi="${i}" onclick="selectVariant(${i})">${escapeHtml(v.label || v.mode || ('#' + (i + 1)))}</button>`).join('');
+  return `<div class="tabs">${tabs}</div><div id="variant-body"></div>`;
+}
+
+/* ------------------------------------------------------------
+ * PD 分离候选汇总：frameworks[].pd_ratio_candidates
+ * 跨全部 P×D 组合合并，已按「单 D 实例 decode 吞吐」降序
+ * ------------------------------------------------------------ */
+function pdSideSummary(s) {
+  const ex = (s && s.extra) || {};
+  const inst = ex.instances;
+  const per = ex.devices_per_instance;
+  if (inst && per) return `${fmtInt(inst)} 实例 × ${fmtInt(per)} 卡（共 ${fmtInt(inst * per)} 卡）`;
+  if (per) return `${fmtInt(per)} 卡/实例`;
+  return `${fmtInt(s && s.num_devices)} 卡`;
+}
+
+function pdSideCells(c, i) {
+  const p = c.prefill || {};
+  const d = c.decode || {};
+  const sideCell = s => `${fmtInt(s.instances)} × ${fmtInt(s.devices_per_instance)} 卡`;
+  return `
+    <td class="strong">#${i + 1}</td>
+    <td class="strong">${escapeHtml(c.label || '—')}</td>
+    <td class="num">${sideCell(p)}</td>
+    <td class="num">${sideCell(d)}</td>
+    <td class="sub">${escapeHtml(p.parallel_str || '—')}</td>
+    <td class="sub">${escapeHtml(d.parallel_str || '—')}</td>
+    <td class="num">${fmt(c.decode_tps_per_instance)}</td>
+    <td class="num">${fmt(c.throughput_tokens_per_s)}</td>
+    <td class="num">${fmt(c.throughput_tokens_per_s_per_device)}</td>
+    <td class="num">${fmt(c.throughput_req_per_s, 3)}</td>
+    <td class="num">${c.ttft_ms == null ? '—' : fmt(c.ttft_ms, 1)}</td>
+    <td class="num">${c.tpot_ms == null ? '—' : fmt(c.tpot_ms, 1)}</td>
+    <td class="num">${fmtInt(c.devices_used)}${c.num_devices ? ` / ${fmtInt(c.num_devices)}` : ''}</td>`;
+}
+
+function pdCandidatesTable(cands) {
+  if (!cands || !cands.length) return '';
+  const rows = cands.map((c, i) => {
+    const top = i === 0 ? ' class="top1"' : '';
+    return `<tr${top}>${pdSideCells(c, i)}</tr>`;
+  }).join('');
+  return `<table style="margin-top:12px"><thead><tr>
+    <th>排名</th><th>P×D</th><th>P 实例×卡</th><th>D 实例×卡</th><th>P 并行</th><th>D 并行</th>
+    <th>decode 吞吐(单实例)</th><th>集群吞吐</th><th>单卡吞吐</th><th>req/s</th><th>TTFT</th><th>TPOT</th><th>用卡</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function variantBody(v) {
+  const b = bestOf(v) || {};
+  const pf = v.prefill || {};
+  const dc = v.decode || {};
+  const pfStr = pf.parallel_str || parallelStr(pf);
+  const dcStr = dc.parallel_str || parallelStr(dc);
+  // 该组合的全部候选（条数由求解结果决定），按集群吞吐降序
+  let own = v.pd_ratio_candidates || [];
+  if (!own.length && v.candidates && v.candidates.length) own = v.candidates;
+  if (!own.length && v.label) {
+    own = ((state.currentFw && state.currentFw.pd_ratio_candidates) || []).filter(c => c.label === v.label);
+  }
+  const shown = own.slice().sort((a, b) => (b.throughput_tokens_per_s || 0) - (a.throughput_tokens_per_s || 0));
+  return `
+   <h4 class="blk">该组合最优 · 关键指标（估算）</h4>
+   ${metricsMini(b)}
+   <div class="pd-grid">
+     <div class="pd-side">
+       <div class="pd-role">Prefill 侧</div>
+       <div class="chips">${chipsHtml(parseParallel(pfStr))}</div>
+       <div class="sub">${fmt(pf.throughput_tokens_per_s)} tokens/s · ${pdSideSummary(pf)} · batch ${fmtInt(pf.batch_size)} · 并发 ${fmtInt(pf.concurrency)}</div>
+     </div>
+     <div class="pd-side">
+       <div class="pd-role">Decode 侧</div>
+       <div class="chips">${chipsHtml(parseParallel(dcStr))}</div>
+       <div class="sub">${fmt(dc.throughput_tokens_per_s)} tokens/s · ${pdSideSummary(dc)} · batch ${fmtInt(dc.batch_size)} · 并发 ${fmtInt(dc.concurrency)}</div>
+     </div>
+   </div>
+   ${shown.length
+     ? `<h4 class="blk">该组合候选（${shown.length} 条 · 按集群吞吐降序）</h4>${pdCandidatesTable(shown)}`
+     : '<div class="sub" style="margin-top:10px">该组合无候选明细</div>'}`;
+}
+
+function selectVariant(i) {
+  const v = pdVariants(state.currentFw || {})[i];
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', +t.dataset.vi === i));
+  if (v) document.getElementById('variant-body').innerHTML = variantBody(v);
+}
+
+/* ------------------------------------------------------------
+ * 三、任务信息（沉底）：量化参数详细化，不再展示路由原因
+ * ---------------------------------------------------------- */
+function kvTable(pairs) {
+  return `<table class="kv">${pairs.map(([k, v]) =>
+    `<tr><th>${escapeHtml(k)}</th><td class="mono">${escapeHtml(String(v == null || v === '' ? '—' : v))}</td></tr>`).join('')}</table>`;
+}
+
+function renderMeta(data) {
+  const req = data.request || {};
+  const base = [
+    ['run_id', data.run_id],
+    ['模型', req.model],
+    ['设备', req.device],
+    ['卡数', req.num_devices],
+    ['输入 / 输出长度', `${fmtInt(req.input_length)} / ${fmtInt(req.output_length)}`],
+    ['TTFT / TPOT 上限', `${fmtInt(req.ttft_limit)} / ${fmtInt(req.tpot_limit)} ms`],
+    ['部署形态', (req.serving_modes || []).map(modeName).join(' + ') || '—'],
+    ['PD 每实例卡数', (req.pd_ratio_sizes || []).join(' / ') || '—'],
+    ['TP 候选', (req.tp_sizes || []).join(' / ') || '自动'],
+    ['并发度 jobs', req.jobs || '默认'],
+    ['top-n', req.top_n],
+    ['投机解码', req.speculative_method
+      ? `${req.speculative_method} · ${req.num_speculative_tokens} tokens · acc ${req.acceptance_length}`
+      : '关闭'],
+    ['图编译', req.compile_model ? '开启' : '关闭'],
+    ['生成时间', data.generated_at],
+  ];
+  const quant = [
+    ['量化开关', req.quantize],
+    ['专家线性层（linear）', req.quantize_linear_action],
+    ['非专家线性层（non_expert_linear）', req.quantize_non_expert_linear_action],
+    ['KV cache / attention', req.quantize_attention_action],
+    ['实际生效（best）', quantSummary(data)],
+  ];
+  return `<div class="card">
+    <div class="card-title"><span class="bar"></span>任务信息</div>
+    ${kvTable(base)}
+    <h4 class="blk">量化参数</h4>
+    ${kvTable(quant)}
+  </div>`;
+}
+
+/** 取推荐配置里真实生效的量化组合，便于核对“请求 vs 生效” */
+function quantSummary(data) {
+  const fw = pickFramework(data);
+  const b = bestOf(fw.disagg) || bestOf(fw.agg);
+  const q = (b && b.quantize) || {};
+  if (!q || (!q.linear && !q.attention)) return '—';
+  return [q.linear && `linear=${q.linear}`, q.non_expert_linear && `non_expert=${q.non_expert_linear}`, q.attention && `attention=${q.attention}`]
+    .filter(Boolean).join(' · ');
+}
+
+/* ------------------------------------------------------------
+ * 四、执行命令（沉底最后）
+ * ---------------------------------------------------------- */
+function renderCommands(data) {
+  const cmds = (data.routing && data.routing.commands) || [];
+  if (!cmds.length) return '';
+  const items = cmds.map(c => `<li>${escapeHtml(c)}</li>`).join('');
+  return foldCard(`执行命令（${cmds.length} 条）`, `<ul class="cmd-list">${items}</ul>`, false);
+}
+
+/* ------------------------------------------------------------
+ * 二、分析过程
+ * ---------------------------------------------------------- */
+function renderAnalysis(data, fw) {
+  const blocks = [];
+  if (modeReady(fw.agg)) {
+    blocks.push(foldCard(`PD 混部候选排名（${len(fw.agg.candidates)} 条）`, candidatesTable(fw.agg.candidates), false));
+  }
+  const variants = modeReady(fw.disagg) ? pdVariants(fw) : [];
+  if (variants.length) {
+    const labels = variants.map(v => v.label).filter(Boolean);
+    const sizes = ((data.request || {}).pd_ratio_sizes || []);
+    const only = variants.length === 1
+      ? `<div class="notice"><b>本次只跑了 ${labels[0]} 一组</b>：任务的 PD 每实例卡数为 <code>${sizes.join(' / ') || '默认 8'}</code>，` +
+        `组合数 = 卡数候选的笛卡尔积，想要 P8D8 / P8D16 / P16D8 / P16D16 请填 <code>--pd-ratio-sizes 8 16</code>（新建任务表单的“PD 每实例卡数”）。</div>`
+      : '';
+    blocks.push(foldCard(`PD 分离 · 各组合最优（${variants.length} 组：${labels.join(' / ')}）`, only + renderVariantsInner(fw), true));
+  }
+  if (!blocks.length) return '<div class="card"><div class="sub">本次没有产出候选方案。</div></div>';
+  return blocks.join('');
+}
+
+function renderErrors(data) {
+  let errs = data.errors || [];
+  if (typeof errs === 'string') errs = [errs];
+  if (!errs.length) return '';
+  const items = errs.map(e => {
+    if (typeof e === 'string') return `<div class="err-box"><pre>${escapeHtml(e)}</pre></div>`;
+    return `<div class="err-box"><b>${escapeHtml(e.stage || '')}</b><pre>${escapeHtml(e.message || '')}</pre>${e.tip ? `<div class="err-note">${e.tip}</div>` : ''}</div>`;
+  }).join('');
+  return `<div class="card"><div class="card-title"><span class="bar"></span>错误信息</div>${items}</div>`;
+}
+
+function sectionTitle(t, sub) {
+  return `<div class="section-title"><span class="bar"></span>${t}${sub ? ` <span class="sub">${sub}</span>` : ''}</div>`;
+}
+
+function renderDetail(data) {
+  const fw = pickFramework(data);
+  state.currentFw = fw;
+  const req = data.request || {};
+  document.getElementById('detail-title').textContent = `${req.model || '任务'} · ${fmtInt(req.num_devices)} 卡 · ${req.quantize || ''}`;
+  document.getElementById('detail-sub').textContent =
+    `${req.device || '—'} · 输入/输出 ${fmtInt(req.input_length)}/${fmtInt(req.output_length)} · TTFT ≤ ${fmtInt(req.ttft_limit)}ms · TPOT ≤ ${fmtInt(req.tpot_limit)}ms`;
+
+  const failed = data.status === 'failed' || len(data.errors);
+  const parts = [sectionTitle('一、推理策略推荐结论', 'by 部署形态')];
+  parts.push(failed ? renderErrors(data) : renderConclusion(data, fw));
+  if (!failed) {
+    parts.push(sectionTitle('二、分析过程', '各场景候选方案与排序'));
+    parts.push(renderAnalysis(data, fw));
+  }
+  parts.push(sectionTitle('三、任务信息'));
+  parts.push(renderMeta(data));
+  parts.push(sectionTitle('四、执行命令'));
+  parts.push(renderCommands(data) || '<div class="card"><div class="sub">无</div></div>');
+
+  document.getElementById('detail-body').innerHTML = parts.join('');
+  if (!failed && len(fw.disagg_variants)) selectVariant(0);
+}
+
+/* ============================================================
+ * 视图切换 / 面包屑 / 弹窗
+ * ============================================================ */
+let _pendingTimer = null;
+function stopPendingTimer() { if (_pendingTimer) { clearInterval(_pendingTimer); _pendingTimer = null; } }
+function showView(v) {
+  if (v !== 'detail') stopPendingTimer();
+  document.getElementById('view-list').classList.toggle('hide', v !== 'list');
+  document.getElementById('view-detail').classList.toggle('hide', v !== 'detail');
+}
+function setCrumb(a, b) { document.getElementById('crumb').innerHTML = `<b>${escapeHtml(a)}</b> / ${escapeHtml(b)}`; }
+function backToList() { loadList(); }
+function openModal() {
+  document.getElementById('mask').classList.add('show');
+  hideNfMsg('nf-error');
+  hideNfMsg('nf-preview');
+  fillFormOptions();
+}
+function closeModal() { document.getElementById('mask').classList.remove('show'); }
+
+/* ============================================================
+ * 新建任务：表单 -> POST /api/v1/tasks -> 轮询 -> 打开详情
+ * ============================================================ */
+const nf = (id) => document.getElementById(id);
+function hideNfMsg(id) { const el = nf(id); if (el) el.classList.add('hide'); }
+function showNfError(msg) {
+  const el = nf('nf-error');
+  el.innerHTML = escapeHtml(msg);
+  el.classList.remove('hide');
+}
+
+async function fillFormOptions() {
+  if (!await isApiMode()) {
+    nf('nf-hint').innerHTML =
+      '当前为<b>静态只读模式</b>（未检测到 infer-strategy-npu-server），无法提交任务。' +
+      '请先启动服务：<code>infer-strategy-npu-server --port 8000</code>，再从 <code>http://&lt;host&gt;:8000/</code> 打开本页。';
+    const btn = nf('nf-submit');
+    btn.disabled = true;
+    return;
+  }
+  try {
+    const [ms, ds] = await Promise.all([
+      fetch(`${API_BASE}/models`).then(r => r.json()),
+      fetch(`${API_BASE}/devices`).then(r => r.json()),
+    ]);
+    fillSelect(nf('nf-model'), (ms.data || []), '模型');
+    fillSelect(nf('nf-device'), (ds.data || []), '设备');
+  } catch (e) {
+    showNfError('拉取模型/设备清单失败: ' + e.message);
+  }
+}
+
+function fillSelect(sel, values, label) {
+  if (sel.options.length > 1) return; // 已填充过
+  sel.innerHTML = '';
+  if (!values.length) sel.innerHTML = `<option value="">（无${label}）</option>`;
+  values.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v;
+    sel.appendChild(o);
+  });
+}
+
+function buildPayload() {
+  const modes = [];
+  if (nf('nf-mode-agg').checked) modes.push('agg');
+  if (nf('nf-mode-disagg').checked) modes.push('disagg');
+  const num = (v) => { const s = String(v == null ? '' : v).trim(); return s === '' ? null : Number(s); };
+  const list = (v) => {
+    const arr = String(v || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+    return arr.length ? arr : null;
+  };
+  const payload = {
+    model: nf('nf-model').value,
+    device: nf('nf-device').value,
+    num_devices: num(nf('nf-num-devices').value),
+    quantize: nf('nf-quantize').value,
+    input_length: num(nf('nf-isl').value),
+    output_length: num(nf('nf-osl').value),
+    ttft_limit: num(nf('nf-ttft').value),
+    tpot_limit: num(nf('nf-tpot').value),
+    serving_modes: modes,
+    pd_ratio_sizes: list(nf('nf-pd-sizes').value),
+    tp_sizes: list(nf('nf-tp-sizes').value),
+    jobs: num(nf('nf-jobs').value),
+    top_n: num(nf('nf-top-n').value),
+    quantize_linear_action: nf('nf-q-linear').value || null,
+    quantize_attention_action: nf('nf-q-attn').value || null,
+    compile_model: !!nf('nf-compile').checked,
+  };
+  // 清掉 null，让服务端走默认值
+  Object.keys(payload).forEach(k => { if (payload[k] === null) delete payload[k]; });
+  return payload;
+}
+
+function validatePayload(p) {
+  if (!p.model) return '请选择模型';
+  if (!p.device) return '请选择设备';
+  if (!p.num_devices || p.num_devices < 1) return '卡数必须为 >= 1 的整数';
+  if (!p.serving_modes || !p.serving_modes.length) return '至少选择一种部署形态（agg / disagg）';
+  if (p.pd_ratio_sizes && p.pd_ratio_sizes.some(n => !(n > 0))) return 'PD 每实例卡数必须为正整数';
+  if (p.tp_sizes && p.tp_sizes.some(n => !(n > 0))) return 'TP 候选必须为正整数';
+  return null;
+}
+
+async function previewNewTask() {
+  hideNfMsg('nf-error');
+  const box = nf('nf-preview');
+  const p = buildPayload();
+  const err = validatePayload(p);
+  if (err) { showNfError(err); box.classList.add('hide'); return; }
+
+  box.classList.remove('hide');
+  box.innerHTML = '<div class="pv-title">预览中…</div>';
+  try {
+    const r = await fetch(`${API_BASE}/tasks/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    });
+    const j = await r.json();
+    if (!r.ok || j.code !== 200) {
+      showNfError((j.detail && j.detail.reason) || j.msg || ('预览失败 HTTP ' + r.status));
+      box.classList.add('hide');
+      return;
+    }
+    const d = j.data;
+    const grid = (d.pd_ratio_grid || []).map(c => c.label).join(' / ') || '（无可用组合）';
+    const warns = (d.warnings || []).map(w => `<li class="pv-warn">⚠ ${escapeHtml(w)}</li>`).join('');
+    const cmds = (d.commands || []).map(c => `<li>${escapeHtml(c)}</li>`).join('');
+    box.innerHTML =
+      `<div class="pv-title">框架：${escapeHtml(d.framework || '—')} · ${escapeHtml(d.reason || '')}</div>` +
+      `<div>PD 组合（${(d.pd_ratio_grid || []).length} 组）：${escapeHtml(grid)}</div>` +
+      `<div>待下发命令：${(d.commands || []).length} 条</div>` +
+      (warns ? `<ul>${warns}</ul>` : '') +
+      (cmds ? `<ul>${cmds}</ul>` : '');
+  } catch (e) {
+    showNfError('预览请求失败: ' + e.message);
+    box.classList.add('hide');
+  }
+}
+
+async function submitNewTask() {
+  hideNfMsg('nf-error');
+  const p = buildPayload();
+  const err = validatePayload(p);
+  if (err) { showNfError(err); return; }
+
+  const btn = nf('nf-submit');
+  btn.disabled = true;
+  const box = nf('nf-preview');
+  box.classList.remove('hide');
+  box.innerHTML = '<div class="pv-title"><span class="nf-running">提交中…</span></div>';
+
+  try {
+    const r = await fetch(`${API_BASE}/tasks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    });
+    const j = await r.json();
+    if (!r.ok || j.code !== 202) {
+      const detail = j.detail && j.detail.errors
+        ? (j.detail.errors || []).map(e => `${e.field}: ${e.reason}`).join('；')
+        : (j.msg || '');
+      throw new Error(detail || ('提交失败 HTTP ' + r.status));
+    }
+    const taskId = j.data.task_id;
+    const grid = (j.data.pd_ratio_grid || []).map(c => c.label).join(' / ');
+    const warns = (j.data.warnings || []).map(w => `<li class="pv-warn">⚠ ${escapeHtml(w)}</li>`).join('');
+    box.innerHTML =
+      `<div class="pv-title">已创建：${escapeHtml(taskId)}</div>` +
+      (grid ? `<div>PD 组合：${escapeHtml(grid)}</div>` : '') +
+      (warns ? `<ul>${warns}</ul>` : '') +
+      `<div class="nf-running" id="nf-poll">等待执行…</div>`;
+
+    await pollAndOpen(taskId);
+  } catch (e) {
+    showNfError(e.message);
+    box.classList.add('hide');
+    btn.disabled = false;
+  }
+}
+
+const TERMINAL = ['SUCCESS', 'FAILED', 'CANCELLED', 'TIMEOUT'];
+async function pollAndOpen(taskId) {
+  const pollEl = nf('nf-poll');
+  for (let i = 0; i < 720; i++) { // 最多约 1 小时（5s 一次）
+    await new Promise(r => setTimeout(r, 5000));
+    let j;
+    try {
+      const r = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, { cache: 'no-store' });
+      j = await r.json();
+    } catch (e) {
+      continue; // 网络抖动，下一轮再试
+    }
+    if (!j || j.code !== 200) continue;
+    const st = j.data && j.data.status;
+    const pg = (j.data && j.data.progress) || {};
+    if (pollEl) {
+      const stage = pg.label ? `${pg.label} (${pg.kind || ''})` : (pg.stage || '—');
+      pollEl.textContent = `状态 ${st} · ${stage} · ${pg.done || 0}/${pg.total || 0}（${pg.percent || 0}%）`;
+    }
+    if (TERMINAL.includes(st)) {
+      nf('nf-submit').disabled = false;
+      closeModal();
+      if (st === 'SUCCESS') {
+        await loadList();
+        await openDetail(encodeURIComponent(taskId));
+      } else {
+        await loadList();
+        const msg = (j.data && j.data.error) || ('任务' + st);
+        showNfError(String(msg));
+        document.getElementById('mask').classList.add('show');
+      }
+      return;
+    }
+  }
+  nf('nf-submit').disabled = false;
+  if (pollEl) pollEl.textContent = '轮询超时，请刷新任务记录查看';
+}
+
+document.getElementById('f-model').addEventListener('change', applyFilters);
+document.getElementById('f-status').addEventListener('change', applyFilters);
+document.getElementById('f-kw').addEventListener('input', applyFilters);
+
+/** 静态报告模式：HTML 里已内嵌 window.__REPORT_DATA__，不发任何请求。 */
+function bootReport(data) {
+  _apiMode = false;
+  state.currentId = (data && data.run_id) || '';
+  document.body.classList.add('report-mode');
+  const badge = document.getElementById('src-badge');
+  if (badge) badge.textContent = '静态报告（离线）';
+  showView('detail');
+  setCrumb('推理策略寻优', '任务详情');
+  try {
+    if (!data || !data.frameworks) { renderPending(data && data.run_id || '', data); return; }
+    renderDetail(data);
+  } catch (e) {
+    document.getElementById('detail-body').innerHTML = `<div class="err-box"><pre>${escapeHtml(e.message)}</pre></div>`;
+  }
+}
+
+(async () => {
+  if (window.__REPORT_DATA__) { bootReport(window.__REPORT_DATA__); return; }
+  const api = await isApiMode();
+  document.getElementById('src-badge').textContent = api ? '数据源: API' : `数据源: ${resultsBase()}（只读）`;
+  await loadList();
+})();
+
+</script>
+</body>
+</html>

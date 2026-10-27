@@ -77,6 +77,9 @@
                 <option value="">全部</option>
                 <option value="ok">成功</option>
                 <option value="failed">失败</option>
+                <option value="running">运行中</option>
+                <option value="cancelled">已取消</option>
+                <option value="timeout">超时</option>
               </select>
             </div>
             <div class="field">
@@ -110,7 +113,8 @@
             <h1 id="detail-title" style="font-size:18px;"></h1>
             <p id="detail-sub"></p>
           </div>
-          <div style="padding-top:4px;">
+          <div style="padding-top:4px;display:flex;gap:8px;">
+            <button class="btn-ghost" id="btn-report" onclick="openReport()">静态报告</button>
             <button class="btn-ghost" onclick="backToList()">← 返回任务记录</button>
           </div>
         </div>
@@ -178,7 +182,8 @@
       <div class="nf-grid" style="margin-top:12px;">
         <div class="field">
           <label>PD 每实例卡数（空格分隔）</label>
-          <input id="nf-pd-sizes" type="text" value="8" placeholder="8 16 32">
+          <input id="nf-pd-sizes" type="text" value="8" placeholder="8 16">
+          <span class="sub">组合数 = 该列表的笛卡尔积：填 <code>8</code> 只跑 P8D8 一组；填 <code>8 16</code> 跑 P8D8 / P8D16 / P16D8 / P16D16 四组（每组约 3 分钟）</span>
         </div>
         <div class="field">
           <label>TP 候选（空格分隔，留空=自动）</label>

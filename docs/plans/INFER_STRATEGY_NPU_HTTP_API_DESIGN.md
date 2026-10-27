@@ -110,7 +110,9 @@ task_id = {yyyyMMdd-HHmmss}-{slug(model)}-{slug(device)}-{num_devices}-{short8}
   "pid": 12345,
   "error": null,
   "artifacts": { "run_dir": ".../20261020-143012-...-a1b2c3d4",
-                 "run_json": ".../run.json", "summary": ".../summary.txt" }
+                 "run_json": ".../run.json", "summary": ".../summary.txt",
+                 "report": ".../report.html",
+                 "report_url": "/api/v1/tasks/20261020-143012-...-a1b2c3d4/report" }
 }
 ```
 
@@ -165,6 +167,8 @@ Base path：`/api/v1`，全部 `application/json`。
 | `GET` | `/api/v1/tasks/{task_id}/result` | 完整结果（`run.json`，即 `UnifiedRunResult`） | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/pd` | **PD 分离专用视图**：跨组合全局排序候选 + 每组摘要 | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/summary` | 人类可读摘要（`summary.txt`） | `200` |
+| `GET` | `/api/v1/tasks/{task_id}/report` | **单文件静态 HTML 报告**（CSS/JS/数据全内联，`?download=1` 走附件） | `200` |
+| `GET` | `/results/{path}` | out_dir 只读静态文件（`index.json` / `run.json` / `report.html`），禁止 `..` | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/logs` | 日志文件列表 | `200` |
 | `GET` | `/api/v1/tasks/{task_id}/logs/{name}` | 日志内容（支持 `?tail=200`） | `200` |
 | `POST` | `/api/v1/tasks/{task_id}/cancel` | 取消任务 | `202` |

@@ -88,6 +88,15 @@ def _run_task(out_dir: str, task_id: str, request_dict: dict) -> None:
         {"status": status, "error": error, "finished_at": _now()},
     )
 
+    # 静态报告：任务成功即产出 <run_dir>/report.html（单文件，可直接分发给三方平台）
+    if status == "SUCCESS":
+        try:
+            from infer_strategy_npu.reporting import write_report_from_run_json
+
+            write_report_from_run_json(run_dir / "run.json")
+        except Exception:  # 报告失败不影响主流程
+            pass
+
 
 # ------------------------------------------------------------------ 任务记录
 

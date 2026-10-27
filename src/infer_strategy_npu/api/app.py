@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from infer_strategy_npu import __version__
@@ -29,6 +29,7 @@ from infer_strategy_npu.api.tasks import InvalidState, QueueFull, TaskManager
 from infer_strategy_npu.models import resolve_model, supported_models
 
 API = "/api/v1"
+RESULTS_URL = "/results"  # out_dir 的静态访问前缀（--out-dir 任意目录都能被前端读到）
 
 app = FastAPI(
     title="infer-strategy-npu",
@@ -75,6 +76,8 @@ def _task_view(rec, *, include_raw: bool = True, include_variant_candidates: boo
             "run_dir": str(manager.out_dir / rec.task_id),
             "run_json": str(manager.out_dir / rec.task_id / "run.json"),
             "summary": str(manager.out_dir / rec.task_id / "summary.txt"),
+            "report": str(manager.out_dir / rec.task_id / "report.html"),
+            "report_url": f"{API}/tasks/{rec.task_id}/report",
         },
     }
 
@@ -217,9 +220,24 @@ def health() -> dict:
             "max_concurrent": manager.max_concurrent,
             "out_dir": str(manager.out_dir),
             "ui": UI_DIR.is_dir(),  # 是否由本服务托管静态界面
+            "results_url": RESULTS_URL,  # out_dir 的静态访问前缀（前端据此读 index.json / run.json）
         },
         "服务正常",
     )
+
+
+@app.get(f"{RESULTS_URL}/{{path:path}}", summary="结果目录静态文件（index.json / run.json / report.html）", include_in_schema=False)
+def results_file(path: str) -> Response:
+    """把 out_dir（``--out-dir``，可能是 _verify_results 之类）以只读方式暴露。
+
+    这样无论结果落在哪个目录，前端都能按同一前缀读取，不必再靠相对路径猜。
+    """
+    if ".." in path or path.startswith("/") or "\\.." in path:
+        raise HTTPException(404, detail=envelope(404, {"path": path}))
+    target = (manager.out_dir / path).resolve()
+    if manager.out_dir.resolve() not in target.parents or not target.is_file():
+        raise HTTPException(404, detail=envelope(404, {"path": path}))
+    return FileResponse(str(target))
 
 
 @app.get(f"{API}/models", summary="支持的模型")
@@ -341,6 +359,36 @@ def get_pd(
     if rec is None:
         raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
     return envelope(200, _pd_view(manager.result(task_id), limit=limit, include_raw=include_raw))
+
+
+@app.get(f"{API}/tasks/{{task_id}}/report", summary="静态 HTML 报告（单文件，可直接分发）", response_class=HTMLResponse)
+def get_report(
+    task_id: str,
+    download: bool = Query(False, description="true 时以附件形式下载 report.html"),
+) -> Response:
+    """返回任务详情的单文件静态 HTML。
+
+    - 任务成功时已自动生成 ``<run_dir>/report.html``，这里直接回传；
+    - 文件缺失但 run.json 存在时现场渲染（兼容旧任务）；
+    - ``?download=1`` 走附件下载，便于三方平台归档。
+    """
+    rec = manager.get(task_id)
+    if rec is None:
+        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
+
+    run_dir = manager.out_dir / task_id
+    target = run_dir / "report.html"
+    if not target.is_file():
+        from infer_strategy_npu.reporting import write_report_from_run_json
+
+        generated = write_report_from_run_json(run_dir / "run.json")
+        if generated is None:
+            raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "reason": "run.json not found"}))
+        target = generated
+
+    if download:
+        return FileResponse(str(target), media_type="text/html", filename=f"{task_id}-report.html")
+    return HTMLResponse(target.read_text(encoding="utf-8"))
 
 
 @app.get(f"{API}/tasks/{{task_id}}/summary", summary="人类可读摘要")
