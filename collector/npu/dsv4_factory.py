@@ -84,6 +84,33 @@ PRO_DEFAULTS = dict(
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LOCAL_MODEL_CONFIGS_DIR = _PROJECT_ROOT / "model_configs"
 
+# 950DT (vllm-ascend A5) 的稀疏注意力 kernel 只接受这两个 q_head_num（见
+# csrc/attention/kv_quant_sparse_attn_sharedkv_metadata/op_kernel_aicpu/
+# kv_quant_sparse_attn_sharedkv_metadata_aicpu.cpp::CheckSingleParam：
+#   "num_heads_q should be 64 or 128, but got %d"
+# 与同目录 sharedkv 前向算子的 CheckSingleParaNumHeads 一致）。
+# 910B（A2/A3）用的是 CANN 内置 npu_sparse_attn_sharedkv_metadata，没有这条限制。
+A5_SPARSE_NUM_HEADS = (64, 128)
+
+
+def _is_a5_device() -> bool:
+    """True when this process runs on Ascend 950 (vllm-ascend ``A5``).
+
+    A5 与 910B（A2/A3）在 DSv4 通路上有多处分叉，采集器必须按设备分别处理：
+      * indexer k_cache 是 ``(k, scale, full)`` 三元组，而不是 ``(k, scale)``；
+      * indexer k_cache 的 dtype 是 fp8_e4m3fn、scale 是 fp32；
+      * 稀疏注意力 metadata / 前向算子是 ``kv_quant`` 变体；
+      * o_proj 走 FP8 ``npu_transpose_quant_batchmatmul``。
+    """
+    try:
+        from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
+    except Exception:  # pragma: no cover - vllm_ascend 不可用时按 910B 处理
+        return False
+    try:
+        return get_ascend_device_type() in {AscendDeviceType.A5}
+    except Exception:  # pragma: no cover
+        return False
+
 
 @dataclass(frozen=True)
 class Dsv4ModuleSpec:
@@ -399,6 +426,69 @@ def _reshape_dsv4_woa_weight_3d(module) -> None:
     )
 
 
+def _ensure_dsv4_a5_o_proj_scale(module) -> None:
+    """Give A5's FP8 o_proj path the ``wo_a.weight_scale`` it dereferences.
+
+    On Ascend950 ``AscendDSAImpl._forward_o_proj`` (dsa_v1.py l.1563-1577) takes
+    a device-specific branch::
+
+        o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o, fp8_e4m3fn)
+        o = torch_npu.npu_transpose_quant_batchmatmul(
+            o, self.wo_a.weight, x2_scale=self.wo_a.weight_scale.view(e8m0), ...)
+
+    In production both tensors come from the FP8 quant method
+    (``vllm_ascend/quantization/methods/fp8.py::process_weights_after_loading``),
+    which rewrites ``wo_a.weight`` into exactly the 3-D layout
+    ``_reshape_dsv4_woa_weight_3d`` already produces and adds a per-32-element
+    e8m0 scale of shape ``[groups, gh // 64, o_lora, 2]`` (uint8).
+
+    The collector builds the module with ``quant_config = None`` (bf16
+    baseline) and never runs ``load_weights``, so ``wo_a`` has no
+    ``weight_scale`` at all and the A5 branch dies with ``AttributeError``.
+    Synthesize an all-ones scale plus an fp8 view of the weight: the sweep only
+    measures latency, and it is the shapes/dtypes that pin the kernel's cost.
+    """
+    if not _is_a5_device():
+        return
+    wo_a = getattr(getattr(module, "dsa_attn", None), "wo_a", None)
+    if wo_a is None or hasattr(wo_a, "weight_scale"):
+        return
+    weight = getattr(wo_a, "weight", None)
+    if weight is None or weight.dim() != 3:
+        return
+    groups, gh, o_lora = weight.shape
+    if gh % 64:
+        logger.warning(
+            "A5 o_proj: wo_a.weight %s has a group dim not divisible by 64; "
+            "cannot synthesize an e8m0 weight_scale",
+            tuple(weight.shape),
+        )
+        return
+    try:
+        wo_a.weight.data = weight.to(torch.float8_e4m3fn)
+        # e8m0 exponent bias: 127 == scale 1.0
+        scale = torch.full(
+            (groups, gh // 64, o_lora, 2), 127, dtype=torch.uint8, device=weight.device
+        )
+    except Exception:
+        logger.warning(
+            "A5 o_proj: could not synthesize an fp8 wo_a / e8m0 weight_scale "
+            "(shape %s); _forward_o_proj will fail on this device",
+            tuple(weight.shape), exc_info=True,
+        )
+        return
+    wo_a.weight_scale = scale
+    logger.info(
+        "A5 o_proj: vllm-ascend on 950DT only implements the FP8 o_proj path "
+        "(npu_transpose_quant_batchmatmul), which needs wo_a.weight_scale; the "
+        "unquantized module has none, so an fp8 wo_a.weight + e8m0 weight_scale "
+        "%s was synthesized. This does NOT change the reported dtype columns "
+        "(they stay at the --mla-dtype/--kv-cache-dtype/--gemm-type value); "
+        "only the kernel's operand shapes/dtypes are pinned.",
+        tuple(scale.shape),
+    )
+
+
 def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     """Instantiate vllm-ascend's DSv4 attention module.
 
@@ -523,6 +613,7 @@ def _build_framework_module(spec: Dsv4ModuleSpec, device: str):
     module.requires_grad_(False)
 
     _reshape_dsv4_woa_weight_3d(module)
+    _ensure_dsv4_a5_o_proj_scale(module)
 
     # Hard guard: if the head geometry did not take effect, every num_heads in
     # the sweep measures the same module and the whole table becomes a lie.
@@ -638,6 +729,18 @@ def _alloc_dsv4_layer_cache(kv_spec, num_blocks, device):
     indexing works; every other layer gets a single 4-D tensor. The DSv4
     binding wraps each buffer in a 1-element list (model_runner_v1 l.3937-3948),
     which ``unfold_kvcache`` unwraps.
+
+    On A5 (950DT) the indexer cache is a **3**-tuple ``(k, scale, full)``:
+    ``ops/dsa.py::_build_kv_cache`` reads ``kv_cache[0][2]`` as
+    ``indexer_full_cache`` (and passes 7 entries to the impl). Allocating only
+    two tensors makes every CSA spec die with
+    ``IndexError: tuple index out of range``. ``full`` mirrors
+    model_runner_v1 l.4405-4419: same dtype as ``k``, last dim
+    ``head_size + scale_dim * sizeof(scale_dtype)``. Production makes the three
+    tensors *overlap* one raw buffer (``_adjust_kv_layout(overlap_full_kv_cache
+    =True)``); separate buffers have identical shapes/traffic for timing, so we
+    keep them independent (the fused A5 scatter writes ``full``, the indexer
+    reads ``k``/``scale`` — both stay zero, which is fine for a latency sweep).
     """
     from vllm_ascend.attention.dsa_v1 import AscendDSABackend
 
@@ -651,6 +754,15 @@ def _alloc_dsv4_layer_cache(kv_spec, num_blocks, device):
         )
         k = torch.zeros(shape, dtype=kv_spec.dtype, device=device)
         scale = torch.zeros(scale_shape, dtype=kv_spec.scale_dtype, device=device)
+        if _is_a5_device():
+            from vllm.utils.torch_utils import get_dtype_size
+
+            full_dim = kv_spec.head_size + scale_dim * get_dtype_size(kv_spec.scale_dtype)
+            full_shape = AscendDSABackend.get_kv_cache_shape(
+                num_blocks, kv_spec.block_size, kv_spec.num_kv_heads, full_dim
+            )
+            full = torch.zeros(full_shape, dtype=kv_spec.dtype, device=device)
+            return (k, scale, full)
         return (k, scale)
     return torch.zeros(shape, dtype=kv_spec.dtype, device=device)
 

@@ -2,7 +2,7 @@
 # Base: vllm-ascend official image, pinned to a release that supports
 # deepseek-ai/DeepSeek-V4-Pro (CANN 8.5+ / torch-npu / vllm-ascend).
 # Usage on 910B: see README.md "Docker Image" section.
-FROM quay.io/ascend/vllm-ascend:v0.23.0.post1
+FROM quay.io/ascend/vllm-ascend:v0.23.0.post1-a5
 
 WORKDIR /workspace
 

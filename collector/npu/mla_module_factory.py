@@ -462,18 +462,39 @@ def _setup_rope_caches(vllm_config, device: str) -> None:
         print(f"[WARN] cos/sin cache setup failed: {type(e).__name__}: {e}")
 
 
+_TRITON_PROPS_ATTEMPTED = False
+
+
 def _init_triton_device_props() -> None:
     """Populate module-level _NUM_AICORE / _NUM_VECTORCORE counters.
 
     init_device_properties_triton fills the counters used by triton-based
     RoPE etc. The worker normally invokes it (worker.py:299);
     AIConfigurator bypasses the worker so we trigger it ourselves.
+
+    Attempted **once per process**. On images where triton's Ascend backend
+    cannot build its ``npu_utils`` helper -- e.g. ``/usr/bin/ld: cannot find
+    /lib64/libm.so.6`` -> ``clang: error: linker command failed`` -- the call
+    raises only *after* running a full clang++ subprocess. Without this guard
+    every spec re-runs that compile: the 950DT sweep measured ~6 s of pure
+    overhead per point (96 specs ≈ 10 min) and looks hung on the first few
+    points. The counters are process-global, so a single attempt is enough;
+    when it fails the triton kernels simply stay on their fallback and the
+    measurement is unaffected.
     """
+    global _TRITON_PROPS_ATTEMPTED
+    if _TRITON_PROPS_ATTEMPTED:
+        return
+    _TRITON_PROPS_ATTEMPTED = True
     try:
         from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
+
         init_device_properties_triton()
     except Exception as e:
-        print(f"[WARN] init_device_properties_triton failed: {type(e).__name__}: {e}")
+        print(
+            f"[WARN] init_device_properties_triton failed: {type(e).__name__}: {e} "
+            "(triton device props unavailable; not retried for later specs)"
+        )
 
 
 def _build_attention_module(

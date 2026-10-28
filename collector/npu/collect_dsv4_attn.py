@@ -36,12 +36,14 @@ except ImportError:
 
 from bench_engine import benchmark_npu, describe_mode
 from dsv4_factory import (
+    A5_SPARSE_NUM_HEADS,
     CSA,
     HCA,
     OP_CONTEXT,
     OP_GENERATION,
     PRO_DEFAULTS,
     Dsv4ModuleSpec,
+    _is_a5_device,
     _spec_key,
     create_dsv4_module_func,
 )
@@ -222,10 +224,23 @@ def run_benchmark(
                 errors += 1
                 continue
             finally:
+                # NPU kernels report failures asynchronously: the host-side
+                # call returns fine and the error only shows up at the next
+                # stream sync. Silently swallowing it here used to hide the
+                # *real* first failure, so every later spec was then blamed for
+                # "ACL stream synchronize failed, error code:507018" and the
+                # run died in torch.npu.empty_cache() with no useful context.
+                # Log it loudly (the failing spec above is the suspect) and
+                # keep the sweep going.
                 try:
                     torch.npu.synchronize()
-                except RuntimeError:
-                    pass
+                except RuntimeError as e:
+                    logger.error(
+                        "NPU synchronize failed after %s b=%d s=%d heads=%d: %s "
+                        "-- the device is now in an error state; every later "
+                        "spec will fail for THIS reason (507018), not its own.",
+                        spec.attn_kind, spec.batch, spec.seq_len, spec.num_heads, e,
+                    )
                 # Release the vLLM forward context kept open by the framework
                 # path (the reference path has no such closer).
                 close = getattr(forward_fn, "close", None)
@@ -234,7 +249,10 @@ def run_benchmark(
                         close()
                     except Exception:
                         logger.debug("closing forward context failed", exc_info=True)
-                torch.npu.empty_cache()
+                try:
+                    torch.npu.empty_cache()
+                except RuntimeError as e:
+                    logger.error("npu empty_cache failed: %s", e)
 
             completed.add(key)
             if len(completed) % 5 == 0:
@@ -314,12 +332,31 @@ def parse_args() -> argparse.Namespace:
 
 
 def _validate_num_heads_list(num_heads_list: list[int]) -> list[int]:
-    """Drop head counts the Ascend 910B attention kernel cannot run.
+    """Drop head counts the Ascend attention kernels cannot run.
 
-    The SparseAttnSharedkv kernel requires ``q_head_num`` to be a multiple of
-    4, so ``num_heads=2`` (i.e. tp=64) fails at the tiling stage
-    ("head num should be multiple of 4, but got 2"). Warn and skip those so a
-    full sweep does not abort on every such point.
+    910B (A2/A3)
+        The SparseAttnSharedkv kernel requires ``q_head_num`` to be a multiple
+        of 4, so ``num_heads=2`` (i.e. tp=64) fails at the tiling stage
+        ("head num should be multiple of 4, but got 2").
+
+    950DT (A5)
+        The kv-quant sparse-attention metadata / forward kernels hard-check the
+        query head count and accept **only 64 or 128**
+        (``KvQuantSparseAttnSharedkvMetadataCpuKernel::CheckSingleParam`` ->
+        "num_heads_q should be 64 or 128"; the forward op's
+        ``CheckSingleParaNumHeads`` has the same check). The failure is
+        *asynchronous*: the host-side build looks fine and the error only
+        surfaces at the next stream sync as
+
+            E39999 ... kernelName=KvQuantSparseAttnSharedkvMetadata,
+            errorCode=0x2a ... rtStreamSynchronize execution failed
+
+        which then poisons the device for every later spec (all of them report
+        "ACL stream synchronize failed, error code:507018"). So these points
+        must never be queued on A5 -- drop them up front.
+
+    Warn and skip the unsupported counts so a full sweep does not abort on
+    every such point.
     """
     kept, dropped = [], []
     for h in num_heads_list:
@@ -334,6 +371,20 @@ def _validate_num_heads_list(num_heads_list: list[int]) -> list[int]:
             "unsupported). Collecting only %s.",
             dropped, kept,
         )
+
+    if _is_a5_device():
+        a5_kept = [h for h in kept if h in A5_SPARSE_NUM_HEADS]
+        a5_dropped = [h for h in kept if h not in A5_SPARSE_NUM_HEADS]
+        if a5_dropped:
+            logger.warning(
+                "Dropping num_heads=%s: on Ascend 950DT the kv-quant sparse "
+                "attention kernels only accept num_heads_q in %s "
+                "(num_heads = num_attention_heads // tp_size, so only tp=1/2 "
+                "are measurable). Those tp configs fall back to SOL.",
+                a5_dropped, list(A5_SPARSE_NUM_HEADS),
+            )
+        return a5_kept
+
     return kept
 
 
