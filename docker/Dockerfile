@@ -10,6 +10,7 @@ COPY collector/ ./collector/
 COPY tools/ ./tools/
 COPY model_configs/ ./model_configs/
 COPY src/ ./src/
+COPY ui/ ./ui/
 COPY pyproject.toml README.md ./
 
 # Install the search-engine package (registers the `aic-npu` CLI).

@@ -18,6 +18,7 @@ COPY collector/ ./collector/
 COPY tools/ ./tools/
 COPY model_configs/ ./model_configs/
 COPY src/ ./src/
+COPY ui/ ./ui/
 COPY pyproject.toml README.md ./
 COPY scripts/ ./scripts/
 
