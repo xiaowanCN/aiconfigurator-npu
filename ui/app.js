@@ -227,6 +227,7 @@ async function renderPending(id, data) {
   }
 
   const done = TERMINAL.includes(status);
+  const isReport = document.body.classList.contains('report-mode');
   const stage = pg.label ? `${pg.label}（${pg.kind || ''}）` : (pg.stage || '—');
   const bar = pg.total
     ? `<div class="nf-running">进度：${pg.done || 0} / ${pg.total}（${pg.percent || 0}%）</div>`
@@ -243,8 +244,8 @@ async function renderPending(id, data) {
       ${bar}
       <div class="sub" style="margin-top:12px">${tip}</div>
       <div class="form-foot">
-        <button class="btn-cancel" onclick="backToList()">← 返回任务记录</button>
-        <button class="btn-cancel" onclick="openDetail('${encodeURIComponent(id)}')">刷新</button>
+        ${isReport ? '' : `<button class="btn-cancel" onclick="backToList()">← 返回任务记录</button>
+        <button class="btn-cancel" onclick="openDetail('${encodeURIComponent(id)}')">刷新</button>`}
       </div>
     </div>`;
 
@@ -677,7 +678,7 @@ function renderDetail(data) {
   const fw = pickFramework(data);
   state.currentFw = fw;
   const req = data.request || {};
-  document.getElementById('detail-title').textContent = `${req.model || '任务'} · ${fmtInt(req.num_devices)} 卡 · ${req.quantize || ''}`;
+  document.getElementById('detail-title').textContent = `${req.model || '任务'} · ${fmtInt(req.num_devices)} 卡`;
   document.getElementById('detail-sub').textContent =
     `${req.device || '—'} · 输入/输出 ${fmtInt(req.input_length)}/${fmtInt(req.output_length)} · TTFT ≤ ${fmtInt(req.ttft_limit)}ms · TPOT ≤ ${fmtInt(req.tpot_limit)}ms`;
 
@@ -924,6 +925,9 @@ function bootReport(data) {
   _apiMode = false;
   state.currentId = (data && data.run_id) || '';
   document.body.classList.add('report-mode');
+  // 静态报告没有「任务记录」列表可返回，移除详情页右上角的按钮组（静态报告 / 返回任务记录）
+  const head = document.querySelector('#view-detail .page-head');
+  if (head) head.querySelectorAll('button').forEach(b => b.remove());
   const badge = document.getElementById('src-badge');
   if (badge) badge.textContent = '静态报告（离线）';
   showView('detail');

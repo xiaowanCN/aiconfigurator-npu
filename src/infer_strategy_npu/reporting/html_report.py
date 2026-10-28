@@ -90,6 +90,14 @@ def render_report_html(result: dict, *, base: Path | None = None, title: str | N
                 count=1,
                 flags=re.S,
             )
+        # 静态报告没有「任务记录」列表可返回，直接剔除右上角的按钮组
+        # （静态报告 / 返回任务记录），避免它们出现在产物里（实时界面仍保留）。
+        html = re.sub(
+            r'<div[^>]*>\s*<button[^>]*id="btn-report"[\s\S]*?</div>',
+            "",
+            html,
+            count=1,
+        )
         return html
 
     # ui/ 缺失（如 wheel 安装）：退化成最小可打开页面 + 原始 JSON
