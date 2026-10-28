@@ -88,6 +88,11 @@ class TaskCreateRequest(BaseModel):
     max_search_combinations: int | None = None
     compile_model: bool = False
 
+    # msmodeling 透传（补充）：batch-range / max-batched-tokens / 通用逃生舱
+    batch_range: list[int] | None = Field(None, description="msmodeling --batch-range：[min max] 或 [max]；不传则交 msmodeling 自适应")
+    max_batched_tokens: int | None = Field(None, gt=0, description="msmodeling --max-batched-tokens：单 DP 副本 token 预算；不传则自适应（默认 4*input_length，OOM 降级）")
+    extra_msmodeling_args: list[str] | None = Field(None, description="原样透传给 msmodeling 的额外 argv token（逃生舱，优先级最高，可覆盖其它参数）")
+
     # PD 分离搜索：每实例卡数 P/D 的枚举空间
     pd_ratio_sizes: list[int] = Field(
         default=list(PD_RATIO_SIZES_DEFAULT),

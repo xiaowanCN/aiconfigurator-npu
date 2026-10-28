@@ -359,6 +359,16 @@ class RecommendRequest:
     取 P×D 笛卡尔积，如 ``[8, 16, 32]`` 展开为 9 个组合；
     ``P + D > num_devices`` 的组合会被剔除，全部不可行时 PD 分离无结果（不报错）。
     """
+    # msmodeling 透传（补充）：batch-range / max-batched-tokens / 通用逃生舱
+    batch_range: list[int] | None = None
+    """msmodeling --batch-range：批大小搜索范围 ``[min max]`` 或 ``[max]``；为空交给 msmodeling 自适应（默认从 1 起、无上限）。"""
+
+    max_batched_tokens: int | None = None
+    """msmodeling --max-batched-tokens：单个 DP 副本在 Prefill/混合步的 token 预算；为空交给 msmodeling 自适应（默认 4*input_length，OOM 时降级 2x/1x）。"""
+
+    extra_msmodeling_args: list[str] | None = None
+    """原样透传给 msmodeling 的额外 argv token（逃生舱），仅对分发到 msmodeling 的请求生效。优先级最高，可与结构化字段同名下覆盖。"""
+
     dry_run: bool = False
 
     def wants_serving_mode(self, mode: str) -> bool:

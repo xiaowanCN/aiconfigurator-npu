@@ -51,6 +51,9 @@ infer-strategy-npu -recommend
     [--tp-sizes N [N ...]]       # msmodeling TP 候选；缺省不下发，由 msmodeling 自行推导
     [--compile]                  # 仅对 msmodeling 生效；不设置则为 False（默认）
     [--pd-ratio-sizes N [N ...]] # PD 分离每实例卡数 P/D 的枚举空间（默认 8，见 §3.1）
+    [--batch-range N [N ...]]    # msmodeling 批大小搜索范围 [min max]/[max]（缺省不下发，交给 msmodeling 自适应）
+    [--max-batched-tokens N]     # msmodeling 单 DP 副本 Prefill/混合步 token 预算（缺省不下发，自适应 4*input_length）
+    [--extra-msmodeling-args TOKEN ...]  # 透传逃生舱：捕获其后所有 token（含 - 开头 flag），必须放最后
     [--dry-run]                  # 只打印将要下发的两套框架命令，不执行
     [--quiet] [--verbose]
 ```
@@ -82,6 +85,14 @@ infer-strategy-npu -recommend
 - `--compile`：开关型（set 语义），**仅对分发到 msmodeling 的请求生效**，aic-npu 分支忽略。
   **不设置 = False（默认）**；显式加 `--compile` = True。为 True 时向 msmodeling 子任务命令追加
   `--compile`（开启 FX 图改写/融合，更准但更慢）。
+- `--batch-range` / `--max-batched-tokens`：msmodeling 的 **Service Options**，**仅在显式传入时下发**，
+  缺省（`None`）完全不下发，由 msmodeling 自适应：`--max-batched-tokens` 默认 `4*input_length`（OOM 时降级 2x/1x），
+  `--batch-range` 默认从 `1` 起、无上限。**仅对分发到 msmodeling 的请求生效**，aic-npu 分支忽略。
+- `--extra-msmodeling-args`（透传逃生舱）：用 `nargs=argparse.REMAINDER` 捕获其后**所有** token（包含以 `-` 开头的 flag、
+  以及含空格的值，如 `--pp-layer-partitions '[[31,30]]'` 作为单个 token 传入），原样追加到 msmodeling argv **末尾**。
+  **必须放在命令行最后**（其后不能再有其它 wrapper 选项）。优先级最高——同名参数出现在后、按 argparse last-wins 覆盖前面结构化字段。
+  仅做最小清洗（拒绝空串与含换行/NUL 的 token，防注入），**不做** msmodeling 参数语义校验（未知参数由 msmodeling 自行报错）。
+  仅对 msmodeling 分支生效，aic-npu 分支忽略。
 
 ---
 

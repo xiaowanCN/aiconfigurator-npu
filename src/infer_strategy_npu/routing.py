@@ -205,7 +205,32 @@ def ms_extra_flags(request: RecommendRequest, mode: str, device_count: int | Non
     if request.max_search_combinations is not None:
         extra += ["--max-search-combinations", request.max_search_combinations]
     extra += tp_size_flags(request, device_count)
+    if request.max_batched_tokens is not None:
+        extra += ["--max-batched-tokens", request.max_batched_tokens]
+    if request.batch_range:
+        extra += ["--batch-range", *request.batch_range]
+    extra += _sanitize_extra_args(request.extra_msmodeling_args)
     return extra
+
+
+def _sanitize_extra_args(tokens: Sequence[str] | None) -> list[str]:
+    """原样透传的兜底清洗：丢弃 None，拒绝空串与含换行/NUL 的 token；不做语义校验。
+
+    仅防注入，放行任意 msmodeling 已支持的参数（未知参数由 msmodeling 的 arg_parse 自行报错）。
+    """
+    if not tokens:
+        return []
+    cleaned: list[str] = []
+    for tok in tokens:
+        if tok is None:
+            continue
+        s = str(tok)
+        if not s:
+            raise ValueError("extra_msmodeling_args 含空 token")
+        if "\n" in s or "\r" in s or "\x00" in s:
+            raise ValueError(f"extra_msmodeling_args 含非法字符的 token：{s!r}")
+        cleaned.append(s)
+    return cleaned
 
 
 def slo_flags(request: RecommendRequest, mode: str) -> list[str]:

@@ -347,8 +347,7 @@ function metricsMini(b) {
     ['用卡', b.num_devices == null ? '—' : fmtInt(b.num_devices), '卡'],
   ];
   return `<div class="metrics-mini">${items.map(([k, v, u]) =>
-    `<span class="mi"><i>${k}</i>${v}${u ? `<em>${u}</em>` : ''}</span>`).join('')}</div>
-    <div class="sub">指标为建模估算值，仅作辅助参考；策略取舍以并行配置为准。</div>`;
+    `<span class="mi"><i>${k}</i>${v}${u ? `<em>${u}</em>` : ''}</span>`).join('')}</div>`;
 }
 
 function conclCard(mode, m, isBest) {

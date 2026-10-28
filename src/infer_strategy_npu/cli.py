@@ -242,6 +242,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    ms.add_argument(
+        "--batch-range",
+        type=positive_int,
+        nargs="+",
+        metavar="N",
+        default=None,
+        help="msmodeling --batch-range：批大小搜索范围 [min max] / [max]；不传交给 msmodeling 自适应",
+    )
+    ms.add_argument(
+        "--max-batched-tokens",
+        type=positive_int,
+        default=None,
+        help="msmodeling --max-batched-tokens：单 DP 副本 Prefill/混合步的 token 预算；不传自适应（默认 4*input_length）",
+    )
+    ms.add_argument(
+        "--extra-msmodeling-args",
+        nargs=argparse.REMAINDER,
+        metavar="TOKEN",
+        default=[],
+        help=(
+            "原样透传给 msmodeling 的额外参数 token（逃生舱，可覆盖其它参数），"
+            "捕获其后所有 token（含以 - 开头的 flag），故必须放在命令行最后。"
+            "例：... --extra-msmodeling-args --pp-sizes 8 --prefix-cache-hit-rate 0.5"
+        ),
+    )
+
     out = parser.add_argument_group("output")
     out.add_argument("--format", choices=("table", "json"), default="table", help="终端输出格式（默认 table）")
     out.add_argument("--dry-run", action="store_true", help="只打印将要下发的框架命令，不实际执行")
@@ -302,6 +328,9 @@ def main(argv: list[str] | None = None) -> int:
         jobs=args.jobs,
         max_search_combinations=args.max_search_combinations,
         compile_model=args.compile,
+        batch_range=args.batch_range,
+        max_batched_tokens=args.max_batched_tokens,
+        extra_msmodeling_args=(args.extra_msmodeling_args or None),
         serving_modes=_dedupe(args.serving_modes),
         pd_ratio_sizes=_dedupe(args.pd_ratio_sizes),
         dry_run=args.dry_run,

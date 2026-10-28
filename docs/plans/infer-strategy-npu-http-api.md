@@ -148,8 +148,16 @@ uvicorn infer_strategy_npu.api.app:app --host 0.0.0.0 --port 8000
 | `speculative_method` / `num_speculative_tokens` / `acceptance_length` / `num_draft_layers` | — | `null` | | 投机解码（msmodeling） |
 | `max_search_combinations` | int | `null` | | 搜索组合上限 |
 | `compile_model` | bool | `false` | | 图编译，更准但更慢 |
+| `batch_range` | int[] | `null` | | msmodeling `--batch-range`：批大小搜索范围 `[min max]` 或 `[max]`；不传则交给 msmodeling 自适应 |
+| `max_batched_tokens` | int | `null` | | msmodeling `--max-batched-tokens`：单 DP 副本 Prefill/混合步的 token 预算；不传则自适应（默认 `4*input_length`，OOM 降级 2x/1x） |
+| `extra_msmodeling_args` | string[] | `null` | | 原样透传给 msmodeling 的额外 argv token（逃生舱，优先级最高，可覆盖其它参数） |
 | `client_token` | string | `null` | | 幂等键（当前仅记录，不去重） |
 
+> `batch_range` / `max_batched_tokens`：msmodeling 专用，**缺省（`null`）时完全不下发**，由 msmodeling 自适应；
+> 仅在显式传入时追加 `--batch-range` / `--max-batched-tokens`。`extra_msmodeling_args` 是通用透传逃生舱，
+> 原样追加到 msmodeling 命令**末尾**（最后出现者生效，可覆盖上面的结构化字段）。三者为 `null` 时都会被
+> `to_request_dict()` 的 `exclude_none` 剔除，不会进入请求体。
+>
 > `pd_ratio_grid` / `pd_skipped` 是服务端回填的只读字段（`exclude=True`），**只能在响应里读**，
 > 出现在请求体会被当作未知字段拒绝。
 
@@ -168,7 +176,10 @@ curl -X POST http://host:8000/api/v1/tasks -H 'Content-Type: application/json' -
   "ttft_limit": 2000,
   "tpot_limit": 80,
   "serving_modes": ["agg", "disagg"],
-  "pd_ratio_sizes": [8, 16]
+  "pd_ratio_sizes": [8, 16],
+  "batch_range": [4, 256],
+  "max_batched_tokens": 4096,
+  "extra_msmodeling_args": ["--pp-sizes", "8", "--prefix-cache-hit-rate", "0.5"]
 }'
 ```
 
