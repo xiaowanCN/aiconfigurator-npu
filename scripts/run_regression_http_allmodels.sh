@@ -23,17 +23,18 @@
 #
 # 用法:
 #   bash scripts/run_regression_http_allmodels.sh                # 真实跑 108 用例
-#   BASE_URL=http://10.1.2.3:8000 bash scripts/...               # 指向远端服务
-#   DRY_RUN=1 bash scripts/...                                   # 只打印请求体, 不真正下发
-#   nohup bash scripts/... > itn-regression-http/run_all.log 2>&1 &
+#   BASE_URL=http://10.1.2.3:18123 bash scripts/run_regression_http_allmodels.sh                # 指向远端服务
+#   DRY_RUN=1 bash scripts/run_regression_http_allmodels.sh                                    # 只打印请求体, 不真正下发
+#   nohup bash scripts/run_regression_http_allmodels.sh  > itn-regression-http/run_all.log 2>&1 &
 #
-# 前置: 先启动服务  infer-strategy-npu-server --host 0.0.0.0 --port 8000
+# 前置: 先启动服务  infer-strategy-npu-server --host 0.0.0.0 --port 18123
+# nohup infer-strategy-npu-server --host 0.0.0.0 --port 18123 > infer-strategy.log 2>&1 &
 # 依赖: curl 与 python3（容器内均可用）
 
 set -u
 
 # ---- 可调参数(环境变量可覆盖) ----
-BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:18123}"
 OUT_DIR="${OUT_DIR:-./itn-regression-http}"
 POLL_INTERVAL="${POLL_INTERVAL:-20}"        # 轮询间隔(秒)
 MAX_WAIT="${MAX_WAIT:-7200}"                # 单任务最长等待(秒)
@@ -44,10 +45,11 @@ TPOT_LIMIT="${TPOT_LIMIT:-100}"
 MAX_BATCHED_TOKENS="${MAX_BATCHED_TOKENS:-8192}"
 BATCH_RANGE_MIN="${BATCH_RANGE_MIN:-4}"
 BATCH_RANGE_MAX="${BATCH_RANGE_MAX:-128}"
+PD_RATIO_SIZES="${PD_RATIO_SIZES:-8 16}"   # 每实例卡数 P/D 枚举空间(对应 --pd-ratio-sizes)
 DRY_RUN="${DRY_RUN:-0}"
 
 # 固定参数导出给内嵌 python 读取
-export INPUT_LENGTH OUTPUT_LENGTH TTFT_LIMIT TPOT_LIMIT MAX_BATCHED_TOKENS BATCH_RANGE_MIN BATCH_RANGE_MAX
+export INPUT_LENGTH OUTPUT_LENGTH TTFT_LIMIT TPOT_LIMIT MAX_BATCHED_TOKENS BATCH_RANGE_MIN BATCH_RANGE_MAX PD_RATIO_SIZES
 
 LOG_DIR="$OUT_DIR/logs"
 mkdir -p "$LOG_DIR"
@@ -115,6 +117,7 @@ body = {
     "serving_modes": ["agg", "disagg"],
     "max_batched_tokens": e("MAX_BATCHED_TOKENS"),
     "batch_range": [e("BATCH_RANGE_MIN"), e("BATCH_RANGE_MAX")],
+    "pd_ratio_sizes": [int(x) for x in os.environ.get("PD_RATIO_SIZES", "").split() if x.strip()],
 }
 if q == "ENABLE":
     if lin:
@@ -267,7 +270,7 @@ if [ "$DRY_RUN" != "1" ]; then
   health_file="$LOG_DIR/health.json"
   hc=$(curl -s -o "$health_file" -w '%{http_code}' "$BASE_URL/api/v1/health")
   if [ "$hc" != "200" ]; then
-    echo "!! 服务不可达 (HTTP $hc)。请先启动: infer-strategy-npu-server --host 0.0.0.0 --port 8000"
+    echo "!! 服务不可达 (HTTP $hc)。请先启动: infer-strategy-npu-server --host 0.0.0.0 --port 18123"
     exit 2
   fi
   echo "  健康检查: HTTP $hc -> $(python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print(d.get("data",{}).get("version","?"))' "$health_file")"
