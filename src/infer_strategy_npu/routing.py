@@ -320,20 +320,25 @@ def route(request: RecommendRequest, spec: ModelSpec, *, aic_save_dir: str) -> R
     if forced == FRAMEWORK_MSMODELING:
         return _route_to_msmodeling(request, spec, reason="forced by --framework msmodeling")
 
-    if spec.model_id in AIC_NPU_MODEL_IDS and request.quantize == QUANTIZE_DISABLE:
+    if (
+        spec.model_id in AIC_NPU_MODEL_IDS
+        and request.quantize == QUANTIZE_DISABLE
+        and to_aic_system(request.device) is not None  # aic-npu 仅支持 ATLAS_800_A2_376T_64G
+    ):
         return _route_to_aic_npu(
             request,
             spec,
             aic_save_dir,
-            reason=f"model {spec.model_id} is in the aic-npu allowlist and --quantize=DISABLE",
+            reason=f"model {spec.model_id} is in the aic-npu allowlist, --quantize=DISABLE, device {request.device} is aic-npu-capable",
         )
 
     return _route_to_msmodeling(
         request,
         spec,
         reason=(
-            f"model {spec.model_id} with quantize={request.quantize} is served by msmodeling "
-            "(aic-npu only covers DeepSeek-R1 / Qwen3.8-27B / DeepSeek-V4-Pro with quantize=DISABLE)"
+            f"model {spec.model_id} / quantize={request.quantize} / device {request.device} "
+            "is not fully covered by aic-npu (only DeepSeek-R1 / Qwen3.8-27B / DeepSeek-V4-Pro "
+            "with quantize=DISABLE on ATLAS_800_A2_376T_64G); routed to msmodeling"
         ),
     )
 
