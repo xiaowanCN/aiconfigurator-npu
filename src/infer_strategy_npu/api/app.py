@@ -19,6 +19,15 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from infer_strategy_npu import __version__
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """本地调试 UI：禁用浏览器缓存，避免改了 app.js/index.html 后界面“没生效”。"""
+
+    async def get_response(self, path: str, scope) -> "Response":  # type: ignore[name-defined]
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
 from infer_strategy_npu.api.schemas import (
     TaskCreateRequest,
     envelope,
@@ -469,7 +478,7 @@ async def _http_exception_handler(request, exc: HTTPException) -> JSONResponse:
 UI_DIR = Path(__file__).resolve().parents[3] / "ui"
 
 if UI_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(UI_DIR), html=True), name="ui")
+    app.mount("/", NoCacheStaticFiles(directory=str(UI_DIR), html=True), name="ui")
 else:  # pragma: no cover - 以 wheel 安装、无 ui/ 目录时跳过
     pass
 

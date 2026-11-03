@@ -461,7 +461,9 @@ function foldCard(title, inner, open) {
   </details>`;
 }
 
-/** 组合列表：优先 disagg_variants；缺失时按 framework 级候选的 label 兜底，保证每个 P×D 都出现。 */
+/** 组合列表：优先 disagg_variants；缺失时按 framework 级候选的 label 兜底；
+ *  两者都为空但 disagg 已产出（如 aic-npu 只返回单个最优 PD 分离），则用 disagg 整体兜底，
+ *  保证“分析过程”里的 PD 分离块与“推理策略推荐结论”保持一致。 */
 function pdVariants(fw) {
   const vs = (fw.disagg_variants || []).filter(v => v && (v.label || v.pd_ratio));
   if (vs.length) return vs;
@@ -471,7 +473,19 @@ function pdVariants(fw) {
     if (!byLabel.has(key)) byLabel.set(key, { label: key, pd_ratio: { prefill_devices: c.prefill && c.prefill.devices_per_instance, decode_devices: c.decode && c.decode.devices_per_instance }, candidates: [] });
     byLabel.get(key).candidates.push(c);
   }
-  return [...byLabel.values()];
+  if (byLabel.size) return [...byLabel.values()];
+  // aic-npu 等只产出单个最优 disagg 的框架：用 disagg 结果作为唯一组合兜底
+  if (modeReady(fw.disagg)) {
+    const d = fw.disagg;
+    const ex = (d.best && d.best.extra) || {};
+    const pInst = ex.prefill && ex.prefill.devices_per_instance;
+    const dInst = ex.decode && ex.decode.devices_per_instance;
+    return [Object.assign({}, d, {
+      label: (pInst && dInst) ? `P${pInst}D${dInst}` : 'PD分离',
+      pd_ratio: d.pd_ratio || ((pInst && dInst) ? { prefill_devices: pInst, decode_devices: dInst } : null),
+    })];
+  }
+  return [];
 }
 
 function renderVariantsInner(fw) {
@@ -504,8 +518,10 @@ function fmtParallel(s) {
 }
 
 function pdSideCells(c, i) {
-  const p = c.prefill || {};
-  const d = c.decode || {};
+  // aic-npu 的单条 PD 分离候选把 P/D 明细放在 extra.prefill / extra.decode 上
+  const ex = c.extra || {};
+  const p = c.prefill || ex.prefill || {};
+  const d = c.decode || ex.decode || {};
   const sideCell = s => `${fmtInt(s.instances)} × ${fmtInt(s.devices_per_instance)} 卡`;
   return `
     <td class="strong">#${i + 1}</td>
@@ -695,7 +711,8 @@ function renderDetail(data) {
   parts.push(renderCommands(data) || '<div class="card"><div class="sub">无</div></div>');
 
   document.getElementById('detail-body').innerHTML = parts.join('');
-  if (!failed && len(fw.disagg_variants)) selectVariant(0);
+  // 只要有可用 disagg（含 aic-npu 单组合兜底）就展开首组 PD 分离明细
+  if (!failed && modeReady(fw.disagg) && pdVariants(fw).length) selectVariant(0);
 }
 
 /* ============================================================

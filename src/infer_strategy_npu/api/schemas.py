@@ -54,7 +54,7 @@ class TaskCreateRequest(BaseModel):
     ttft_limit: int = Field(DEFAULT_TTFT_LIMIT, gt=0)
     quantize: str = Field(DEFAULT_QUANTIZE, description="DISABLE | ENABLE")
     top_n: int = Field(DEFAULT_TOP_N, gt=0)
-    framework: str = Field("auto", description="auto | aic-npu | msmodeling")
+    framework: str = Field("msmodeling", description="auto | aic-npu | msmodeling")
     out_dir: str | None = None
     serving_modes: list[str] = Field(
         default=list(SERVING_MODES_DEFAULT),
