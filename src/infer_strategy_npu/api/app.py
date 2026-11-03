@@ -9,14 +9,18 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import math
 import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, Query, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from infer_strategy_npu import __version__
 
@@ -29,6 +33,14 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers.setdefault("Cache-Control", "no-store")
         return response
 from infer_strategy_npu.api.schemas import (
+    CODE_CONFLICT,
+    CODE_INTERNAL_ERROR,
+    CODE_INVALID_PARAMETER,
+    CODE_PERMISSION_ERROR,
+    CODE_QUEUE_FULL,
+    CODE_RESOURCE_NOT_FOUND,
+    CODE_SUCCESS,
+    ApiError,
     TaskCreateRequest,
     envelope,
     error_detail,
@@ -39,6 +51,16 @@ from infer_strategy_npu.models import resolve_model, supported_models
 
 API = "/api/v1"
 RESULTS_URL = "/results"  # out_dir 的静态访问前缀（--out-dir 任意目录都能被前端读到）
+
+# HTTP 状态码 -> 业务响应码：仅用于兜底异常处理器（正常路径直接抛 ApiError）
+_STATUS_TO_CODE: dict[int, int] = {
+    400: CODE_INVALID_PARAMETER,
+    401: CODE_PERMISSION_ERROR,
+    403: CODE_PERMISSION_ERROR,
+    404: CODE_RESOURCE_NOT_FOUND,
+    409: CODE_CONFLICT,
+    429: CODE_QUEUE_FULL,
+}
 
 app = FastAPI(
     title="infer-strategy-npu",
@@ -170,17 +192,145 @@ def _pd_view(result: dict | None, *, limit: int | None, include_raw: bool) -> di
     }
 
 
+def _topk_by_throughput(candidates: Any, topk: int) -> list[dict[str, Any]]:
+    """按「整体方案策略」的 ``throughput_tokens_per_s`` 降序取前 ``topk`` 个候选。
+
+    缺失 / 非法的吞吐值视为 ``-inf`` 排到末尾；返回新列表，不改动入参顺序。
+    """
+    items = [c for c in (candidates or []) if isinstance(c, dict)]
+
+    def score(c: dict[str, Any]) -> float:
+        try:
+            value = float(c.get("throughput_tokens_per_s"))
+        except (TypeError, ValueError):
+            return float("-inf")
+        return value if math.isfinite(value) else float("-inf")
+
+    items.sort(key=score, reverse=True)
+    return items[:topk]
+
+
+def _disagg_groups(fw: dict[str, Any], topk: int) -> dict[str, list[dict[str, Any]]]:
+    """把三处 PD 候选整合为 ``{"P8D8": [topk 个候选], ...}``。
+
+    数据来源（互不重复）：
+    1. ``frameworks[].pd_ratio_candidates`` —— 跨组合全局候选，每条形如
+       ``{label, ...}``，本身就是各变体候选的全集，按 ``label`` 分组即可还原各组合；
+    2. ``frameworks[].disagg_variants[]`` —— 决定分组标签与输出顺序；全局列表缺某组时
+       用变体自带的 ``pd_ratio_candidates`` 补齐；
+    3. ``frameworks[].disagg.pd_ratio_candidates`` —— 最优变体副本，作最后兜底。
+    """
+    disagg = fw.get("disagg") or {}
+
+    by_label: dict[str, list[dict[str, Any]]] = {}
+    for c in fw.get("pd_ratio_candidates") or []:
+        if isinstance(c, dict) and c.get("label"):
+            by_label.setdefault(str(c["label"]), []).append(c)
+
+    labels: list[str] = []
+    for v in fw.get("disagg_variants") or []:
+        label = str(v.get("label") or "").strip()
+        if not label:
+            continue
+        if label not in labels:
+            labels.append(label)
+        if not by_label.get(label):
+            own = [c for c in (v.get("pd_ratio_candidates") or []) if isinstance(c, dict)]
+            if own:
+                by_label[label] = own
+
+    dis_label = str(disagg.get("label") or "").strip()
+    if dis_label:
+        if dis_label not in labels:
+            labels.append(dis_label)
+        if not by_label.get(dis_label):
+            by_label[dis_label] = [c for c in (disagg.get("pd_ratio_candidates") or []) if isinstance(c, dict)]
+
+    for label in by_label:
+        if label not in labels:
+            labels.append(label)
+
+    return {label: _topk_by_throughput(by_label.get(label, []), topk) for label in labels}
+
+
+def _overview_mode(mode: dict[str, Any] | None, candidates: Any) -> dict[str, Any] | None:
+    """agg / disagg 的精简结构：``available`` + ``best`` + 候选项。"""
+    if mode is None:
+        return None
+    return {
+        "available": mode.get("available"),
+        "best": mode.get("best"),
+        "candidates": candidates,
+    }
+
+
+def _overview_frameworks(frameworks: Any, topk: int) -> list[dict[str, Any]]:
+    """frameworks[] 精简结构：去掉 commands / artifacts，PD 候选整合为按标签分组。"""
+    out: list[dict[str, Any]] = []
+    for fw in frameworks or []:
+        agg = fw.get("agg")
+        disagg = fw.get("disagg")
+        out.append(
+            {
+                "framework": fw.get("framework"),
+                "status": fw.get("status"),
+                "message": fw.get("message"),
+                "agg": _overview_mode(
+                    agg,
+                    _topk_by_throughput(agg.get("candidates") if isinstance(agg, dict) else None, topk),
+                ),
+                "disagg": _overview_mode(disagg, _disagg_groups(fw, topk)),
+            }
+        )
+    return out
+
+
+def _strip_raw(node: Any) -> Any:
+    """递归剔除所有 ``raw`` 明细（48 字段原始行）。"""
+    if isinstance(node, dict):
+        return {k: _strip_raw(v) for k, v in node.items() if k != "raw"}
+    if isinstance(node, list):
+        return [_strip_raw(v) for v in node]
+    return node
+
+
+def _overview_view(rec, *, topk: int, include_raw: bool) -> dict[str, Any]:
+    """任务概览：只保留常用字段，结果内只保留必要的结果块。"""
+    data = {
+        **rec.to_dict(),
+        "progress": manager.progress(rec.task_id),
+        "result": None,
+    }
+    result = manager.result(rec.task_id)
+    if result is None:
+        return data
+
+    condensed = {
+        "run_id": result.get("run_id"),
+        "generated_at": result.get("generated_at"),
+        "status": result.get("status"),
+        "frameworks": _overview_frameworks(result.get("frameworks") or [], topk),
+        "recommendation": result.get("recommendation"),
+        "errors": list(result.get("errors") or []),
+    }
+    condensed = copy.deepcopy(condensed)  # 与 run.json 读出的对象完全解耦
+    if not include_raw:
+        condensed = _strip_raw(condensed)
+    data["result"] = condensed
+    return data
+
+
 def _validate_payload(payload) -> tuple[dict, str]:
     """复用领域层白名单校验 model / device，返回 (request_dict, framework_hint)。"""
     request = payload.to_request_dict()
     try:
         resolve_model(request["model"])
     except ValueError as exc:
-        raise HTTPException(400, detail=envelope(400, {"errors": [error_detail("model", str(exc))]})) from exc
+        raise ApiError(CODE_INVALID_PARAMETER, {"errors": [error_detail("model", str(exc))]}) from exc
     if request["device"] not in supported_device_names():
-        raise HTTPException(
-            400,
-            detail=envelope(400, {"errors": [error_detail("device", f"unsupported device {request['device']!r}")]}),
+        raise ApiError(
+            CODE_INVALID_PARAMETER,
+            {"errors": [error_detail("device", f"unsupported device {request['device']!r}")]},
         )
     return request, _resolve_framework(request)
 
@@ -220,7 +370,7 @@ def health() -> dict:
     running = sum(1 for r in manager._tasks.values() if r.status == "RUNNING")
     queued = sum(1 for r in manager._tasks.values() if r.status == "PENDING")
     return envelope(
-        200,
+        CODE_SUCCESS,
         {
             "status": "ok",
             "version": __version__,
@@ -242,27 +392,27 @@ def results_file(path: str) -> Response:
     这样无论结果落在哪个目录，前端都能按同一前缀读取，不必再靠相对路径猜。
     """
     if ".." in path or path.startswith("/") or "\\.." in path:
-        raise HTTPException(404, detail=envelope(404, {"path": path}))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"path": path})
     target = (manager.out_dir / path).resolve()
     if manager.out_dir.resolve() not in target.parents or not target.is_file():
-        raise HTTPException(404, detail=envelope(404, {"path": path}))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"path": path})
     return FileResponse(str(target))
 
 
 @app.get(f"{API}/models", summary="支持的模型")
 def models() -> dict:
-    return envelope(200, list(supported_models()))
+    return envelope(CODE_SUCCESS, list(supported_models()))
 
 
 @app.get(f"{API}/devices", summary="支持的设备")
 def devices() -> dict:
-    return envelope(200, supported_device_names())
+    return envelope(CODE_SUCCESS, supported_device_names())
 
 
 # ------------------------------------------------------------------ 任务
 
 
-@app.post(f"{API}/tasks", summary="创建任务（异步）", status_code=202)
+@app.post(f"{API}/tasks", summary="创建任务（异步）")
 def create_task(payload: TaskCreateRequest, response: Response) -> dict:
     # 模型/设备的取值校验复用领域层的白名单
     request, _ = _validate_payload(payload)
@@ -270,12 +420,12 @@ def create_task(payload: TaskCreateRequest, response: Response) -> dict:
     try:
         rec = manager.create(request)
     except QueueFull as exc:
-        raise HTTPException(429, detail=envelope(429, {"reason": str(exc)})) from exc
+        raise ApiError(CODE_QUEUE_FULL, {"reason": str(exc)}) from exc
 
     response.headers["Location"] = f"{API}/tasks/{rec.task_id}"
     view = _task_view(rec)
     view.update(_pd_meta(payload))  # PD-ratio 网格与告警（不阻断）
-    return envelope(202, view)
+    return envelope(CODE_SUCCESS, view)
 
 
 @app.post(f"{API}/tasks/preview", summary="dry-run：返回将要下发的命令，不创建任务")
@@ -289,11 +439,11 @@ def preview_task(payload: TaskCreateRequest) -> dict:
         spec = resolve_model(request["model"])
         decision = route(RecommendRequest(**request), spec, aic_save_dir="<preview>")
     except Exception as exc:
-        raise HTTPException(400, detail=envelope(400, {"reason": f"{type(exc).__name__}: {exc}"})) from exc
+        raise ApiError(CODE_INVALID_PARAMETER, {"reason": f"{type(exc).__name__}: {exc}"}) from exc
 
     grid = list(payload.pd_ratio_grid)
     return envelope(
-        200,
+        CODE_SUCCESS,
         {
             "framework": framework,
             "reason": decision.reason,
@@ -317,7 +467,7 @@ def list_tasks(
     start = (page - 1) * page_size
     chunk = items[start : start + page_size]
     return envelope(
-        200,
+        CODE_SUCCESS,
         {
             "total": total,
             "page": page,
@@ -341,8 +491,30 @@ def get_task(
 ) -> dict:
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    return envelope(200, _task_view(rec, include_raw=include_raw, include_variant_candidates=include_variant_candidates))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
+    return envelope(CODE_SUCCESS, _task_view(rec, include_raw=include_raw, include_variant_candidates=include_variant_candidates))
+
+
+@app.get(f"{API}/tasks/{{task_id}}/overview", summary="任务概览视图（字段凝练 + Top-K 候选）")
+def get_task_overview(
+    task_id: str,
+    topk: int = Query(1, ge=1, le=200, description="每组候选项保留条数；按整体方案 throughput_tokens_per_s 降序取前 topk 个"),
+    include_raw: bool = Query(False, description="是否保留候选里的 raw 明细（48 字段原始行，概览默认剔除）"),
+) -> dict[str, Any]:
+    """任务概览查询：只返回常用字段，结果按 Top-K 凝练，控制响应体积。
+
+    - ``data``：``task_id / status / created_at / started_at / finished_at / progress / error / pid / result``
+    - ``data.result``：``run_id / generated_at / status / frameworks / recommendation / errors``
+    - ``frameworks[]``：去掉 ``commands`` / ``artifacts``；``agg`` 与 ``disagg`` 各含
+      ``available`` / ``best`` / ``candidates``；
+    - ``agg.candidates`` 为扁平 Top-K 列表；``disagg.candidates`` 为按 PD 组合标签
+      （``P8D8`` 等）分组的字典，各组各自 Top-K；
+    - 所有 Top-K 均按 ``throughput_tokens_per_s`` 降序选取。
+    """
+    rec = manager.get_or_disk(task_id)
+    if rec is None:
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
+    return envelope(CODE_SUCCESS, _overview_view(rec, topk=topk, include_raw=include_raw))
 
 
 @app.get(f"{API}/tasks/{{task_id}}/result", summary="完整结果（run.json）")
@@ -353,9 +525,9 @@ def get_result(
 ) -> dict:
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
     result = _trim_result(manager.result(task_id), include_raw, include_variant_candidates)
-    return envelope(200, result)
+    return envelope(CODE_SUCCESS, result)
 
 
 @app.get(f"{API}/tasks/{{task_id}}/pd", summary="PD 分离专用视图（跨组合全局排序候选）")
@@ -366,8 +538,8 @@ def get_pd(
 ) -> dict:
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    return envelope(200, _pd_view(manager.result(task_id), limit=limit, include_raw=include_raw))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
+    return envelope(CODE_SUCCESS, _pd_view(manager.result(task_id), limit=limit, include_raw=include_raw))
 
 
 @app.get(f"{API}/tasks/{{task_id}}/report", summary="静态 HTML 报告（单文件，可直接分发）", response_class=HTMLResponse)
@@ -383,25 +555,22 @@ def get_report(
     """
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "reason": "未找到该任务目录"}))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id, "reason": "未找到该任务目录"})
 
     # 任务存在但尚未结束：返回进度，避免误导成"任务不存在"
     if rec.status not in TERMINAL_STATUSES:
         progress = manager.progress(task_id)
-        raise HTTPException(
-            409,
-            detail=envelope(
-                409,
-                {
-                    "task_id": task_id,
-                    "status": rec.status,
-                    "progress": progress,
-                    "message": f"任务尚未结束（当前 {progress.get('label') or progress.get('stage') or rec.status}"
-                    f"{(' ' + str(progress.get('percent')) + '%') if progress.get('percent') is not None else ''}），"
-                    "报告将在完成后自动生成，请稍后重试。",
-                },
-                "任务未结束，报告待生成",
-            ),
+        raise ApiError(
+            CODE_CONFLICT,
+            {
+                "task_id": task_id,
+                "status": rec.status,
+                "progress": progress,
+                "message": f"任务尚未结束（当前 {progress.get('label') or progress.get('stage') or rec.status}"
+                f"{(' ' + str(progress.get('percent')) + '%') if progress.get('percent') is not None else ''}），"
+                "报告将在完成后自动生成，请稍后重试。",
+            },
+            "任务未结束，报告待生成",
         )
 
     run_dir = manager.out_dir / task_id
@@ -411,7 +580,7 @@ def get_report(
     # 始终基于 run.json 重新渲染，确保 HTML 内联的 CSS/JS 为最新版本
     generated = write_report_from_run_json(run_dir / "run.json")
     if generated is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "reason": "run.json not found"}))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id, "reason": "run.json not found"})
     target = generated
 
     if download:
@@ -423,52 +592,76 @@ def get_report(
 def get_summary(task_id: str) -> dict:
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    return envelope(200, {"text": manager.summary_text(task_id)})
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
+    return envelope(CODE_SUCCESS, {"text": manager.summary_text(task_id)})
 
 
 @app.get(f"{API}/tasks/{{task_id}}/logs", summary="日志文件列表")
 def get_logs(task_id: str) -> dict:
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    return envelope(200, manager.logs(task_id))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
+    return envelope(CODE_SUCCESS, manager.logs(task_id))
 
 
 @app.get(f"{API}/tasks/{{task_id}}/logs/{{name}}", summary="日志内容")
 def get_log(task_id: str, name: str, tail: int | None = Query(None, ge=1)) -> dict:
     rec = manager.get_or_disk(task_id)
     if rec is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
     if ".." in name or "/" in name or "\\" in name:
-        raise HTTPException(400, detail=envelope(400, {"errors": [error_detail("name", "invalid log name")]}))
+        raise ApiError(CODE_INVALID_PARAMETER, {"errors": [error_detail("name", "invalid log name")]})
     text = manager.log_text(task_id, name, tail)
     if text is None:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id, "name": name}))
-    return envelope(200, {"name": name, "text": text})
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id, "name": name})
+    return envelope(CODE_SUCCESS, {"name": name, "text": text})
 
 
-@app.post(f"{API}/tasks/{{task_id}}/cancel", summary="取消任务", status_code=202)
+@app.post(f"{API}/tasks/{{task_id}}/cancel", summary="取消任务")
 def cancel_task(task_id: str) -> dict:
     try:
         rec = manager.cancel(task_id)
     except KeyError as exc:
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id})) from exc
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id}) from exc
     except InvalidState as exc:
-        raise HTTPException(409, detail=envelope(409, {"task_id": task_id, "reason": str(exc)})) from exc
-    return envelope(202, _task_view(rec), "取消请求已接受")
+        raise ApiError(CODE_CONFLICT, {"task_id": task_id, "reason": str(exc)}) from exc
+    return envelope(CODE_SUCCESS, _task_view(rec), "取消请求已接受")
 
 
 @app.delete(f"{API}/tasks/{{task_id}}", summary="删除任务与产物")
 def delete_task(task_id: str) -> dict:
     if not manager.delete(task_id):
-        raise HTTPException(404, detail=envelope(404, {"task_id": task_id}))
-    return envelope(200, {"task_id": task_id}, "删除成功")
+        raise ApiError(CODE_RESOURCE_NOT_FOUND, {"task_id": task_id})
+    return envelope(CODE_SUCCESS, {"task_id": task_id}, "删除成功")
 
 
-@app.exception_handler(HTTPException)
-async def _http_exception_handler(request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content=exc.detail)
+@app.exception_handler(ApiError)
+async def _api_error_handler(request, exc: ApiError) -> JSONResponse:
+    """业务错误：HTTP 传输层状态码恒为 200，错误码由响应体的 code 承载。"""
+    return JSONResponse(status_code=200, content=exc.payload)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request, exc: StarletteHTTPException) -> JSONResponse:
+    """兜底：Starlette / FastAPI 内部抛出的 HTTP 异常也统一为 200 + 业务码。"""
+    code = _STATUS_TO_CODE.get(
+        exc.status_code,
+        CODE_INTERNAL_ERROR if exc.status_code >= 500 else CODE_INVALID_PARAMETER,
+    )
+    return JSONResponse(
+        status_code=200,
+        content=envelope(code, {"errors": [error_detail("detail", str(exc.detail))]}),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request, exc: RequestValidationError) -> JSONResponse:
+    """请求体校验失败（含 ``extra="forbid"`` 的未知字段）统一为 10001 参数错误。"""
+    errors = [
+        error_detail(".".join(str(part) for part in item["loc"][1:]) or "body", item["msg"])
+        for item in exc.errors()
+    ]
+    return JSONResponse(status_code=200, content=envelope(CODE_INVALID_PARAMETER, {"errors": errors}))
 
 
 # ------------------------------------------------------------------ 静态 UI

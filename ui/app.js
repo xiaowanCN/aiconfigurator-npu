@@ -835,7 +835,7 @@ async function previewNewTask() {
     });
     const j = await r.json();
     if (!r.ok || j.code !== 200) {
-      showNfError((j.detail && j.detail.reason) || j.msg || ('预览失败 HTTP ' + r.status));
+      showNfError((j.data && j.data.reason) || (j.detail && j.detail.reason) || j.msg || ('预览失败 HTTP ' + r.status));
       box.classList.add('hide');
       return;
     }
@@ -872,9 +872,10 @@ async function submitNewTask() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
     });
     const j = await r.json();
-    if (!r.ok || j.code !== 202) {
-      const detail = j.detail && j.detail.errors
-        ? (j.detail.errors || []).map(e => `${e.field}: ${e.reason}`).join('；')
+    if (!r.ok || j.code !== 200) {
+      const errors = (j.data && j.data.errors) || (j.detail && j.detail.errors);
+      const detail = errors
+        ? errors.map(e => `${e.field}: ${e.reason}`).join('；')
         : (j.msg || '');
       throw new Error(detail || ('提交失败 HTTP ' + r.status));
     }

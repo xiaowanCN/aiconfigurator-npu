@@ -26,16 +26,26 @@ PD_RATIO_SECONDS_PER_COMBO = 177
 # 组合数达到该值时给出耗时告警
 PD_RATIO_MANY_COMBOS = 5
 
-# code 与 HTTP 状态码保持一致
+# ---- 业务响应码 ----
+# 约定：HTTP 传输层状态码恒为 200，业务结果统一由响应体的 code 承载：
+# 正常为 200，错误为 1000X 系列（与 docs/plans/infer-strategy-npu-http-api-detail.md §1.3 一致）。
+CODE_SUCCESS = 200
+
+CODE_INVALID_PARAMETER = 10001
+CODE_PERMISSION_ERROR = 10002
+CODE_RESOURCE_NOT_FOUND = 10003
+CODE_INTERNAL_ERROR = 10004
+CODE_CONFLICT = 10005
+CODE_QUEUE_FULL = 10006
+
 MSG = {
-    200: "查询成功",
-    202: "任务已创建",
-    400: "参数错误",
-    404: "任务不存在",
-    409: "任务状态冲突",
-    429: "队列已满，请稍后重试",
-    500: "服务内部错误",
-    503: "服务未就绪",
+    CODE_SUCCESS: "查询成功",
+    CODE_INVALID_PARAMETER: "参数错误",
+    CODE_PERMISSION_ERROR: "没有操作权限",
+    CODE_RESOURCE_NOT_FOUND: "资源不存在",
+    CODE_INTERNAL_ERROR: "服务内部错误",
+    CODE_CONFLICT: "任务状态冲突",
+    CODE_QUEUE_FULL: "队列已满，请稍后重试",
 }
 
 
@@ -207,6 +217,18 @@ def envelope(code: int, data: Any = None, msg: str | None = None) -> dict:
 
 def error_detail(field: str, reason: str) -> dict:
     return {"field": field, "reason": reason}
+
+
+class ApiError(Exception):
+    """业务错误：HTTP 传输层状态码恒为 200，错误码由响应体的 ``code`` 承载。
+
+    由 ``app.py`` 的异常处理器统一转成 ``{"code": <业务码>, "msg": ..., "data": ...}``。
+    """
+
+    def __init__(self, code: int, data: Any = None, msg: str | None = None) -> None:
+        super().__init__(msg or MSG.get(code, ""))
+        self.code = code
+        self.payload = envelope(code, data, msg)
 
 
 def supported_device_names() -> list[str]:
