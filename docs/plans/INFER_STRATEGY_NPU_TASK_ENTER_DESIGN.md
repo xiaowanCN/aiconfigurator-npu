@@ -6,7 +6,7 @@
 | 目标 | 以《推理工具链 V1.0.0 接口文档 01》第 4 章「推理策略寻优模块」为**唯一对外契约**，实现容器一次性任务入口脚本 `infer-strategy-npu-task-enter.py` |
 | 交付形态 | 仓库根目录单文件脚本，随 `msmodeling` 工具镜像分发；容器常驻、外部 `docker exec` 触发一次任务，跑完写日志/结果文件并退出 |
 | 契约范围 | 仅 4.1「推理策略寻优任务创建」：4.1.1 容器启动命令、4.1.2 参数说明、4.1.3 返回值与参数说明。**不做**第 5 章推理仿真 |
-| 硬约束 | 入参/返回值字段名、类型、取值范围、默认值一律以 4.1.2 / 4.1.3 为准；不新增文档外的请求/响应字段，不扩大取值域，不遗漏参数说明表里的字段（含 `topk`、`num_nodes`）；`mxfp4-group-size` 按 v2 Q4 为条件字段，仅 MXFP4 方案出现 |
+| 硬约束 | 入参/返回值字段名、类型、取值范围、默认值一律以 4.1.2 / 4.1.3 为准；不新增文档外的请求/响应字段，不扩大取值域，不遗漏参数说明表里的字段（含 `topk`、`num_nodes`）；`mxfp4-group-size` 为必返字段，方案表未解析到配对值时按默认 `32` 回显（仅回显，不下发） |
 | 调整依据 | 《开发调整事项》一（`--model` 白名单 + 固定量化方案）、二（`--device` 映射 + 单机卡数 + `num_nodes`）、三（结果获取方式与值域约束） + v2 评审意见（PD 三种对称组合、结果文件写入时机、9 条确认结论） |
 
 ---
@@ -106,20 +106,20 @@ A 与「直接分发于 msmodeling 工具」不冲突：进程内分发与 4.1.1
 | `--model` | 简化模型名 / 仓库 `model_id` | msmodeling 模型目录 | `--quantize-linear-action` | `--quantize-non-expert-linear-action` | `--quantize-attention-action` | `--mxfp4-group-size` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `GLM-5.2-w4a4c8-mxfp4` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `MXFP4` | `FP8` | `FP8` | `32`（下发 + 回显） |
-| `GLM-5.2-BF16` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `DISABLED` | `DISABLED` | `DISABLED` | 不下发、**不回显** |
-| `GLM-5.3-BF16` | `GLM-5.3` / `ZhipuAI/GLM-5.3` | `GLM5.3` | `DISABLED` | `DISABLED` | `DISABLED` | 不下发、**不回显** |
-| `GLM-5.2-FP8` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `FP8` | `DISABLED` | `FP8` | 不下发、**不回显** |
-| `GLM-5.3-FP8` | `GLM-5.3` / `ZhipuAI/GLM-5.3` | `GLM5.3` | `FP8` | `DISABLED` | `FP8` | 不下发、**不回显** |
-| `DeepSeek-R1-FP8` | `DeepSeek-R1` / `deepseek-ai/DeepSeek-R1` | `DeepSeek-R1` | `FP8` | `FP8` | `FP8` | 不下发、**不回显** |
+| `GLM-5.2-BF16` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `DISABLED` | `DISABLED` | `DISABLED` | 不下发、**回显默认 32** |
+| `GLM-5.3-BF16` | `GLM-5.3` / `ZhipuAI/GLM-5.3` | `GLM5.3` | `DISABLED` | `DISABLED` | `DISABLED` | 不下发、**回显默认 32** |
+| `GLM-5.2-FP8` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `FP8` | `DISABLED` | `FP8` | 不下发、**回显默认 32** |
+| `GLM-5.3-FP8` | `GLM-5.3` / `ZhipuAI/GLM-5.3` | `GLM5.3` | `FP8` | `DISABLED` | `FP8` | 不下发、**回显默认 32** |
+| `DeepSeek-R1-FP8` | `DeepSeek-R1` / `deepseek-ai/DeepSeek-R1` | `DeepSeek-R1` | `FP8` | `FP8` | `FP8` | 不下发、**回显默认 32** |
 | `DeepSeek-V4.1-Flash-MXFP4` | `DeepSeek-V4.1-Flash` / `deepseek-ai/DeepSeek-V4.1-Flash` | `DeepSeek-V4.1-Flash` | `MXFP4` | `FP8` | `DISABLED` | `32`（下发 + 回显） |
-| `DeepSeek-V4-Pro-W8A8` | `DeepSeek-V4-Pro` / `deepseek-ai/DeepSeek-V4-Pro` | `DeepSeek-V4-Pro` | `W8A8_DYNAMIC` | `W8A8_DYNAMIC` | `INT8` | 不下发、**不回显** |
+| `DeepSeek-V4-Pro-W8A8` | `DeepSeek-V4-Pro` / `deepseek-ai/DeepSeek-V4-Pro` | `DeepSeek-V4-Pro` | `W8A8_DYNAMIC` | `W8A8_DYNAMIC` | `INT8` | 不下发、**回显默认 32** |
 
 要点：
 
-1. **映射链**：白名单 → `(仓库 model_id, 量化动作, 是否下发/回显 group-size)`；`model_id` 交给 `models.msmodeling_model_source()` 解析为本地模型目录。容器内默认 `model_configs/msmodeling/<目录>`（即案例中 `models\GLM5.2` 的等价路径；可用 `INFER_STRATEGY_LOCAL_MODEL_ROOT=/workspace/models` 对齐案例写法）。**不再把平台白名单当 ModelScope ID 直接传给 msmodeling**。
+1. **映射链**：白名单 → `(仓库 model_id, 量化动作, 是否下发 group-size；request 的 group-size 缺省回显 32)`；`model_id` 交给 `models.msmodeling_model_source()` 解析为本地模型目录。容器内默认 `model_configs/msmodeling/<目录>`（即案例中 `models\GLM5.2` 的等价路径；可用 `INFER_STRATEGY_LOCAL_MODEL_ROOT=/workspace/models` 对齐案例写法）。**不再把平台白名单当 ModelScope ID 直接传给 msmodeling**。
 2. **量化值域**：以 4.1.3 参数说明为准——linear / non-expert 允许 `DISABLED,W8A16_STATIC,W8A8_STATIC,W4A8_STATIC,W8A16_DYNAMIC,W8A8_DYNAMIC,W4A8_DYNAMIC,FP8,MXFP4,HIF8`；attention 允许 `DISABLED,INT8,FP8,HIF8`。脚本对表内取值做白名单校验，当前 8 项全部落在文档值域内。现有 `quantize.py:38/50` 的枚举缺 `HIF8`，当前方案不涉及；后续扩充到 `HIF8` 时再补枚举。
 3. **必须 `quantize="ENABLE"`**：`resolve_ms_quantize_actions()` 在 `DISABLE` 时会**忽略显式 action 并强制三项 `DISABLED`**。因此统一构造 `RecommendRequest(quantize="ENABLE", 三个 action=表内值)`，BF16 方案用三个 `DISABLED` 表达，避免语义被覆盖。
-4. **`--mxfp4-group-size 32`**：已确认 msmodeling 支持（参考案例均可跑出候选），**不做探测/降级**。仓库未建模该参数，仅 2 个 MXFP4 方案经 `extra_msmodeling_args=["--mxfp4-group-size","32"]` 逃生舱透传；非 MXFP4 方案**不下发、也不回显**该字段（v2 Q4 / Q8）。
+4. **`--mxfp4-group-size 32`**：已确认 msmodeling 支持（参考案例均可跑出候选），**不做探测/降级**。仓库未建模该参数，仅 2 个 MXFP4 方案经 `extra_msmodeling_args=["--mxfp4-group-size","32"]` 逃生舱透传；非 MXFP4 方案**不下发该参数，但 `request` 仍按默认值 `"32"` 回显**（本轮调整，覆盖 v2 Q4 原结论；下发行为同 Q8）。
 5. **固定下发参数**（平台入参中没有，按《调整事项》PD 分离案例固定）：`--jobs 32`、`--max-batched-tokens 8192`、`--batch-range 4 512`，以及每个 PD 组合的 `--enable-optimize-prefill-decode-ratio --prefill-devices-per-instance P --decode-devices-per-instance D`；不下发 `--compile`、投机参数、`--max-search-combinations`、`--tp-sizes`。
 6. **PD 寻优空间不推导**（v2 Q6）：固定 **P8D8 / P16D16 / P32D32** 三种对称组合，与模型、卡数无关；三个组合都参与寻优，最后选其中结果最高的（详见 §6.2）。案例只是「能跑出结果的示例」，不作为每实例卡数的推导依据。
 7. **案例只说明量化参数分发逻辑**；`ttft/tpot` 入参默认 `20s / 100ms`，传入即覆盖，案例数值不覆盖入参。
@@ -175,7 +175,7 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 | `serving_modes` | integer | `{0,1,2}`，默认 `1` |
 | `quantize-linear-action` | string | 值域见 §4 要点 2 |
 | `quantize-non-expert-linear-action` | string | 值域见 §4 要点 2 |
-| `mxfp4-group-size` | string | 默认 `32`；**条件字段**，仅 2 个 MXFP4 方案输出 `"32"`，其余方案不输出该键（v2 Q4） |
+| `mxfp4-group-size` | string | 默认 `32`；**必返字段**：方案表解析到配对值则回显该值，否则回显默认 `"32"`；所有模型与失败响应都带该键（仅回显，不下发） |
 | `quantize-attention-action` | string | `DISABLED` / `INT8` / `FP8` / `HIF8` |
 | `topk` | integer | 内部固定 `1`，取值范围 `{1}`，不开放外部指定 |
 
@@ -207,7 +207,7 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 1. 每个 PxDy 组合**各自独立**跑一次 `run_disagg()`；msmodeling 的 `OptimizerSummary._prepare_pd_ratio_results()` 在**组合内部**做 SLO 过滤、按 `(parallel_p, parallel_d)` 与 `balanced_qps` 去重、排序，产出该组合自己的候选集（「各个 PxDy 下各自保留候选」）。脚本**不在子任务层把每个组合截断到 1 条**。
 2. 各组 `FrameworkRun.pd_ratio_candidates` 由框架按 **`decode_tps_per_instance`（单 D 实例 decode 吞吐，即 D 节点吞吐）** 降序排好；脚本合并三组候选后**直接沿用 D 侧吞吐排序**，不做集群吞吐重排。
 3. 在跨组合汇总之后取 `topk=1`，即 D 侧吞吐最高的那一条；`agg.candidates` 仍按 `throughput_tokens_per_s` 降序取 `topk=1`。
-4. 某组合没结果不影响其他组合；三组都没结果 → `disagg.candidates = []`。
+4. 某组合没结果不影响其他组合；三组都没结果 → 内层 `3 / empty`，`result` 两侧统一 `{}`（不再输出 `{"candidates": []}`）。
 
 ### 6.3 字段映射
 
@@ -216,7 +216,7 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 | `agg.candidates` | `frameworks[0].agg.candidates`（`Candidate.to_dict()`） | 按 `throughput_tokens_per_s` 降序 → `[:topk]` → 裁剪到 10 个标量字段 + `parallel` 四字段（补齐缺失键为 `null`） |
 | `disagg.candidates` | 三次调用各自的 `frameworks[0].pd_ratio_candidates`（`PdRatioCandidate.to_dict()`） | 合并后直接沿用 **D 侧吞吐 `decode_tps_per_instance`** 降序 → `[:topk]` → 取 `prefill`/`decode` 子对象 → 裁剪到 12 个标量字段 + `parallel` 四字段（补齐缺失键为 `null`） |
 | 空形态 | `serving_modes` 未包含该形态 | 保留 key，值为 `{}`（4.1.3：`0` 时 `disagg={}`，`1` 时 `agg={}`） |
-| 无候选 | 请求了该形态但无可行解 | `{"candidates": []}` |
+| 无候选 | 请求了该形态但无可行解（内层 `3 / empty`） | 整个 `result` 统一为 `{"agg": {}, "disagg": {}}`，不再出现 `{"candidates": []}` |
 | 数值 | `schema.to_float/to_int` | NaN/缺失 → `null`；bool 保持 bool；不四舍五入、不改单位（ttft/tpot 统一 ms） |
 
 `serving_modes=2` 时 agg 跑一次、三组 PD 各跑一次，两个形态各取 1 条候选，与 4.1.3 示例结构一致。
@@ -232,8 +232,8 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 | 场景 | 全局 `code/status/message` | 内层 `code/status/message` | 退出码 | `result` |
 | --- | --- | --- | --- | --- |
 | 成功找到结果 | `0 / success / 寻优任务完成` | `0 / success / 寻优策略任务完成，已找到结果` | 0 | 按 `serving_modes` 填 candidates |
-| 正常运行但无任何候选（含卡数不足、SLO 过严） | `0 / success / 寻优任务完成（无结果）` | `3 / empty / 未找到满足 SLO 的部署策略` | 0 | `{"candidates": []}` + 未请求形态 `{}` |
-| 入参非法 / 路径不可写 | `1 / failed / 具体校验错误` | `1 / failed / 入参不对：…` | 1 | 完整骨架，`request` 尽力回显、`result` 空候选 |
+| 正常运行但无任何候选（含卡数不足、SLO 过严） | `0 / success / 寻优任务完成（无结果）` | `3 / empty / 未找到满足 SLO 的部署策略` | 0 | `{"agg": {}, "disagg": {}}`，两侧统一 |
+| 入参非法 / 路径不可写 | `1 / failed / 具体校验错误` | `1 / failed / 入参不对：…` | 1 | 完整骨架，`request` 尽力回显、`result` 两侧统一 `{}` |
 | msmodeling 导入/执行失败、异常 | `1 / failed / 寻优任务执行失败：…` | `1 / failed / 任务报错失败：…` | 1 | 同上 |
 | 运行中 | **不写结果文件、不写任何状态文件** | 枚举 `2 / running` 仅体现在日志阶段记录 | — | — |
 
@@ -317,9 +317,9 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 | 6 | `serving_modes=0/1/2` | 分别得到 `disagg={}` / `agg={}` / 两者都有 |
 | 7 | 三种 PD 组合与自动过滤：8 / 16 / 32 / 64 卡 | 分别为 0 / 1 / 2 / 3 组实际运行；被过滤组合记入日志；8 卡时 disagg 为空但全局仍 `code=0` |
 | 8 | topk 语义与 D 侧排序（构造每组多条候选的结果） | 各组候选不被提前截断；最终 `disagg.candidates` 仅 1 条，且为三组中 `decode_tps_per_instance` 最高者 |
-| 9 | Q4：MXFP4 方案 vs 非 MXFP4 方案 | 前者 `request` 含 `mxfp4-group-size="32"`(string)，后者完全不含该键 |
+| 9 | Q4：MXFP4 方案 vs 非 MXFP4 方案 | 所有模型与失败响应的 `request` 都含 `mxfp4-group-size="32"`(string)；仅 MXFP4 方案下发该参数 |
 | 10 | 运行中观察文件 | `--log-file` 持续有阶段日志，`--result-file` 在任务结束前不存在；结束后只写一次 |
-| 11 | 无可行解（极端 SLO） / msmodeling 导入失败 | 前者内层 `3 / empty`、全局 0；后者内层 `1 / failed`、全局 1，异常栈进日志 |
+| 11 | 无可行解（极端 SLO） / msmodeling 导入失败 | 前者内层 `3 / empty`、全局 0、`result` 两侧统一 `{}`；后者内层 `1 / failed`、全局 1，异常栈进日志 |
 | 12 | 落盘路径与产物 | `--log-file`/`--result-file` 目录自动创建；默认产物在 `/workspace/results/infer-strategy-npu/<run_id>/`，逐组调用各一个 |
 | 13 | 契约 JSON 字段与类型断言（脚本化） | 与 §6.1 参数说明表一致，无多余/缺失字段；integer/float/string 类型逐一校验，示例的字符串数值不被沿用 |
 | 14 | 内核零改动与空间校验 | `src/infer_strategy_npu/*` 无改动；日志中只出现 P8D8 / P16D16 / P32D32，不出现 P8D16 等非对称组合 |
@@ -333,8 +333,8 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 | --- | --- | --- |
 | Q1 | `request` 字段**严格按 4.1.3 参数说明表输出原生 JSON 类型**：`model/device/quantize-*-action/mxfp4-group-size` 为 string；`num_devices/num_nodes/input_length/output_length/tpot_limit/serving_modes/topk` 为 integer；`ttft_limit` 为 float。**4.1.3 示例中的字符串数值不作准** | §6.1 / §6.4 / §8 |
 | Q2 | `serving_modes` 接受 `0/1/2`、默认 `1`，**做范围限制，不扩展到 3 及以上** | §3 |
-| Q3 | 全局 `code` **只有 0、1**；无结果时全局 `0/success` + 内层 `3/empty`；执行失败全局 `1/failed` | §6.4 / §6.5 |
-| Q4 | **非 MXFP4 方案不回显 `mxfp4-group-size`**（该键不出现）；仅 2 个 MXFP4 方案下发并回显 `"32"` | §4 / §6.1 |
+| Q3 | 全局 `code` **只有 0、1**；无结果时全局 `0/success` + 内层 `3/empty` 且 `result` 两侧统一 `{}`；执行失败全局 `1/failed` + 内层 `1/failed` 且同样两侧 `{}` | §6.4 / §6.5 |
+| Q4 | **所有方案都回显 `mxfp4-group-size`**：方案表解析到配对值则回显该值，否则回显默认 `"32"`(string)；仅 2 个 MXFP4 方案下发该参数（本轮调整，覆盖 v2 Q4 原结论） | §4 / §6.1 |
 | Q5 | `topk` 不开放外部指定，**内部保留参数、取值范围固定 `{1}`**（当前固定 1） | §3 / §6.1 / §6.2 |
 | Q6 | **PD 每实例卡数不推导**：默认只有 P8D8 / P16D16 / P32D32 三种对称组合，卡数不足由框架自动过滤 | §4 / §6.2 / §9 |
 | Q7 | 案例只说明量化参数分发逻辑；`ttft/tpot` 虽标必选，但给默认值 **20s / 100ms**，传入即覆盖 | §3 / §4 |

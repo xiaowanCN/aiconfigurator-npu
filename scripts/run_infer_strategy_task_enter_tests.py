@@ -217,19 +217,29 @@ class TaskEnterTests(unittest.TestCase):
             self.assertNotIsInstance(echo[key], bool)
         self.assertIsInstance(echo["ttft_limit"], float)
         for key in ("model", "device", "quantize-linear-action",
-                    "quantize-non-expert-linear-action", "quantize-attention-action"):
+                    "quantize-non-expert-linear-action", "mxfp4-group-size",
+                    "quantize-attention-action"):
             self.assertIsInstance(echo[key], str)
         self.assertEqual(echo["mxfp4-group-size"], "32")
         self.assertEqual(echo["topk"], 1)
 
-    def test_group_size_only_for_mxfp4(self) -> None:
+    def test_group_size_defaults_to_32(self) -> None:
+        """方案表未解析到配对 group-size 时，request 也按默认值 32 回显。"""
         mxfp4 = mod.build_request_echo(mod.parse_and_validate(self.args()))
         bf16 = mod.build_request_echo(
             mod.parse_and_validate(self.args(**{"--model": "GLM-5.2-BF16"}))
         )
-        self.assertIn("mxfp4-group-size", mxfp4)
-        self.assertNotIn("mxfp4-group-size", bf16)
-        self.assertEqual(len(bf16), 13)
+        self.assertEqual(mxfp4["mxfp4-group-size"], "32")
+        self.assertEqual(bf16["mxfp4-group-size"], "32")
+        self.assertEqual(list(bf16), list(mod._REQUEST_KEY_ORDER))
+        self.assertEqual(len(bf16), 14)
+        self.assertEqual(mod._empty_echo()["mxfp4-group-size"], "32")
+        self.assertEqual(
+            mod.best_effort_request_echo(self.args(**{"--model": "NOT-ALLOWED"}))[
+                "mxfp4-group-size"
+            ],
+            "32",
+        )
 
     # ---- 下发给 msmodeling 的参数 ----
 
@@ -333,13 +343,14 @@ class TaskEnterTests(unittest.TestCase):
     def test_empty_shapes(self) -> None:
         empty = fake_result(self.root / "artifacts", grid=False)
         _, payload_agg = self._run_main([empty], self.args(**{"--serving_modes": "0"}))
-        self.assertEqual(payload_agg["common"]["infer_strategy_npu"]["data"]["result"]["disagg"], {})
-        self.assertEqual(
-            payload_agg["common"]["infer_strategy_npu"]["data"]["result"]["agg"], {"candidates": []}
-        )
+        inner_agg = payload_agg["common"]["infer_strategy_npu"]
+        self.assertEqual((inner_agg["code"], inner_agg["status"]), (3, "empty"))
+        self.assertEqual(inner_agg["data"]["result"], {"agg": {}, "disagg": {}})
 
         _, payload_disagg = self._run_main([empty] * 3, self.args(**{"--serving_modes": "1"}))
-        self.assertEqual(payload_disagg["common"]["infer_strategy_npu"]["data"]["result"]["agg"], {})
+        inner_disagg = payload_disagg["common"]["infer_strategy_npu"]
+        self.assertEqual((inner_disagg["code"], inner_disagg["status"]), (3, "empty"))
+        self.assertEqual(inner_disagg["data"]["result"], {"agg": {}, "disagg": {}})
 
     def test_no_result_is_empty_not_failed(self) -> None:
         empty = fake_result(self.root / "artifacts", grid=False)
@@ -349,6 +360,7 @@ class TaskEnterTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         inner = payload["common"]["infer_strategy_npu"]
         self.assertEqual((inner["code"], inner["status"]), (3, "empty"))
+        self.assertEqual(inner["data"]["result"], {"agg": {}, "disagg": {}})
 
     def test_fatal_marker_is_failed(self) -> None:
         fatal = fake_result(
@@ -358,9 +370,15 @@ class TaskEnterTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(payload["code"], 1)
         self.assertEqual(payload["common"]["infer_strategy_npu"]["code"], 1)
+        self.assertEqual(
+            payload["common"]["infer_strategy_npu"]["data"]["result"],
+            {"agg": {}, "disagg": {}},
+        )
 
     def test_invalid_input_still_writes_full_json(self) -> None:
-        exit_code = mod.main(self.args(**{"--model": "NOT-ALLOWED"}))
+        stamp = "2026-11-09T09:06:16+08:00"
+        with patch.object(mod, "_now_iso", return_value=stamp):
+            exit_code = mod.main(self.args(**{"--model": "NOT-ALLOWED"}))
         self.assertEqual(exit_code, 1)
         payload = json.loads(self.result_file.read_text(encoding="utf-8"))
         self.assertEqual(payload["code"], 1)
@@ -369,7 +387,81 @@ class TaskEnterTests(unittest.TestCase):
         self.assertEqual(set(request), set(mod._empty_echo()))
         self.assertEqual(request["topk"], 1)
         result = payload["common"]["infer_strategy_npu"]["data"]["result"]
-        self.assertEqual(set(result), {"agg", "disagg"})
+        self.assertEqual(result, {"agg": {}, "disagg": {}})
+        data = payload["common"]["infer_strategy_npu"]["data"]
+        # 瞬时报错：三个时刻允许同为某一秒
+        self.assertEqual(
+            [data[key] for key in ("created_at", "started_at", "finished_at")],
+            [stamp, stamp, stamp],
+        )
+
+    def test_result_floats_rounded_half_up(self) -> None:
+        run_dir = self.root / "artifacts"
+        agg = agg_candidate(12.345)
+        agg["ttft_ms"] = 2.675
+        agg["tpot_ms"] = 1.004
+        pd_item = pd_candidate(30.0, 100.0, "P8D8")
+        pd_item["prefill"]["tokens_per_s_per_device"] = 3.755
+        results = [
+            fake_result(run_dir, agg_candidates=[agg]),
+            fake_result(run_dir, pd_candidates=[pd_item]),
+            fake_result(run_dir, grid=False),
+            fake_result(run_dir, grid=False),
+        ]
+        _, payload = self._run_main(results)
+        data = payload["common"]["infer_strategy_npu"]["data"]
+        agg_out = data["result"]["agg"]["candidates"][0]
+        self.assertEqual(agg_out["throughput_tokens_per_s"], 12.35)
+        self.assertEqual(agg_out["ttft_ms"], 2.68)
+        self.assertEqual(agg_out["tpot_ms"], 1.0)
+        self.assertEqual(agg_out["num_devices"], 32)  # 整数不变
+        self.assertIs(agg_out["meets_slo"], True)  # bool 不变
+        self.assertIsNone(agg_out["parallel"]["pp"])  # null 不变
+        disagg_out = data["result"]["disagg"]["candidates"][0]
+        self.assertEqual(disagg_out["prefill"]["tokens_per_s_per_device"], 3.76)
+        self.assertIsInstance(data["request"]["ttft_limit"], float)
+
+        self.assertEqual(
+            mod.round_json_floats({"a": 0.005, "b": -1.005, "c": 2, "d": None, "e": "x"}),
+            {"a": 0.01, "b": -1.01, "c": 2, "d": None, "e": "x"},
+        )
+        self.assertEqual(mod.round_json_floats(0.001), 0.0)  # 边界：秒值也会被格式化
+
+    def test_request_ttft_limit_keeps_precision(self) -> None:
+        """入参回显不做 2 位取整，避免 0.001 秒被格式化成 0.0 越出 4.1.2 值域。"""
+        config = mod.parse_and_validate(self.args(**{"--ttft-limit": "0.001"}))
+        echo = mod.build_request_echo(config)
+        payload = mod.assemble_payload(
+            echo,
+            mod.RunOutcome(),
+            ("t0", "t1", "t2"),
+            mod.Status(0, "success", "ok", 3, "empty", "no result"),
+        )
+        request = payload["common"]["infer_strategy_npu"]["data"]["request"]
+        self.assertEqual(request["ttft_limit"], 0.001)
+        self.assertEqual(config.ttft_limit_ms, 1)
+
+    def test_timestamps_seconds_precision_with_elapsed(self) -> None:
+        """秒精度 ISO8601；十几秒耗时的任务自然错开 finished_at，不做人为顺延。"""
+        run_dir = self.root / "artifacts"
+        results = [fake_result(run_dir, agg_candidates=[agg_candidate(100.0)])]
+        results += [fake_result(run_dir, grid=False)] * 3
+        created = "2026-11-09T09:06:16+08:00"
+        finished = "2026-11-09T09:06:29+08:00"
+        stamps = iter([created, created, finished])
+        with patch.object(mod, "_now_iso", side_effect=lambda: next(stamps, finished)):
+            _, payload = self._run_main(results)
+        data = payload["common"]["infer_strategy_npu"]["data"]
+        self.assertEqual(data["created_at"], created)
+        self.assertEqual(data["started_at"], created)
+        self.assertEqual(data["finished_at"], finished)
+        self.assertLess(data["created_at"], data["finished_at"])
+        self.assertTrue(
+            all(
+                "." not in stamp and stamp.endswith("+08:00")
+                for stamp in (data["created_at"], data["started_at"], data["finished_at"])
+            )
+        )
 
     def test_atomic_write(self) -> None:
         path = self.root / "deep" / "result.json"

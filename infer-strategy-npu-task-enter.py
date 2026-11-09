@@ -27,7 +27,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -40,6 +40,10 @@ if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
 _LOGGER_NAME = "infer_strategy_npu.task_enter"
 
 # --------------------------------------------------------------------------- 配置表
+
+# 4.1.3：方案表未解析到配对 group-size 时，request 也按默认值回显（仅回显，不下发）
+DEFAULT_MXFP4_GROUP_SIZE = "32"
+
 
 @dataclass(frozen=True)
 class ModelPlan:
@@ -126,7 +130,7 @@ _FATAL_MARKERS = (
 # --------------------------------------------------------------------------- 工具函数
 
 def _now_iso() -> str:
-    """ISO8601 带时区偏移（+08:00），不依赖容器 tzdata。"""
+    """ISO8601 秒精度、带 +08:00 偏移（如 2026-11-04T09:06:16+08:00），不依赖容器 tzdata。"""
     return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
 
 
@@ -149,6 +153,24 @@ def _clean(value: Any) -> Any:
 def _num_key(value: Any) -> float:
     item = _clean(value)
     return float(item) if isinstance(item, (int, float)) and not isinstance(item, bool) else float("-inf")
+
+
+def round_json_floats(value: Any) -> Any:
+    """结果 JSON 中所有小数保留 2 位（四舍五入 ROUND_HALF_UP）。
+
+    整数、bool、字符串、null 保持不变；NaN/Inf 归为 null。幂等，可重复调用。
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    if isinstance(value, dict):
+        return {key: round_json_floats(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [round_json_floats(item) for item in value]
+    return value
 
 
 def _option_value(argv: Sequence[str], names: Sequence[str]) -> str | None:
@@ -324,14 +346,26 @@ def parse_and_validate(argv: Sequence[str]) -> TaskConfig:
 
 # --------------------------------------------------------------------------- request 回显
 
+# 4.1.3 参数说明表的字段顺序（mxfp4-group-size 为必返字段，未解析到配对值时回显默认 32）
+_REQUEST_KEY_ORDER = (
+    "model", "device", "num_devices", "num_nodes", "input_length", "output_length",
+    "ttft_limit", "tpot_limit", "serving_modes", "quantize-linear-action",
+    "quantize-non-expert-linear-action", "mxfp4-group-size",
+    "quantize-attention-action", "topk",
+)
+
+
 def _empty_echo() -> dict[str, Any]:
-    """校验失败时也要保证 4.1.3 的 request 字段齐全（值尽力填充，无法确定则为 null）。"""
-    keys = (
-        "model", "device", "num_devices", "num_nodes", "input_length", "output_length",
-        "ttft_limit", "tpot_limit", "serving_modes", "quantize-linear-action",
-        "quantize-non-expert-linear-action", "quantize-attention-action", "topk",
-    )
-    return {key: None for key in keys}
+    """校验失败时也要保证 4.1.3 的 request 字段齐全；group-size 用默认值，其余尽力填充。"""
+    return {
+        key: DEFAULT_MXFP4_GROUP_SIZE if key == "mxfp4-group-size" else None
+        for key in _REQUEST_KEY_ORDER
+    }
+
+
+def _ordered_echo(echo: dict[str, Any]) -> dict[str, Any]:
+    """统一成功/失败回显的字段顺序（字段齐全，不再有条件字段）。"""
+    return {key: echo[key] for key in _REQUEST_KEY_ORDER if key in echo}
 
 
 def build_request_echo(config: TaskConfig) -> dict[str, Any]:
@@ -349,8 +383,7 @@ def build_request_echo(config: TaskConfig) -> dict[str, Any]:
         "quantize-linear-action": str(config.plan.linear),
         "quantize-non-expert-linear-action": str(config.plan.non_expert_linear),
     }
-    if config.plan.mxfp4_group_size:
-        echo["mxfp4-group-size"] = str(config.plan.mxfp4_group_size)
+    echo["mxfp4-group-size"] = str(config.plan.mxfp4_group_size or DEFAULT_MXFP4_GROUP_SIZE)
     echo["quantize-attention-action"] = str(config.plan.attention)
     echo["topk"] = int(TOPK)
     return echo
@@ -361,7 +394,7 @@ def best_effort_request_echo(argv: Sequence[str]) -> dict[str, Any]:
     try:
         args = build_parser().parse_args(list(argv))
     except (ValueError, SystemExit):
-        return echo
+        return _ordered_echo(echo)
 
     def maybe_int(raw: Any) -> int | None:
         try:
@@ -392,9 +425,11 @@ def best_effort_request_echo(argv: Sequence[str]) -> dict[str, Any]:
         echo["quantize-linear-action"] = plan.linear
         echo["quantize-non-expert-linear-action"] = plan.non_expert_linear
         echo["quantize-attention-action"] = plan.attention
-        if plan.mxfp4_group_size:
-            echo["mxfp4-group-size"] = plan.mxfp4_group_size
-    return echo
+    # 模型不在白名单、或方案表未解析到配对 group-size 时，回显默认值 32
+    echo["mxfp4-group-size"] = str(
+        (plan.mxfp4_group_size if plan else None) or DEFAULT_MXFP4_GROUP_SIZE
+    )
+    return _ordered_echo(echo)
 
 
 # --------------------------------------------------------------------------- 日志
@@ -647,6 +682,19 @@ def assemble_payload(
         reverse=True,
     )[:TOPK]
 
+    if status.global_code == 1 or status.inner_code == 3:
+        # 任务失败(1)或无结果(3/empty)时两个形态统一为空字典，避免出现半边 candidates:[]
+        result_payload: dict[str, Any] = {"agg": {}, "disagg": {}}
+    else:
+        # 仅对结果指标做 2 位四舍五入；request 是入参回显，保持原精度与 4.1.2 值域
+        result_payload = round_json_floats(
+            {
+                "agg": {"candidates": [project_agg_candidate(c) for c in agg_best]}
+                if wants_agg else {},
+                "disagg": {"candidates": [project_disagg_candidate(c) for c in disagg_best]}
+                if wants_disagg else {},
+            }
+        )
     created_at, started_at, finished_at = times
     return {
         "code": int(status.global_code),
@@ -662,12 +710,7 @@ def assemble_payload(
                     "started_at": started_at,
                     "finished_at": finished_at,
                     "request": request_echo,
-                    "result": {
-                        "agg": {"candidates": [project_agg_candidate(c) for c in agg_best]}
-                        if wants_agg else {},
-                        "disagg": {"candidates": [project_disagg_candidate(c) for c in disagg_best]}
-                        if wants_disagg else {},
-                    },
+                    "result": result_payload,
                 },
             }
         },
@@ -739,7 +782,7 @@ def _log_plan(config: TaskConfig, logger: logging.Logger) -> None:
     logger.info(
         "[mapping] quantize=ENABLE linear=%s non_expert=%s attention=%s mxfp4-group-size=%s",
         config.plan.linear, config.plan.non_expert_linear, config.plan.attention,
-        config.plan.mxfp4_group_size or "不下发/不回显",
+        config.plan.mxfp4_group_size or f"不下发，回显默认 {DEFAULT_MXFP4_GROUP_SIZE}",
     )
     logger.info(
         "[mapping] ttft_limit=%s s -> %d ms%s；tpot_limit=%d ms%s；serving_modes=%d；num_devices=%d",
@@ -815,6 +858,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if status is None:  # pragma: no cover - 防御性兜底
         status = Status(1, "failed", "寻优任务执行失败", 1, "failed", "任务报错失败")
 
+    # 不做人为顺延：真实寻优耗时十几秒，秒精度自然错开；瞬时报错允许三值同一秒
     finished_at = _now_iso()
     payload = assemble_payload(
         echo or _empty_echo(), outcome, (created_at, started_at, finished_at), status
