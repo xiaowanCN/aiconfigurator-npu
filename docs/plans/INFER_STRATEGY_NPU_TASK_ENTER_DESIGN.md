@@ -103,6 +103,8 @@ A 与「直接分发于 msmodeling 工具」不冲突：进程内分发与 4.1.1
 
 格式：`{简化模型名}-{量化}`，简化模型名取原「厂商/模型名」中的模型名。方案表**配置驱动**，后续扩充只增表项。
 
+> 后续新增模型方案 / 设备 / PD 组合的完整操作步骤见《扩展指南》：`docs/plans/INFER_STRATEGY_NPU_TASK_ENTER_EXTENSION.md`。
+
 | `--model` | 简化模型名 / 仓库 `model_id` | msmodeling 模型目录 | `--quantize-linear-action` | `--quantize-non-expert-linear-action` | `--quantize-attention-action` | `--mxfp4-group-size` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `GLM-5.2-w4a4c8-mxfp4` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `MXFP4` | `FP8` | `FP8` | `32`（下发 + 回显） |
