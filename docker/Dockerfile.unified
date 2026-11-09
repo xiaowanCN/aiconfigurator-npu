@@ -21,6 +21,8 @@ COPY src/ ./src/
 COPY ui/ ./ui/
 COPY pyproject.toml README.md ./
 COPY scripts/ ./scripts/
+# 接口文档第 4 章「推理策略寻优任务创建」一次性入口（容器常驻 + docker exec 触发）
+COPY infer-strategy-npu-task-enter.py ./
 
 RUN pip install --no-cache-dir -e .
 
@@ -50,7 +52,8 @@ RUN TORCH_DEVICE_BACKEND_AUTOLOAD=0 python -c "import importlib.util as u; [prin
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTHONPATH=/workspace/collector \
-    INFER_STRATEGY_LOCAL_MODEL_ROOT=model_configs/msmodeling
+    INFER_STRATEGY_LOCAL_MODEL_ROOT=model_configs/msmodeling \
+    TZ=Asia/Shanghai
 
 RUN mkdir -p /workspace/data /workspace/local_models /workspace/results
 
