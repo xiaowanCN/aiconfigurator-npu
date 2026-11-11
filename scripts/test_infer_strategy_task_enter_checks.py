@@ -343,7 +343,7 @@ CATEGORY_DESC = (
     ("smoke", "三种 serving_modes 的基础寻优，覆盖 0/1/2 与全局/内层状态组合"),
     ("defaults", "省略 ttft/tpot/serving_modes 时的默认值与回显"),
     ("alias", "下划线 / 连字符双 option string 别名"),
-    ("matrix", "8 个模型方案 × 3 个设备 × 4 种卡数的 PD 组合过滤矩阵"),
+    ("matrix", "9 个模型方案 × 3 个设备 × 4 种卡数的 PD 组合过滤矩阵"),
     ("boundary", "num_devices / input / output / ttft / tpot 的值域上下界与极端 SLO"),
     ("invalid", "白名单、值域越界、非整数、路径、缺必填参数等全部失败分支"),
     ("contract", "运行期不写结果文件、失败仍落盘完整 JSON 等落盘契约"),

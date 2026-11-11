@@ -251,6 +251,12 @@ CASES = [
         "overrides": {"--serving_modes": "0"},
         "note": "执行期异常：全局 1/failed，内层 1/failed，异常栈写入日志",
     },
+    {
+        "name": "新方案 DeepSeek-R1-0528-W8A8（serving_modes=0）",
+        "scenario": "success",
+        "overrides": {"--model": "DeepSeek-R1-0528-W8A8", "--serving_modes": "0"},
+        "note": "复用 DeepSeek-R1 目录；W8A8_DYNAMIC/W8A8_DYNAMIC/DISABLED，group-size 仅回显默认 32",
+    },
 ]
 
 

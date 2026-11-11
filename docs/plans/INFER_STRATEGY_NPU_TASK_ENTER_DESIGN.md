@@ -78,7 +78,7 @@ A 与「直接分发于 msmodeling 工具」不冲突：进程内分发与 4.1.1
 
 | 参数（文档名） | 必选 | 类型 | 取值范围 / 默认 | 兼容别名 | 内部/下发处理 |
 | --- | --- | --- | --- | --- | --- |
-| `--model` | 是 | string | 8 个白名单值（精确匹配、大小写敏感），见 §4 | 无 | 拆为「简化模型名 + 量化方案」→ 仓库 `model_id` + 量化动作 |
+| `--model` | 是 | string | 9 个白名单值（精确匹配、大小写敏感），见 §4 | 无 | 拆为「简化模型名 + 量化方案」→ 仓库 `model_id` + 量化动作 |
 | `--device` | 是 | string | `910B2` / `910B4` / `950DT` | 无 | 映射为 `ATLAS_*`，见 §5 |
 | `--num_devices` | 是 | integer | 8 的倍数、`[8,256]` | `--num-devices` | 直接作为 msmodeling `--num-devices`；`num_nodes = num_devices // gpus_per_node` |
 | `--input_length` | 是 | integer | `[128,131072]` | `--input-length` | `--input-length` |
@@ -113,13 +113,14 @@ A 与「直接分发于 msmodeling 工具」不冲突：进程内分发与 4.1.1
 | `GLM-5.2-FP8` | `GLM-5.2` / `ZhipuAI/GLM-5.2` | `GLM5.2` | `FP8` | `DISABLED` | `FP8` | 不下发、**回显默认 32** |
 | `GLM-5.3-FP8` | `GLM-5.3` / `ZhipuAI/GLM-5.3` | `GLM5.3` | `FP8` | `DISABLED` | `FP8` | 不下发、**回显默认 32** |
 | `DeepSeek-R1-FP8` | `DeepSeek-R1` / `deepseek-ai/DeepSeek-R1` | `DeepSeek-R1` | `FP8` | `FP8` | `FP8` | 不下发、**回显默认 32** |
+| `DeepSeek-R1-0528-W8A8` | `DeepSeek-R1` / `deepseek-ai/DeepSeek-R1` | `DeepSeek-R1` | `W8A8_DYNAMIC` | `W8A8_DYNAMIC` | `DISABLED` | 不下发、**回显默认 32** |
 | `DeepSeek-V4.1-Flash-MXFP4` | `DeepSeek-V4.1-Flash` / `deepseek-ai/DeepSeek-V4.1-Flash` | `DeepSeek-V4.1-Flash` | `MXFP4` | `FP8` | `DISABLED` | `32`（下发 + 回显） |
 | `DeepSeek-V4-Pro-W8A8` | `DeepSeek-V4-Pro` / `deepseek-ai/DeepSeek-V4-Pro` | `DeepSeek-V4-Pro` | `W8A8_DYNAMIC` | `W8A8_DYNAMIC` | `INT8` | 不下发、**回显默认 32** |
 
 要点：
 
 1. **映射链**：白名单 → `(仓库 model_id, 量化动作, 是否下发 group-size；request 的 group-size 缺省回显 32)`；`model_id` 交给 `models.msmodeling_model_source()` 解析为本地模型目录。容器内默认 `model_configs/msmodeling/<目录>`（即案例中 `models\GLM5.2` 的等价路径；可用 `INFER_STRATEGY_LOCAL_MODEL_ROOT=/workspace/models` 对齐案例写法）。**不再把平台白名单当 ModelScope ID 直接传给 msmodeling**。
-2. **量化值域**：以 4.1.3 参数说明为准——linear / non-expert 允许 `DISABLED,W8A16_STATIC,W8A8_STATIC,W4A8_STATIC,W8A16_DYNAMIC,W8A8_DYNAMIC,W4A8_DYNAMIC,FP8,MXFP4,HIF8`；attention 允许 `DISABLED,INT8,FP8,HIF8`。脚本对表内取值做白名单校验，当前 8 项全部落在文档值域内。现有 `quantize.py:38/50` 的枚举缺 `HIF8`，当前方案不涉及；后续扩充到 `HIF8` 时再补枚举。
+2. **量化值域**：以 4.1.3 参数说明为准——linear / non-expert 允许 `DISABLED,W8A16_STATIC,W8A8_STATIC,W4A8_STATIC,W8A16_DYNAMIC,W8A8_DYNAMIC,W4A8_DYNAMIC,FP8,MXFP4,HIF8`；attention 允许 `DISABLED,INT8,FP8,HIF8`。脚本对表内取值做白名单校验，当前 9 项全部落在文档值域内。现有 `quantize.py:38/50` 的枚举缺 `HIF8`，当前方案不涉及；后续扩充到 `HIF8` 时再补枚举。
 3. **必须 `quantize="ENABLE"`**：`resolve_ms_quantize_actions()` 在 `DISABLE` 时会**忽略显式 action 并强制三项 `DISABLED`**。因此统一构造 `RecommendRequest(quantize="ENABLE", 三个 action=表内值)`，BF16 方案用三个 `DISABLED` 表达，避免语义被覆盖。
 4. **`--mxfp4-group-size 32`**：已确认 msmodeling 支持（参考案例均可跑出候选），**不做探测/降级**。仓库未建模该参数，仅 2 个 MXFP4 方案经 `extra_msmodeling_args=["--mxfp4-group-size","32"]` 逃生舱透传；非 MXFP4 方案**不下发该参数，但 `request` 仍按默认值 `"32"` 回显**（本轮调整，覆盖 v2 Q4 原结论；下发行为同 Q8）。
 5. **固定下发参数**（平台入参中没有，按《调整事项》PD 分离案例固定）：`--jobs 32`、`--max-batched-tokens 8192`、`--batch-range 4 512`，以及每个 PD 组合的 `--enable-optimize-prefill-decode-ratio --prefill-devices-per-instance P --decode-devices-per-instance D`；不下发 `--compile`、投机参数、`--max-search-combinations`、`--tp-sizes`。
@@ -311,7 +312,7 @@ python -m cli.inference.throughput_optimizer model_configs/msmodeling/DeepSeek-V
 
 | # | 用例 | 期望 |
 | --- | --- | --- |
-| 1 | 8 个白名单 × 3 设备等价命令核对（内部 dry-run 调试，不新增 CLI 参数） | 量化动作、group-size 是否下发、jobs/batch-range 与方案表一致；每个 disagg 子任务 P=D |
+| 1 | 9 个白名单 × 3 设备等价命令核对（内部 dry-run 调试，不新增 CLI 参数） | 量化动作、group-size 是否下发、jobs/batch-range 与方案表一致；每个 disagg 子任务 P=D |
 | 2 | 文档 4.1.1 示例命令全量执行（950DT / 32 卡 / ttft 20 / tpot 100 / modes 2） | 内层 `code=0`；`num_nodes=4`(int)、`ttft_limit=20.0`(float)、`serving_modes=2`(int)，agg 与 disagg 各 1 条候选 |
 | 3 | 值域边界：`num_devices=8/256`、`input/output=128/131072`、`ttft=0.001/60`、`tpot=1/1000` | 通过；`ttft 0.001 → --ttft-limit 1` |
 | 4 | 不传 `--ttft_limit/--tpot_limit` | 默认生效，等价命令 `--ttft-limit 20000 --tpot-limit 100`，`request` 回显 `20.0`(float) / `100`(int) |

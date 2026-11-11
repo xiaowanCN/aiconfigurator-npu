@@ -42,7 +42,7 @@
 | 1 | `infer-strategy-npu-task-enter.py` | `MODEL_PLANS` | 增 1 项 `ModelPlan(...)` | 是 |
 | 2 | `src/infer_strategy_npu/models.py` | `MODELS` | 仅当 `model_id` 未注册时补 `ModelSpec` | 条件 |
 | 3 | `model_configs/msmodeling/<local_dir>/` | `config.json` | 仅当新 `local_dir` 不存在时补，并重建镜像 | 条件 |
-| 4 | `scripts/run_infer_strategy_task_enter_tests.py` | `test_model_plans` | `len(mod.MODEL_PLANS) == 8` 改为新数量；若新方案是 MXFP4，同步更新 `mxfp4` 集合断言（当前 2 个） | 是 |
+| 4 | `scripts/run_infer_strategy_task_enter_tests.py` | `test_model_plans` | `len(mod.MODEL_PLANS) == 9` 改为新数量；若新方案是 MXFP4，同步更新 `mxfp4` 集合断言（当前 2 个） | 是 |
 | 5 | 同上 | 新增用例 | 建议补 1 个 `build_request_echo()` 回显 + `build_request()` 下发断言 | 建议 |
 | 6 | `scripts/demo_infer_strategy_task_enter_responses.py` | `CASES` | 可选加 1 个演示案例（沿用 `serving_modes=0/1`） | 可选 |
 | 7 | `docs/plans/INFER_STRATEGY_NPU_TASK_ENTER_DESIGN.md` | §3 参数表、§4 方案表、§10 用例 1 | 白名单数量与方案表行同步 | 是 |
@@ -72,8 +72,8 @@
 
 随后只需：
 
-- `test_model_plans` 的 `8` 改成 `9`（不是 MXFP4 方案，`mxfp4` 集合断言不变）；
-- 设计文档 §4 方案表加 1 行，`--mxfp4-group-size` 列填 `不下发、**回显默认 32**`；§3 与 §10 用例 1 的「8 个」改成「9 个」；
+- `test_model_plans` 的 `9` 改成 `10`（不是 MXFP4 方案，`mxfp4` 集合断言不变）；
+- 设计文档 §4 方案表加 1 行，`--mxfp4-group-size` 列填 `不下发、**回显默认 32**`；§3 与 §10 用例 1 的「9 个」改成「10 个」；
 - 其余代码、测试、Dockerfile 都不动。
 
 ### 2.5 新增表项后自动生效、无需改的地方
@@ -162,7 +162,7 @@ python infer-strategy-npu-task-enter.py --model <新方案> --device 950DT --num
 | 只加了 `MODEL_PLANS`，入参校验通过但执行报 `unsupported --model` | 框架 `MODELS` 未注册该 `model_id` | §2.1 第 1 项 |
 | 容器里模型加载超时 / 联网失败 | `local_dir` 目录不存在，`msmodeling_model_source()` 回退到 ModelScope ID，而 `HF_HUB_OFFLINE=1` | §2.1 第 2 项 |
 | 新方案立刻 `1/failed`，提示「量化动作超出 4.1.3 预留值域」 | 用了值域外枚举 | 只能选 `_LINEAR_VALUE_DOMAIN` / `_ATTENTION_VALUE_DOMAIN` 内的值 |
-| `test_model_plans` 失败 | `len(mod.MODEL_PLANS) == 8` 与 MXFP4 集合是硬编码断言 | §2.2 第 4 项 |
+| `test_model_plans` 失败 | `len(mod.MODEL_PLANS) == 9` 与 MXFP4 集合是硬编码断言 | §2.2 第 4 项 |
 | 非 MXFP4 方案没下发 `--mxfp4-group-size` | 正常：`mxfp4_group_size=None` 时只回显默认 `"32"`，不下发 | 无需处理 |
 | `case_12` 只有 `.txt` 没有 `.json` | 它是「`--result-file` 非 .json」的失败案例，内容仍是完整契约 JSON | 见演示脚本 `CASES` 的 `result_suffix` |
 | 只改了 `PD_RATIO_SIZES` 但单测报 `sizes == [8,16,32]` | `test_only_three_symmetric_calls` 硬编码了组合列表 | §4 |

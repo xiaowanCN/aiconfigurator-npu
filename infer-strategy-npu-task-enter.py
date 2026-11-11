@@ -64,6 +64,9 @@ MODEL_PLANS: dict[str, ModelPlan] = {
     "GLM-5.2-FP8": ModelPlan("ZhipuAI/GLM-5.2", "GLM5.2", "FP8", "DISABLED", "FP8"),
     "GLM-5.3-FP8": ModelPlan("ZhipuAI/GLM-5.3", "GLM5.3", "FP8", "DISABLED", "FP8"),
     "DeepSeek-R1-FP8": ModelPlan("deepseek-ai/DeepSeek-R1", "DeepSeek-R1", "FP8", "FP8", "FP8"),
+    "DeepSeek-R1-0528-W8A8": ModelPlan(
+        "deepseek-ai/DeepSeek-R1", "DeepSeek-R1", "W8A8_DYNAMIC", "W8A8_DYNAMIC", "DISABLED"
+    ),
     "DeepSeek-V4.1-Flash-MXFP4": ModelPlan(
         "deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash", "MXFP4", "FP8", "DISABLED", "32"
     ),

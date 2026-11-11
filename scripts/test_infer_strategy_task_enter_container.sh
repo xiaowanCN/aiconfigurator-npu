@@ -346,7 +346,8 @@ real_case alias_logfile    "--log_file / --result_file 别名"       alias \
 i=0
 for model in \
   "GLM-5.2-w4a4c8-mxfp4" "GLM-5.2-BF16" "GLM-5.3-BF16" "GLM-5.2-FP8" \
-  "GLM-5.3-FP8" "DeepSeek-R1-FP8" "DeepSeek-V4.1-Flash-MXFP4" "DeepSeek-V4-Pro-W8A8"; do
+  "GLM-5.3-FP8" "DeepSeek-R1-FP8" "DeepSeek-R1-0528-W8A8" \
+  "DeepSeek-V4.1-Flash-MXFP4" "DeepSeek-V4-Pro-W8A8"; do
   i=$((i + 1))
   real_case "matrix_model_$(printf '%02d' "$i")" "模型方案：$model" matrix \
     "$BASE --model $model --serving_modes 0"

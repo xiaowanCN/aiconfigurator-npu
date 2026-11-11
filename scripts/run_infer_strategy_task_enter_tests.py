@@ -142,7 +142,7 @@ class TaskEnterTests(unittest.TestCase):
     # ---- 配置表 ----
 
     def test_model_plans(self) -> None:
-        self.assertEqual(len(mod.MODEL_PLANS), 8)
+        self.assertEqual(len(mod.MODEL_PLANS), 9)
         mxfp4 = [name for name, plan in mod.MODEL_PLANS.items() if plan.mxfp4_group_size]
         self.assertEqual(set(mxfp4), {"GLM-5.2-w4a4c8-mxfp4", "DeepSeek-V4.1-Flash-MXFP4"})
         for plan in mod.MODEL_PLANS.values():
@@ -151,6 +151,32 @@ class TaskEnterTests(unittest.TestCase):
             self.assertIn(plan.attention, mod._ATTENTION_VALUE_DOMAIN)
         self.assertEqual(mod.PD_RATIO_SIZES, (8, 16, 32))
         self.assertEqual(mod.TOPK, 1)
+
+    def test_r1_0528_w8a8_plan(self) -> None:
+        plan = mod.MODEL_PLANS["DeepSeek-R1-0528-W8A8"]
+        self.assertEqual(plan.model_id, "deepseek-ai/DeepSeek-R1")
+        self.assertEqual(plan.local_dir, "DeepSeek-R1")
+        self.assertEqual(
+            (plan.linear, plan.non_expert_linear, plan.attention),
+            ("W8A8_DYNAMIC", "W8A8_DYNAMIC", "DISABLED"),
+        )
+        self.assertIsNone(plan.mxfp4_group_size)
+
+        config = mod.parse_and_validate(self.args(**{"--model": "DeepSeek-R1-0528-W8A8"}))
+        echo = mod.build_request_echo(config)
+        self.assertEqual(echo["quantize-linear-action"], "W8A8_DYNAMIC")
+        self.assertEqual(echo["quantize-non-expert-linear-action"], "W8A8_DYNAMIC")
+        self.assertEqual(echo["quantize-attention-action"], "DISABLED")
+        self.assertEqual(echo["mxfp4-group-size"], "32")  # 仅回显默认值，不下发
+
+        request = mod.build_request(config, ["disagg"], 16)
+        self.assertEqual(request.model, "deepseek-ai/DeepSeek-R1")
+        self.assertEqual(request.quantize, "ENABLE")
+        self.assertEqual(request.quantize_linear_action, "W8A8_DYNAMIC")
+        self.assertEqual(request.quantize_non_expert_linear_action, "W8A8_DYNAMIC")
+        self.assertEqual(request.quantize_attention_action, "DISABLED")
+        self.assertIsNone(request.extra_msmodeling_args)
+        self.assertEqual(request.pd_ratio_sizes, [16])
 
     def test_device_specs(self) -> None:
         self.assertEqual(mod.DEVICE_SPECS["910B2"].ms_device, "ATLAS_800_A2_376T_64G")
