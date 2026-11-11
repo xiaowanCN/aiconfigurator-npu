@@ -1,0 +1,195 @@
+参考文件：ui\data\模型调优页面-训练调优-v2旗舰版.html
+被优化文件：ui\data\模型调优页面-训练调优-v2旗舰版.html
+被优化文件中数据格式案例：
+
+推理策略寻优阶段：
+1、PD混部时推理寻优结果：
+{
+  "code": 0,
+  "status": "success",
+  "message": "寻优任务完成",
+  "common": {
+    "infer_strategy_npu": {
+      "code": 0,
+      "status": "success",
+      "message": "寻优策略任务完成，已找到结果",
+      "data": {
+        "created_at": "2026-11-04T09:06:16+08:00",
+        "started_at": "2026-11-04T09:06:16+08:00",
+        "finished_at": "2026-11-04T09:10:12+08:00",
+        "request": {
+          "model": "DeepSeek-V4.1-Flash-MXFP4",
+          "device": "950DT",
+          "num_devices": "32",
+          "num_nodes": "4",
+          "input_length": "4096",
+          "output_length": "1024",
+          "ttft_limit": "20",
+          "tpot_limit": "100",
+          "serving_modes": "2",
+          "quantize-linear-action": "MXFP4",
+          "quantize-non-expert-linear-action": "FP8",
+          "mxfp4-group-size": "32",
+          "quantize-attention-action": "DISABLED"
+        },
+        "result": {
+          "agg": {
+            "candidates": [
+              {
+                "throughput_tokens_per_s": 4179.66,
+                "throughput_tokens_per_s_per_device": 130.62,
+                "throughput_req_per_s": 4.09,
+                "ttft_ms": 1778.74,
+                "tpot_ms": 44.22,
+                "meets_slo": true,
+                "concurrency": 192,
+                "batch_size": 6,
+                "num_devices": 32,
+                "parallel": {
+                  "tp": 1,
+                  "pp": 1,
+                  "dp": 32,
+                  "ep": 32
+                }
+              }
+            ]
+          },
+          "disagg": {}
+        }
+      }
+    }
+  }
+}
+
+2、PD分离时推理寻优结果：
+{
+  "code": 0,
+  "status": "success",
+  "message": "寻优任务完成",
+  "common": {
+    "infer_strategy_npu": {
+      "code": 0,
+      "status": "success",
+      "message": "寻优策略任务完成，已找到结果",
+      "data": {
+        "created_at": "2026-11-04T09:06:16+08:00",
+        "started_at": "2026-11-04T09:06:16+08:00",
+        "finished_at": "2026-11-04T09:10:12+08:00",
+        "request": {
+          "model": "DeepSeek-V4.1-Flash-MXFP4",
+          "device": "950DT",
+          "num_devices": "32",
+          "num_nodes": "4",
+          "input_length": "4096",
+          "output_length": "1024",
+          "ttft_limit": "20",
+          "tpot_limit": "100",
+          "serving_modes": "2",
+          "quantize-linear-action": "MXFP4",
+          "quantize-non-expert-linear-action": "FP8",
+          "mxfp4-group-size": "32",
+          "quantize-attention-action": "DISABLED"
+        },
+        "result": {
+          "agg": {},
+          "disagg": {
+            "candidates": [
+              {
+                "prefill": {
+                  "instances": 1,
+                  "devices_per_instance": 8,
+                  "devices_total": 8,
+                  "parallel": {
+                    "tp": 8,
+                    "pp": 1,
+                    "dp": 1,
+                    "ep": 8
+                  },
+                  "batch_size": 193,
+                  "concurrency": 193,
+                  "ttft_ms": 600.79,
+                  "tpot_ms": null,
+                  "tokens_per_s_per_instance": 27203.85,
+                  "tokens_per_s_per_device": 3400.48,
+                  "tokens_per_s_cluster": 27203.86
+                },
+                "decode": {
+                  "instances": 3,
+                  "devices_per_instance": 8,
+                  "devices_total": 24,
+                  "parallel": {
+                    "tp": 2,
+                    "pp": 1,
+                    "dp": 4,
+                    "ep": 8
+                  },
+                  "batch_size": 6,
+                  "concurrency": 24,
+                  "ttft_ms": null,
+                  "tpot_ms": 67.10,
+                  "tokens_per_s_per_instance": 357.67,
+                  "tokens_per_s_per_device": 44.71,
+                  "tokens_per_s_cluster": 1073.01
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+
+
+推理仿真阶段数据案例：
+1、针对上有PD混部和PD分离时下游输出格式统一
+{
+  "code": 0,
+  "status": "success",
+  "message": "推理仿真任务执行成功",
+  "common": {
+    "infer_simulate": {
+        "code": 0,
+        "status": "success",
+        "message": "推理仿真任务执行成功",
+        "data":{
+            "throughput":{
+                "requests":1,
+                "latency":203.45,
+                "input_tokens":16384,
+                "generated_tokens":2048,
+                "prompt_throughput":80.53,
+                "generation_throughput":10.07,
+                "total_throughput":90.60
+                },
+            "ttft":{
+                "mean":264.34,
+                "median":264.34,
+                "p99":264.34
+                },
+            "tpot":{
+                "mean":99.26,
+                "median":99.26,
+                "p99":99.26
+                },
+            "itl":{
+                "mean":99.26,
+                "median":99.26,
+                "p99":101.53
+                }
+        }
+    }
+}
+}
+
+## 任务描述：
+1、现在对于文件 ui\data\推理寻优与仿真结果界面.html 其数据展示的内容是固定的，但是其展示形式可能还不够花里胡哨，请你参考文件 ui\data\模型调优页面-训练调优-v2旗舰版.html
+进行修改
+
+我的观点：
+1、对方UI中 流程 01任务信息 02采集信息 03 寻优策略 04 仿真结果的构建挺好看的
+2、我们需要修改下右上角原有的PD混部和PD分离的切换按钮，因为真实的任务常见下不会一下有同时的两个任务
+3、UI变花里胡哨些，同时保持原来的细节，比如悬浮+阴影，但是需要突出主题，例如在策略寻优中需要突出TP PP DP EP 等部署策略
+4、需要对于原来的数据格式中的key值，例如parallel.tp，吞吐量 换成中文的表述，同时插入些描述
+5、这版本尽可能花里胡哨详细些，后面在做减法
+6、不修改源文件，新文件输出到本项目 ui\edit 路径下。

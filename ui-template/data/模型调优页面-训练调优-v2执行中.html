@@ -1,0 +1,1819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智算调优平台 · 模型调优（训练调优）执行中</title>
+    <style>
+        :root {
+            --sidebar-bg: #0a1f3c;
+            --sidebar-hover: #14304c;
+            --primary: #1668dc;
+            --primary-dark: #0e56c0;
+            --primary-2: #3d8bfd;
+            --bg: #f2f4f8;
+            --card: #ffffff;
+            --border: #e6eaf1;
+            --border-dark: #d6dce6;
+            --text: #1c2532;
+            --text-2: #55637a;
+            --text-3: #8b96a8;
+            --green: #0f9d58;
+            --green-bg: #e6f6ec;
+            --orange: #e8890c;
+            --orange-bg: #fdf3e3;
+            --red: #e1463e;
+            --red-bg: #fdecea;
+            --blue-bg: #e9f1fe;
+            --radius: 10px;
+            --shadow: 0 1px 3px rgba(28, 37, 50, .05);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* 6. 字体优化：正文/数字分层、抗锯齿、表格数字等宽对齐 */
+        body {
+            font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+
+        .num,
+        .ov-cell .v,
+        .dim .v,
+        .mi .v,
+        .cs-val,
+        .sc-tput .v,
+        .hw-item .v {
+            font-family: "SF Mono", Consolas, "Courier New", monospace;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -.1px;
+        }
+
+        .layout {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ============ 左侧导航（平台现状复刻） ============ */
+        .sidebar {
+            width: 212px;
+            background: linear-gradient(180deg, #0a1f3c 0%, #0c2547 100%);
+            color: #c6d3e2;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 18px 16px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, .07);
+        }
+
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 9px;
+            background: linear-gradient(135deg, #3d8bfd, #1250b5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 17px;
+            box-shadow: 0 2px 8px rgba(22, 104, 220, .45);
+        }
+
+        .logo-name {
+            font-size: 15px;
+            font-weight: 600;
+            color: #fff;
+            line-height: 1.25;
+        }
+
+        .logo-sub {
+            font-size: 10px;
+            color: #6f8cab;
+            letter-spacing: .4px;
+        }
+
+        .menu {
+            flex: 1;
+            padding: 12px 10px;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13.5px;
+            margin-bottom: 4px;
+            color: #a9bcd4;
+            position: relative;
+            transition: all .15s;
+        }
+
+        .menu-item svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        .menu-item:hover {
+            background: var(--sidebar-hover);
+            color: #e6eef7;
+        }
+
+        .menu-item.active {
+            background: linear-gradient(90deg, rgba(61, 139, 253, .22), rgba(61, 139, 253, .08));
+            color: #fff;
+            font-weight: 500;
+        }
+
+        .menu-item.active::before {
+            content: "";
+            position: absolute;
+            left: -10px;
+            top: 9px;
+            bottom: 9px;
+            width: 3px;
+            border-radius: 0 3px 3px 0;
+            background: var(--primary-2);
+        }
+
+        .menu-item .arrow {
+            margin-left: auto;
+            font-size: 10px;
+            color: #5f7ea3;
+        }
+
+        .space-bar {
+            padding: 13px 12px;
+            border-top: 1px solid rgba(255, 255, 255, .07);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .space-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #2fbf71;
+            flex-shrink: 0;
+            box-shadow: 0 0 6px rgba(47, 191, 113, .8);
+        }
+
+        .space-name {
+            font-size: 12px;
+            color: #c6d3e2;
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .space-btn {
+            background: #24466e;
+            color: #dce7f2;
+            border: none;
+            border-radius: 5px;
+            font-size: 11px;
+            padding: 3px 10px;
+            cursor: pointer;
+        }
+
+        /* ============ 顶栏 ============ */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .topbar {
+            height: 48px;
+            background: #fff;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .btn-back {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--blue-bg);
+            color: var(--primary);
+            border: none;
+            border-radius: 17px;
+            padding: 6px 16px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .crumb {
+            font-size: 13px;
+            color: var(--text-3);
+        }
+
+        .crumb b {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .topbar-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-2);
+        }
+
+        .avatar {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #4d8ef7, #1668dc);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+        }
+
+        /* ============ 页面主体 ============ */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px 36px;
+        }
+
+        .page-head {
+            margin-bottom: 18px;
+        }
+
+        .page-head h1 {
+            font-size: 21px;
+            font-weight: 700;
+            letter-spacing: .3px;
+        }
+
+        .page-head p {
+            font-size: 13px;
+            color: var(--text-2);
+            margin-top: 7px;
+            line-height: 1.75;
+        }
+
+        .page-head p b {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        /* ============ 7. 区块顺序连接条（编号 + 标题 + 向下箭头） ============ */
+        .sec-conn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 46px;
+            margin: 25px 0 10px;
+        }
+
+        .sec-conn:first-child {
+            margin-top: 2px;
+        }
+
+        .sec-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            border: 1px solid #d9e6f8;
+            border-radius: 10px;
+            color: var(--primary);
+            background: linear-gradient(145deg, #fff 0%, #eaf2ff 100%);
+            box-shadow: 0 2px 5px rgba(22, 104, 220, .04);
+        }
+
+        .sec-icon svg {
+            width: 19px;
+            height: 19px;
+        }
+
+        .sec-heading {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+            line-height: 1.4;
+            letter-spacing: .4px;
+            color: #24344b;
+        }
+
+        .sec-rule {
+            flex: 1;
+            min-width: 12px;
+            height: 1px;
+            margin-left: 8px;
+            background: linear-gradient(90deg, #dbe2ed, rgba(219, 226, 237, .25));
+        }
+
+        .sec-extra {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 10px;
+            border: 1px solid #e3e9f2;
+            border-radius: 6px;
+            background: #f6f8fb;
+            font-size: 11px;
+            color: var(--text-2);
+            white-space: nowrap;
+        }
+
+        .sec-extra b {
+            font-weight: 500;
+        }
+
+        .sec-extra.ok {
+            border-color: #dcece5;
+            background: #f4faf7;
+        }
+
+        .sec-extra.ok b {
+            color: #16815a;
+        }
+
+        .sec-extra.info {
+            border-color: #d7e6fa;
+            background: #f0f6ff;
+        }
+
+        .sec-extra.info b {
+            color: var(--primary);
+        }
+
+        .sec-extra.danger {
+            border-color: #f3cfcb;
+            background: #fdf1f0;
+        }
+
+        .sec-extra.danger b {
+            color: var(--red);
+        }
+
+        .sec-index {
+            padding-left: 12px;
+            border-left: 1px solid #dce3ee;
+            color: #9aa8bc;
+            font: 500 12px/1 "SF Mono", Consolas, monospace;
+            letter-spacing: 1px;
+        }
+
+        /* 章节导航 */
+        .section-nav {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px;
+            margin-bottom: 18px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #fff;
+            box-shadow: var(--shadow);
+            overflow-x: auto;
+        }
+
+        .section-nav a {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 12px;
+            border-radius: 7px;
+            color: var(--text-2);
+            font-size: 12px;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background .15s, color .15s;
+        }
+
+        .section-nav a span {
+            font: 11px Consolas, monospace;
+            color: #97a6bc;
+        }
+
+        .section-nav a:hover,
+        .section-nav a:focus-visible {
+            background: #edf4ff;
+            color: var(--primary);
+        }
+
+        .section-nav a:focus-visible {
+            outline: 2px solid #91baff;
+            outline-offset: -2px;
+        }
+
+        .sec-conn {
+            scroll-margin-top: 18px;
+        }
+
+        @media (max-width: 760px) {
+            .sec-conn {
+                gap: 9px;
+            }
+
+            .sec-heading {
+                font-size: 14px;
+                letter-spacing: 0;
+            }
+
+            .sec-extra {
+                font-size: 10px;
+                padding: 4px 6px;
+            }
+
+            .sec-index {
+                display: none;
+            }
+        }
+
+        /* 状态标签 */
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11.5px;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+
+        .tag::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .tag.ok {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+
+        .tag.type {
+            background: var(--blue-bg);
+            color: var(--primary);
+        }
+
+        .tag.run {
+            background: var(--blue-bg);
+            color: var(--primary);
+        }
+
+        .tag.run::before {
+            animation: blink 1.2s infinite;
+        }
+
+        @keyframes blink {
+            50% {
+                opacity: .25;
+            }
+        }
+
+        /* ============ 执行中进度卡 ============ */
+        .run-card {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 22px 24px;
+        }
+
+        .run-head {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .run-spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid var(--blue-bg);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .run-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .run-sub {
+            font-size: 12px;
+            color: var(--text-3);
+            margin-top: 2px;
+        }
+
+        /* 环节进度（三步） */
+        .run-steps {
+            display: flex;
+            align-items: center;
+            margin: 20px 0 6px;
+        }
+
+        .rs-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .rs-dot {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .rs-step.done .rs-dot {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+
+        .rs-step.done .rs-name {
+            color: var(--text-2);
+        }
+
+        .rs-step.active .rs-dot {
+            background: var(--primary);
+            color: #fff;
+            box-shadow: 0 0 0 4px rgba(22, 104, 220, .15);
+        }
+
+        .rs-step.active .rs-name {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .rs-step.todo .rs-dot {
+            background: #f0f3f7;
+            color: var(--text-3);
+        }
+
+        .rs-step.todo .rs-name {
+            color: var(--text-3);
+        }
+
+        .rs-name {
+            font-size: 13px;
+        }
+
+        .rs-line {
+            flex: 1;
+            height: 2px;
+            background: #e6eaf1;
+            margin: 0 14px;
+            border-radius: 1px;
+            overflow: hidden;
+        }
+
+        .rs-line.done {
+            background: var(--green);
+        }
+
+        /* 进度条 */
+        .run-progress {
+            margin-top: 18px;
+        }
+
+        .rp-info {
+            display: flex;
+            align-items: baseline;
+            font-size: 12.5px;
+            color: var(--text-2);
+            margin-bottom: 8px;
+        }
+
+        .rp-info .pct {
+            margin-left: auto;
+            font-family: "SF Mono", Consolas, monospace;
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 14px;
+        }
+
+        .rp-track {
+            height: 8px;
+            border-radius: 4px;
+            background: #eef1f5;
+            overflow: hidden;
+        }
+
+        .rp-bar {
+            height: 100%;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #3d8bfd, #1668dc);
+            transition: width .4s;
+        }
+
+        /* 接口未透传进度类数据：进度条为不确定式循环动画 */
+        .rp-bar.indet {
+            width: 36%;
+            animation: indet 4.0s ease-in-out infinite;
+        }
+
+        @keyframes indet {
+            0% {
+                margin-left: -36%;
+            }
+
+            100% {
+                margin-left: 100%;
+            }
+        }
+
+        .run-meta {
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px dashed var(--border);
+            display: flex;
+            gap: 22px;
+            font-size: 12px;
+            color: var(--text-3);
+            flex-wrap: wrap;
+        }
+
+        .run-meta b {
+            color: var(--text-2);
+            font-weight: 500;
+            font-family: "SF Mono", Consolas, monospace;
+        }
+
+        .run-note {
+            margin-top: 12px;
+            background: var(--blue-bg);
+            border: 1px solid #cfe1fb;
+            border-radius: 7px;
+            padding: 9px 13px;
+            font-size: 12px;
+            color: var(--primary-dark);
+            line-height: 1.6;
+        }
+
+        /* ============ 任务信息卡 ============ */
+        .overview {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 20px;
+        }
+
+        .ov-top {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .ov-model {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .ov-id {
+            font-size: 11.5px;
+            color: var(--text-3);
+            font-family: "SF Mono", Consolas, monospace;
+            background: #f0f3f7;
+            border-radius: 4px;
+            padding: 2px 8px;
+        }
+
+        .ov-cost {
+            margin-left: auto;
+            font-size: 12px;
+            color: var(--text-3);
+        }
+
+        .ov-cost b {
+            color: var(--text-2);
+            font-weight: 500;
+        }
+
+        .ov-specs {
+            display: flex;
+            margin-top: 13px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        .ov-cell {
+            flex: 1;
+            padding: 0 16px;
+            border-right: 1px solid var(--border);
+        }
+
+        .ov-cell:first-child {
+            padding-left: 0;
+        }
+
+        .ov-cell:last-child {
+            border-right: none;
+        }
+
+        .ov-cell .k {
+            font-size: 11.5px;
+            color: var(--text-3);
+            margin-bottom: 4px;
+        }
+
+        .ov-cell .v {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .ov-cell .v small {
+            font-weight: 400;
+            color: var(--text-3);
+            font-size: 11px;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        /* ============ 采集信息卡 ============ */
+        .hw-card {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 20px;
+        }
+
+        .hw-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .hw-head .tag-src {
+            font-size: 11px;
+            font-weight: 400;
+            color: var(--text-3);
+        }
+
+        .hw-note {
+            font-size: 11.5px;
+            color: var(--text-3);
+            margin-bottom: 12px;
+        }
+
+        .hw-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+
+        .hw-item {
+            background: #f8fafd;
+            border: 1px solid #eef2f8;
+            border-radius: 8px;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+
+        .hw-ico {
+            width: 28px;
+            height: 28px;
+            border-radius: 7px;
+            background: var(--blue-bg);
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .hw-item .k {
+            font-size: 10.5px;
+            color: var(--text-3);
+        }
+
+        .hw-item .v {
+            font-size: 13px;
+            font-weight: 700;
+            margin-top: 1px;
+        }
+
+        .hw-item .v small {
+            font-size: 10px;
+            color: var(--text-3);
+            font-weight: 400;
+        }
+
+        /* ============ 策略卡片 ============ */
+        .strat-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+        }
+
+        .strat-card {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            transition: box-shadow .15s, transform .15s;
+        }
+
+        .strat-card:hover {
+            box-shadow: 0 6px 16px rgba(28, 37, 50, .09);
+            transform: translateY(-2px);
+        }
+
+        .strat-card.best {
+            border-color: #f0c36d;
+            box-shadow: 0 0 0 1px #f0c36d;
+        }
+
+        .sc-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .rank-dot {
+            height: 22px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+            padding: 0 8px;
+            font-family: "SF Mono", Consolas, monospace;
+        }
+
+        .r1 {
+            background: linear-gradient(135deg, #f7c04a, #e8890c);
+        }
+
+        .r2 {
+            background: linear-gradient(135deg, #9fb3c8, #6b8299);
+        }
+
+        .r3 {
+            background: linear-gradient(135deg, #d8a17c, #b5764a);
+        }
+
+        .best-tag {
+            font-size: 11px;
+            background: linear-gradient(135deg, #f5a623, #e8890c);
+            color: #fff;
+            border-radius: 4px;
+            padding: 1px 7px;
+            font-weight: 500;
+        }
+
+        .sc-tput {
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .sc-tput .v {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+            line-height: 1.1;
+        }
+
+        .sc-tput .k {
+            font-size: 10.5px;
+            color: var(--text-3);
+            margin-top: 1px;
+        }
+
+        /* 并行维度数字方块 */
+        .dim-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+            padding: 12px 14px 0;
+        }
+
+        .dim {
+            background: #f6f8fb;
+            border-radius: 6px;
+            padding: 7px 0;
+            text-align: center;
+            cursor: help;
+        }
+
+        .dim .v {
+            font-size: 14.5px;
+            font-weight: 700;
+        }
+
+        .dim .k {
+            font-size: 10.5px;
+            color: var(--text-3);
+            margin-top: 2px;
+        }
+
+        /* 开关 pill */
+        .sw-row {
+            display: flex;
+            gap: 6px;
+            padding: 10px 14px 0;
+            flex-wrap: wrap;
+        }
+
+        .sw {
+            font-size: 11px;
+            border-radius: 11px;
+            padding: 2px 9px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .sw::before {
+            content: "";
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .sw.on {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+
+        .sw.off {
+            background: #f0f3f7;
+            color: var(--text-3);
+        }
+
+        /* 3. 各 stage 层数：带解释 */
+        .sc-layer {
+            padding: 9px 14px 0;
+            font-size: 11.5px;
+            color: var(--text-3);
+        }
+
+        .sc-layer b {
+            color: var(--text-2);
+            font-family: "SF Mono", Consolas, monospace;
+            font-weight: 600;
+        }
+
+        .sc-layer-tip {
+            display: block;
+            font-size: 10.5px;
+            color: var(--text-3);
+            margin-top: 3px;
+            line-height: 1.5;
+        }
+
+        /* 仿真指标 2×2 */
+        .sc-metrics {
+            margin: 12px 14px 13px;
+            border-top: 1px dashed var(--border);
+            padding-top: 11px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 14px;
+        }
+
+        .mi .k {
+            font-size: 11px;
+            color: var(--text-3);
+        }
+
+        .mi .v {
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 1px;
+        }
+
+        .mi .v small {
+            font-size: 10.5px;
+            color: var(--text-3);
+            font-weight: 400;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        /* ============ 对比柱状图 ============ */
+        .chart-card {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #fff;
+            padding: 16px 20px;
+        }
+
+        .chart-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .chart-title {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: .2px;
+        }
+
+        .chart-sub {
+            font-size: 11.5px;
+            color: var(--text-3);
+            margin-top: 5px;
+            margin-bottom: 8px;
+        }
+
+        /* 图表左右结构：左图（垂直居中）+ 右侧指标面板 */
+        .chart-body {
+            display: flex;
+            gap: 22px;
+            align-items: stretch;
+        }
+
+        /* 4. 左图整体垂直居中，避免低分辨率下顶部留白 */
+        .chart-left {
+            flex: 0 0 58%;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chart-svg-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+        }
+
+        .chart-svg-wrap svg {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .chart-left-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .cl-title {
+            font-size: 12.5px;
+            font-weight: 600;
+            color: var(--text-2);
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 14px;
+            font-size: 11.5px;
+            color: var(--text-2);
+        }
+
+        .chart-legend span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .lg-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+
+        .chart-side {
+            flex: 1;
+            border-left: 1px solid var(--border);
+            padding-left: 22px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cs-title {
+            font-size: 12.5px;
+            font-weight: 600;
+            color: var(--text-2);
+            margin-bottom: 4px;
+        }
+
+        .cs-sub {
+            font-size: 11px;
+            color: var(--text-3);
+            margin-bottom: 14px;
+        }
+
+        .cs-groups {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-evenly;
+            gap: 10px;
+        }
+
+        .cs-metric-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-2);
+            margin-bottom: 7px;
+        }
+
+        .cs-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 3.5px 0;
+        }
+
+        .cs-rank {
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+            font-size: 10.5px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .cs-rank.r1 {
+            background: var(--orange);
+            color: #fff;
+        }
+
+        .cs-rank.r2 {
+            background: #e3eaf5;
+            color: #5b6b84;
+        }
+
+        .cs-rank.r3 {
+            background: #eef2f8;
+            color: #9aa6b9;
+        }
+
+        .cs-val {
+            width: 96px;
+            min-width: 96px;
+            white-space: nowrap;
+            font-size: 12px;
+            color: var(--text);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+            background: #fff;
+            padding: 1px 3px;
+            border-radius: 3px;
+        }
+
+        .cs-val.r1 {
+            color: #d97b06;
+            font-weight: 700;
+        }
+
+        .cs-track {
+            flex: 1;
+            height: 8px;
+            background: #f3f5fa;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .cs-bar {
+            height: 100%;
+            border-radius: 4px;
+        }
+
+        .cs-bar.r1 {
+            background: #f0b264;
+        }
+
+        .cs-bar.r2 {
+            background: #bccbe6;
+        }
+
+        .cs-bar.r3 {
+            background: #d6e0f0;
+        }
+
+        .cs-note {
+            margin-top: auto;
+            padding-top: 12px;
+            border-top: 1px dashed var(--border);
+            font-size: 11px;
+            color: var(--text-3);
+            line-height: 1.6;
+        }
+
+        /* ============ 8. 工具基本原理（左右双面板） ============ */
+        .pr-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .pr-panel {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .pr-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .pr-badge {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .pr-badge.a {
+            background: var(--blue-bg);
+            color: var(--primary);
+        }
+
+        .pr-badge.b {
+            background: var(--orange-bg);
+            color: var(--orange);
+        }
+
+        .pr-title {
+            font-size: 13.5px;
+            font-weight: 600;
+            letter-spacing: .2px;
+        }
+
+        .pr-sub {
+            font-size: 11px;
+            color: var(--text-3);
+            margin-top: 2px;
+        }
+
+        .pr-step {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .pr-step-rail {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .pr-num {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10.5px;
+            font-weight: 700;
+            font-family: "SF Mono", Consolas, monospace;
+            flex-shrink: 0;
+        }
+
+        .pr-num.a {
+            background: var(--blue-bg);
+            color: var(--primary);
+        }
+
+        .pr-num.b {
+            background: var(--orange-bg);
+            color: var(--orange);
+        }
+
+        .pr-rail {
+            width: 1px;
+            flex: 1;
+            min-height: 10px;
+            background: #dde3ec;
+            margin: 3px 0;
+        }
+
+        .pr-step-body {
+            padding-bottom: 12px;
+        }
+
+        .pr-step:last-child .pr-step-body {
+            padding-bottom: 0;
+        }
+
+        .pr-step .n {
+            font-size: 12.5px;
+            font-weight: 600;
+            line-height: 20px;
+        }
+
+        .pr-step .d {
+            font-size: 11px;
+            color: var(--text-3);
+            line-height: 1.6;
+            margin-top: 2px;
+        }
+
+        .pr-chips {
+            margin-top: 14px;
+            padding-top: 11px;
+            border-top: 1px dashed var(--border);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .pr-chips .lb {
+            font-size: 11px;
+            color: var(--text-3);
+            margin-right: 2px;
+        }
+
+        .pr-chip {
+            font-size: 10.5px;
+            border-radius: 10px;
+            padding: 2px 9px;
+            font-weight: 500;
+        }
+
+        .pr-chip.a {
+            background: var(--blue-bg);
+            color: var(--primary-dark);
+        }
+
+        .pr-chip.b {
+            background: var(--orange-bg);
+            color: #b06a08;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c9d2de;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="layout">
+
+        <!-- ============ 左侧导航（平台现状，保持不动） ============ -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">✦</div>
+                <div>
+                    <div class="logo-name">智算调优平台</div>
+                    <div class="logo-sub">ICP Tuning Platform</div>
+                </div>
+            </div>
+            <nav class="menu">
+                <div class="menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                    </svg>集群总览<span class="arrow">▸</span></div>
+                <div class="menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="9" />
+                        <circle cx="12" cy="12" r="4" />
+                    </svg>调优工作台</div>
+                <div class="menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12h4l3-8 4 16 3-8h4" />
+                    </svg>监控诊断中心</div>
+                <div class="menu-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="5" y="5" width="14" height="14" rx="2" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>模型调优</div>
+                <div class="menu-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 19V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14" />
+                        <path d="M8 7h8M8 11h8M8 15h5" />
+                    </svg>文档中心</div>
+            </nav>
+            <div class="space-bar">
+                <span class="space-dot"></span>
+                <span class="space-name">950dt测试项目</span>
+                <button class="space-btn">切换</button>
+            </div>
+        </aside>
+
+        <!-- ============ 右侧主区 ============ -->
+        <div class="main">
+            <div class="topbar">
+                <button class="btn-back">‹ 返回</button>
+                <span class="crumb">首页 / 模型调优 / <b>训练调优</b></span>
+                <div class="topbar-right">
+                    <span class="avatar">A</span><span>admin</span><span style="color:var(--text-3)">▾</span>
+                </div>
+            </div>
+
+            <div class="content">
+                <!-- 1. 工具功能介绍（流程并入一句话） -->
+                <div class="page-head">
+                    <h1>模型训练调优</h1>
+                    <p>输入模型和集群信息，工具自动完成 <b>采集 → 寻优 → 仿真</b>
+                        三步：基于预采集的实测数据筛出可行的并行策略，逐个模拟预估吞吐、显存等指标，直接推荐性能最好的
+                        Top3 配置——不用跑真实训练，就能低成本选对并行方案。</p>
+                </div>
+
+                <div class="detail" id="detailArea"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ================= 数据（字段与接口文档 v1.0.0 一致） ================= */
+        const TASK={
+            id: "llama3-1-910b2-1109-0907",model: "llama3-1-405B",npu: "910B2",taskType: "预训练",
+            seq: 8192,gbs: 64,nodes: 2,npn: 8,status: "done",time: "2026-11-09 09:07",cost: "5分28秒",
+            result: {
+                top_configs: [
+                    {
+                        rank: 1,tp: 2,pp: 1,dp: 8,mbs: 4,sp: 1,ep: 1,dist_opt: 0,recompute: 1,num_layer_list: "126",
+                        tokens_per_npu_s: 5210.40,time_cost: 1298.70,peak_memory: 48210.50,tflops: 152.30,mfu: 46.20
+                    },
+                    {
+                        rank: 2,tp: 4,pp: 1,dp: 4,mbs: 2,sp: 1,ep: 1,dist_opt: 0,recompute: 1,num_layer_list: "126",
+                        tokens_per_npu_s: 5065.10,time_cost: 1342.15,peak_memory: 45120.00,tflops: 147.80,mfu: 44.60
+                    },
+                    {
+                        rank: 3,tp: 1,pp: 2,dp: 8,mbs: 4,sp: 0,ep: 1,dist_opt: 1,recompute: 0,num_layer_list: "63,63",
+                        tokens_per_npu_s: 4902.70,time_cost: 1410.33,peak_memory: 43680.20,tflops: 140.50,mfu: 42.50
+                    }
+                ]
+            }
+        };
+
+        /* NPU 硬件规格库（采集信息）
+           - 单卡算力 / 显存容量：静态规格（算力用于 MFU，显存用于可行性判断）
+           - 卡间带宽：P2P 带宽微基准实测（1MB~1GB 分档发包，取 1GB 饱和档），
+             数据来源 profiled-data 目录下 p2p_intra_node.csv / p2p_inter_node.csv */
+        const HW_SPEC={
+            "910B2": [
+                {ico: "⚡",k: "单卡算力 (FP16)",v: "376",u: "TFLOPS"},
+                {ico: "▣",k: "HBM 显存容量",v: "64",u: "GB"},
+                {ico: "⇄",k: "节点内卡间带宽",v: "24.23",u: "GB/s"},
+                {ico: "⛓",k: "节点间卡间带宽",v: "11.00",u: "GB/s"}
+            ],
+            "950DT": [
+                {ico: "⚡",k: "单卡算力 (FP16)",v: "486",u: "TFLOPS"},
+                {ico: "▣",k: "HBM 显存容量",v: "96",u: "GB"},
+                {ico: "⇄",k: "节点内卡间带宽",v: "46.95",u: "GB/s"},
+                {ico: "⛓",k: "节点间卡间带宽",v: "219.46",u: "GB/s"}
+            ]
+        };
+
+        const fmt=n => n.toLocaleString("en-US",{minimumFractionDigits: 2,maximumFractionDigits: 2});
+
+        /* ================= 模块章节标题（旗舰版2 风格：图标 + 标题 + 分隔线） ================= */
+        function secConn (no,name,extra,tone) {
+            const icons={
+                "01": '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M9 9h6M9 13h6M9 17h4"/>',
+                "02": '<rect x="3" y="3" width="18" height="6" rx="2"/><rect x="3" y="15" width="18" height="6" rx="2"/><path d="M7 6h.01M7 18h.01M12 9v6M10 12h4"/>',
+                "03": '<path d="M4 3v17h17M8 16v-5M13 16V7M18 16v-3"/>'
+            };
+            return `<div class="sec-conn" id="section-${no}">
+      <span class="sec-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[no]||icons["01"]}</svg></span>
+      <h2 class="sec-heading">${name}</h2>
+      <span class="sec-rule" aria-hidden="true"></span>
+      ${extra? `<span class="sec-extra ${tone||""}">${extra}</span>`:""}
+      <span class="sec-index" aria-hidden="true">${no} / 03</span>
+    </div>`;
+        }
+
+        /* ================= 2. 任务信息卡 ================= */
+        function overviewHtml (t) {
+            return `<div class="overview">
+    <div class="ov-top">
+      <span class="ov-model">${t.model}</span>
+      <span class="tag type">${t.taskType}</span>
+      <span class="ov-id">${t.id}</span>
+      <span class="ov-cost">创建于 <b>${t.time}</b> · 已运行 <b>2分15秒</b></span>
+    </div>
+    <div class="ov-specs">
+      <div class="ov-cell"><div class="k">NPU 机型</div><div class="v">${t.npu}</div></div>
+      <div class="ov-cell"><div class="k">序列长度</div><div class="v">${t.seq} <small>tokens</small></div></div>
+      <div class="ov-cell"><div class="k">全局批大小</div><div class="v">${t.gbs}</div></div>
+      <div class="ov-cell"><div class="k">集群规格</div><div class="v">${t.nodes} × ${t.npn} <small>= ${t.nodes*t.npn} 卡</small></div></div>
+    </div>
+  </div>`;
+        }
+
+        /* ================= 2. 采集信息卡 ================= */
+        function collectHtml (t) {
+            const hw=HW_SPEC[t.npu]||[];
+            return `<div class="hw-card">
+    <div class="hw-head">硬件采集规格 · ${t.npu}
+      <span class="tag-src">一次预采集 · 多任务复用</span>
+    </div>
+    <div class="hw-note">卡间带宽为 P2P 微基准实测值（取大包饱和档）；单卡算力用于 MFU 计算，显存容量用于策略可行性判断。</div>
+    <div class="hw-grid">
+      ${hw.map(h => `<div class="hw-item">
+        <span class="hw-ico">${h.ico}</span>
+        <div><div class="k">${h.k}</div><div class="v">${h.v} <small>${h.u}</small></div></div>
+      </div>`).join("")}
+    </div>
+  </div>`;
+        }
+
+        /* ================= 策略卡片（3. 各 stage 层数带解释） ================= */
+        function stratCards (t) {
+            const sw=(on,name) => `<span class="sw ${on? "on":"off"}">${name} · ${on? "开":"关"}</span>`;
+            return t.result.top_configs.map(c => {
+                const layers=c.num_layer_list.split(",");
+                const totalLayers=layers.reduce((s,x) => s+(+x),0);
+                const layerTip=c.pp===1
+                    ? `模型共 ${totalLayers} 层，PP=1 未做流水线切分，全部由单段承载`
+                    :`PP=${c.pp} 将模型 ${totalLayers} 层切为 ${c.pp} 段，各段依次承载 ${layers.join(" / ")} 层`;
+                return `
+    <div class="strat-card${c.rank===1? " best":""}">
+      <div class="sc-head">
+        <span class="rank-dot r${c.rank}">Top${c.rank}</span>
+        ${c.rank===1? '<span class="best-tag">最优</span>':""}
+        <div class="sc-tput"><div class="v">${fmt(c.tokens_per_npu_s)}</div><div class="k">Tokens/NPU/s</div></div>
+      </div>
+      <div class="dim-row">
+        <div class="dim" title="TP · 张量并行：单层计算切到多张卡上"><div class="v">${c.tp}</div><div class="k">TP</div></div>
+        <div class="dim" title="PP · 流水并行：模型按层切为多段，每段放一组卡"><div class="v">${c.pp}</div><div class="k">PP</div></div>
+        <div class="dim" title="DP · 数据并行：多组卡各算一份数据"><div class="v">${c.dp}</div><div class="k">DP</div></div>
+        <div class="dim" title="MBS · 微批大小：流水线中每次前向/反向的样本数"><div class="v">${c.mbs}</div><div class="k">MBS</div></div>
+        <div class="dim" title="EP · 专家并行：MoE 专家切到多张卡（稠密模型为 1）"><div class="v">${c.ep}</div><div class="k">EP</div></div>
+      </div>
+      <div class="sw-row">${sw(c.sp===1,"SP")}${sw(c.dist_opt===1,"分布式优化器")}${sw(c.recompute===1,"重计算")}</div>
+      <div class="sc-layer">各 stage 层数 <b>${c.num_layer_list}</b>
+        <span class="sc-layer-tip">流水线并行各分段承载的模型层数 · ${layerTip}</span>
+      </div>
+      <div class="sc-metrics">
+        <div class="mi"><div class="k">迭代时间</div><div class="v">${fmt(c.time_cost)} <small>ms</small></div></div>
+        <div class="mi"><div class="k">峰值显存</div><div class="v">${fmt(c.peak_memory)} <small>MB</small></div></div>
+        <div class="mi"><div class="k">单卡算力</div><div class="v">${fmt(c.tflops)} <small>TFLOPS</small></div></div>
+        <div class="mi"><div class="k">MFU</div><div class="v">${c.mfu.toFixed(2)} <small>%</small></div></div>
+      </div>
+    </div>`;
+            }).join("");
+        }
+
+        /* ================= 4/5. 性能对比：双坐标轴分组直方图（左图垂直居中） ================= */
+        function niceTicks (max) {
+            const rough=max/4;
+            const steps=[1,2,5,10,15,20,25,50,100,150,200,250,500,1000,1500,2000,2500,5000,10000];
+            const s=steps.find(x => x>=rough)||10000;
+            return {top: s*4,ticks: [0,1,2,3,4].map(i => i*s)};
+        }
+
+        function barChart (t) {
+            const cs=t.result.top_configs;
+            const W=620,H=252,padL=52,padR=52,padT=30,padB=34;
+            const plotW=W-padL-padR,plotH=H-padT-padB;
+            const tk=niceTicks(Math.max(...cs.map(c => c.tokens_per_npu_s)));
+            const mf=niceTicks(Math.max(...cs.map(c => c.mfu)));
+            const C_TK="#1668dc",C_TK_L="#9dbcf2",C_MF="#eda33a",C_MF_L="#f5d4a0";
+            const yTk=v => padT+plotH*(1-v/tk.top);
+            const yMf=v => padT+plotH*(1-v/mf.top);
+
+            /* 横网格线 + 左轴（吞吐）刻度 + 右轴（MFU）刻度 */
+            const grid=tk.ticks.map(v => {
+                const y=yTk(v);
+                return `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="${v===0? "#c9d2de":"#eef1f5"}" stroke-width="1"/>
+      <text x="${padL-8}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#8b96a8" font-family="Consolas,monospace">${v}</text>`;
+            }).join("");
+            const rticks=mf.ticks.map(v => {
+                const y=yMf(v);
+                return `<text x="${W-padR+8}" y="${y+3.5}" text-anchor="start" font-size="10" fill="#c9a05e" font-family="Consolas,monospace">${v}%</text>`;
+            }).join("");
+            const axes=`
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT+plotH}" stroke="#c9d2de" stroke-width="1"/>
+      <line x1="${W-padR}" y1="${padT}" x2="${W-padR}" y2="${padT+plotH}" stroke="#e8d5b5" stroke-width="1"/>
+      <text x="${padL}" y="${padT-16}" text-anchor="start" font-size="10.5" fill="#8b96a8">吞吐 · Tokens/NPU/s</text>
+      <text x="${W-padR}" y="${padT-16}" text-anchor="end" font-size="10.5" fill="#c9a05e">MFU · %</text>`;
+
+            const groupW=plotW/cs.length,barW=32,gap=24;
+            const bars=cs.map(c => {
+                const cx=padL+groupW*(c.rank-1)+groupW/2;
+                const x1=cx-barW-gap/2,x2=cx+gap/2;
+                const y1=yTk(c.tokens_per_npu_s),y2=yMf(c.mfu);
+                const fTk=c.rank===1? C_TK:C_TK_L;
+                const fMf=c.rank===1? C_MF:C_MF_L;
+                const lbColor=c.rank===1? "#e8890c":"#55637a";
+                const tkLb=c.rank===1? C_TK:"#6f93d8";
+                const mfLb=c.rank===1? "#c9830f":"#c9a05e";
+                return `
+      <rect x="${x1}" y="${y1}" width="${barW}" height="${padT+plotH-y1}" rx="4" fill="${fTk}"/>
+      <rect x="${x2}" y="${y2}" width="${barW}" height="${padT+plotH-y2}" rx="4" fill="${fMf}"/>
+      <text x="${x1+barW/2}" y="${y1-7}" text-anchor="middle" font-size="11" font-family="Consolas,monospace" font-weight="700" fill="${tkLb}">${fmt(c.tokens_per_npu_s)}</text>
+      <text x="${x2+barW/2}" y="${y2-7}" text-anchor="middle" font-size="11" font-family="Consolas,monospace" font-weight="700" fill="${mfLb}">${c.mfu.toFixed(1)}%</text>
+      <text x="${cx}" y="${H-12}" text-anchor="middle" font-size="12.5" font-weight="${c.rank===1? 700:500}" fill="${lbColor}">Top${c.rank}${c.rank===1? " ★":""}</text>`;
+            }).join("");
+
+            /* 右侧面板：图表未覆盖的三项仿真指标 */
+            const sideGroups=[
+                {name: "迭代时间 (ms)",get: c => c.time_cost},
+                {name: "峰值显存 (MB)",get: c => c.peak_memory},
+                {name: "单卡算力 (TFLOPS)",get: c => c.tflops}
+            ].map(m => {
+                const max=Math.max(...cs.map(m.get));
+                const rows=cs.map(c => `
+        <div class="cs-row">
+          <span class="cs-rank r${c.rank}">${c.rank}</span>
+          <span class="cs-val r${c.rank}">${fmt(m.get(c))}</span>
+          <div class="cs-track"><div class="cs-bar r${c.rank}" style="width:${(m.get(c)/max*100).toFixed(1)}%"></div></div>
+        </div>`).join("");
+                return `<div class="cs-group"><div class="cs-metric-name">${m.name}</div>${rows}</div>`;
+            }).join("");
+
+            return `<div class="chart-card">
+    <div class="chart-head"><span class="chart-title">Top3 仿真结果</span></div>
+    <div class="chart-sub">左图：吞吐与 MFU 双柱对比（双纵轴独立刻度）；右侧：其余三项仿真指标原始值</div>
+    <div class="chart-body">
+      <div class="chart-left">
+        <div class="chart-left-head">
+          <span class="cl-title">吞吐与 MFU 对比</span>
+          <div class="chart-legend">
+            <span><i class="lg-dot" style="background:${C_TK}"></i>吞吐（Tokens/NPU/s）</span>
+            <span><i class="lg-dot" style="background:${C_MF}"></i>MFU（%）</span>
+          </div>
+        </div>
+        <div class="chart-svg-wrap">
+          <svg viewBox="0 0 ${W} ${H}">${grid}${rticks}${axes}${bars}</svg>
+        </div>
+      </div>
+      <div class="chart-side">
+        <div class="cs-title">其余仿真指标</div>
+        <div class="cs-sub">迭代时间、峰值显存与单卡算力</div>
+        <div class="cs-groups">${sideGroups}</div>
+        <div class="cs-note">比例条按各指标 Top3 最大值归一，数值均为仿真环节输出的原始值。</div>
+      </div>
+    </div>
+  </div>`;
+        }
+
+        /* ================= 8. 工具基本原理（寻优 + 仿真 双面板） ================= */
+        function principlesHtml () {
+            const step=(cls,i,n,d,last) => `
+      <div class="pr-step">
+        <div class="pr-step-rail">
+          <span class="pr-num ${cls}">${i}</span>
+          ${last? "":'<span class="pr-rail"></span>'}
+        </div>
+        <div class="pr-step-body"><div class="n">${n}</div><div class="d">${d}</div></div>
+      </div>`;
+            const searchSteps=[
+                ["预采集数据库","代表层耗时 / 显存 / P2P 带宽曲线，一次采集、多任务反复复用"],
+                ["策略空间生成","TP × PP × DP × MBS × EP 五维并行维度笛卡尔积展开"],
+                ["约束剪枝","显存红线、整除约束、OOM 单调性剪枝，筛除 90%+ 无效组合"],
+                ["DP 动态规划切层","把模型层链切成 PP 段，memory_limit 五次迭代细化逼近最优"],
+                ["候选策略集","输出少量可行候选策略，进入仿真校验环节"]
+            ];
+            const simSteps=[
+                ["输入候选策略","接收寻优环节输出的候选并行配置"],
+                ["时间代价模型","前向/反向 block 耗时 + P2P 通信 + DP 层次化 all-reduce + PP 气泡重叠修正"],
+                ["显存代价模型","参数 / 梯度 / 优化器状态 / 激活逐项建模，覆盖 ZeRO-1 与 EP 分片交互"],
+                ["整机标定","实测系数校准理论值，MoE all-to-all 跨节点惩罚单独建模"],
+                ["指标输出与排序","输出吞吐、迭代时间、峰值显存、单卡算力、MFU 五项指标，排序产出 Top3"]
+            ];
+            return `<div class="pr-grid">
+    <div class="pr-panel">
+      <div class="pr-head">
+        <span class="pr-badge a">⌕</span>
+        <div><div class="pr-title">寻优工具原理</div><div class="pr-sub">基于预采集实测数据，在并行策略空间中搜索候选方案</div></div>
+      </div>
+      ${searchSteps.map((s,i) => step("a",i+1,s[0],s[1],i===searchSteps.length-1)).join("")}
+      <div class="pr-chips"><span class="lb">技术亮点：</span>
+        <span class="pr-chip a">五维并行空间</span><span class="pr-chip a">DP 动态规划切层</span><span class="pr-chip a">五次迭代细化</span><span class="pr-chip a">OOM 单调剪枝</span>
+      </div>
+    </div>
+    <div class="pr-panel">
+      <div class="pr-head">
+        <span class="pr-badge b">≋</span>
+        <div><div class="pr-title">仿真工具原理</div><div class="pr-sub">解析式代价模型预估性能，不跑真实训练即可评估策略</div></div>
+      </div>
+      ${simSteps.map((s,i) => step("b",i+1,s[0],s[1],i===simSteps.length-1)).join("")}
+      <div class="pr-chips"><span class="lb">技术亮点：</span>
+        <span class="pr-chip b">时间/显存双代价模型</span><span class="pr-chip b">PP 气泡重叠修正</span><span class="pr-chip b">层次化 all-reduce 建模</span><span class="pr-chip b">MoE 跨节点惩罚</span>
+      </div>
+    </div>
+  </div>`;
+        }
+
+        /* ================= 执行中进度卡（接口未透传候选策略数 / 阶段明细，仅展示前端可得信息） ================= */
+        function runningHtml () {
+            return `<div class="run-card">
+    <div class="run-head">
+      <div class="run-spinner"></div>
+      <div>
+        <div class="run-title">任务执行中</div>
+        <div class="run-sub">traintune run · 正在执行并行策略寻优与仿真预估</div>
+      </div>
+      <span class="tag run" style="margin-left:auto;">执行中</span>
+    </div>
+    <div class="run-steps">
+      <div class="rs-step done"><span class="rs-dot">✓</span><span class="rs-name">集群信息采集</span></div>
+      <div class="rs-line done"></div>
+      <div class="rs-step active"><span class="rs-dot">2</span><span class="rs-name">策略寻优 · 仿真预估</span></div>
+    </div>
+    <div class="run-progress">
+      <div class="rp-info">任务执行中，完成后自动展示 Top3 推荐策略与仿真指标</div>
+      <div class="rp-track"><div class="rp-bar indet"></div></div>
+    </div>
+    <div class="run-meta">
+      <span>已运行 <b>2分15秒</b></span>
+      <span>页面定时自动刷新，无需手动操作</span>
+    </div>
+    <div class="run-note">寻优与仿真基于预采集数据纯计算完成；执行期间页面自动轮询刷新，无需手动操作。</div>
+  </div>`;
+        }
+
+        /* ================= 渲染 ================= */
+        document.getElementById("detailArea").innerHTML=
+            `<nav class="section-nav" aria-label="页面章节导航">${["任务信息","信息采集","执行进度"].map((name,i) => `<a href="#section-0${i+1}"><span>0${i+1}</span>${name}</a>`).join('')}</nav>`+
+            secConn("01","任务信息")+
+            overviewHtml(TASK)+
+            secConn("02","信息采集")+
+            collectHtml(TASK)+
+            secConn("03","执行进度","<b>执行中</b>","info")+
+            runningHtml();
+    </script>
+</body>
+
+</html>

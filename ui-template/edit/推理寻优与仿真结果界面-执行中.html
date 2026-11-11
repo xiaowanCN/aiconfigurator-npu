@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智算调优平台 · 推理策略寻优与仿真结果（执行中）</title>
+<style>
+  :root{
+    --sidebar-bg:#0a1f3c; --primary:#1668dc; --primary-dark:#0e56c0; --primary-2:#3d8bfd;
+    --bg:#f2f4f8; --card:#fff; --border:#e6eaf1;
+    --text:#1c2532; --text-2:#55637a; --text-3:#8b96a8;
+    --green:#0f9d58; --green-bg:#e6f6ec;
+    --orange:#e8890c; --orange-bg:#fdf3e3; --orange-line:#f3ddb5;
+    --blue-bg:#e9f1fe; --blue-line:#cfe0ff; --blue-soft:#eef5ff;
+    --teal:#0d9488; --teal-bg:#e6f6f3;
+    --radius:10px; --shadow:0 1px 3px rgba(28,37,50,.05);
+    --shadow-hover:0 12px 28px rgba(28,37,50,.11);
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{-webkit-font-smoothing:antialiased;}
+  body{font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue","Segoe UI",Arial,sans-serif;
+    background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+  .num,.ov-cell .v,.run-elapsed,.run-meta b,.ov-cost b,.mini-stat .v{
+    font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:#c9d2de;border-radius:5px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  /* 平台外壳 */
+  .layout{display:flex;height:100vh;overflow:hidden;}
+  .sidebar{width:214px;flex-shrink:0;display:flex;flex-direction:column;color:#c6d3e2;
+    background:linear-gradient(180deg,#0a1f3c 0%,#0c2547 100%);}
+  .logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.07);}
+  .logo-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    color:#fff;background:linear-gradient(135deg,#3d8bfd,#1250b5);box-shadow:0 2px 8px rgba(22,104,220,.45);}
+  .logo-icon svg{width:19px;height:19px;}
+  .logo-name{font-size:15px;font-weight:600;color:#fff;line-height:1.25;}
+  .logo-sub{font-size:10px;color:#6f8cab;letter-spacing:.4px;}
+  .menu{flex:1;padding:12px 10px;}
+  .menu-item{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:8px;cursor:pointer;
+    font-size:13.5px;margin-bottom:4px;color:#a9bcd4;position:relative;transition:all .18s;}
+  .menu-item svg{width:16px;height:16px;flex-shrink:0;}
+  .menu-item:hover{background:#14304c;color:#e6eef7;}
+  .menu-item.active{background:linear-gradient(90deg,rgba(61,139,253,.22),rgba(61,139,253,.08));color:#fff;font-weight:500;}
+  .menu-item.active::before{content:"";position:absolute;left:-10px;top:9px;bottom:9px;width:3px;
+    border-radius:0 3px 3px 0;background:#3d8bfd;}
+  .menu-item .arrow{margin-left:auto;font-size:10px;color:#5f7ea3;}
+  .space-bar{padding:13px 12px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:8px;}
+  .space-dot{width:8px;height:8px;border-radius:50%;background:#2fbf71;flex-shrink:0;box-shadow:0 0 6px rgba(47,191,113,.8);}
+  .space-name{font-size:12px;color:#c6d3e2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .space-btn{background:#24466e;color:#dce7f2;border:none;border-radius:5px;font-size:11px;padding:3px 10px;cursor:pointer;}
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .topbar{height:50px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;
+    padding:0 18px;gap:12px;flex-shrink:0;}
+  .btn-back{display:flex;align-items:center;gap:6px;background:var(--blue-bg);color:var(--primary);border:none;
+    border-radius:17px;padding:6px 15px;font-size:13px;cursor:pointer;}
+  .btn-back:hover{background:#d9e8fd;}
+  .crumb{font-size:13px;color:var(--text-3);}
+  .crumb b{color:var(--text);font-weight:500;}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2);}
+  .avatar{width:27px;height:27px;border-radius:50%;background:linear-gradient(135deg,#4d8ef7,#1668dc);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:11px;}
+  .mode-badge{display:inline-flex;align-items:center;gap:8px;border-radius:20px;padding:4px 12px 4px 6px;
+    font-size:12px;font-weight:600;border:1px solid var(--blue-line);background:var(--blue-bg);color:var(--primary-dark);}
+  .mode-badge .mb-ico{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,#3d8bfd,#1250b5);color:#fff;}
+  .mode-badge .mb-ico svg{width:12px;height:12px;}
+  .mode-badge .mb-hint{font-size:10.5px;font-weight:400;opacity:.8;border-left:1px solid currentColor;padding-left:8px;}
+  .content{flex:1;overflow-y:auto;padding:20px 26px 40px;}
+  .content-inner{max-width:1240px;margin:0 auto;}
+
+  /* 章节导航与标题 */
+  .section-nav{display:flex;align-items:center;gap:5px;padding:6px;margin-bottom:18px;
+    border:1px solid var(--border);border-radius:10px;background:#fff;box-shadow:var(--shadow);overflow-x:auto;}
+  .section-nav a{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 12px;
+    border-radius:7px;color:var(--text-2);font-size:12px;text-decoration:none;white-space:nowrap;transition:background .15s,color .15s;}
+  .section-nav a span{font:11px var(--mono);color:#97a6bc;}
+  .section-nav a:hover,.section-nav a:focus-visible{background:#edf4ff;color:var(--primary);}
+  .section-nav a:focus-visible{outline:2px solid #91baff;outline-offset:-2px;}
+  .sec-conn{display:flex;align-items:center;gap:12px;min-height:46px;margin:25px 0 10px;scroll-margin-top:18px;}
+  .sec-conn:first-of-type{margin-top:2px;}
+  .sec-icon{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex-shrink:0;
+    border:1px solid #d9e6f8;border-radius:10px;color:var(--primary);
+    background:linear-gradient(145deg,#fff 0%,#eaf2ff 100%);box-shadow:0 2px 5px rgba(22,104,220,.04);}
+  .sec-icon svg{width:19px;height:19px;}
+  .sec-conn.running .sec-icon{border-color:#b9d3f7;color:var(--primary);
+    background:linear-gradient(145deg,#fff,#e9f1fe);}
+  .sec-heading{margin:0;font-size:16px;font-weight:600;line-height:1.4;letter-spacing:.4px;color:#24344b;}
+  .sec-rule{flex:1;min-width:12px;height:1px;margin-left:8px;background:linear-gradient(90deg,#dbe2ed,rgba(219,226,237,.25));}
+  .sec-extra{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid #dcece5;
+    border-radius:6px;background:#f4faf7;font-size:11px;color:var(--text-2);white-space:nowrap;}
+  .sec-extra b{color:#16815a;font-weight:500;}
+  .sec-extra.run{border-color:var(--blue-line);background:var(--blue-bg);color:var(--primary-dark);}
+  .sec-extra.run b{color:var(--primary-dark);}
+  .sec-index{padding-left:12px;border-left:1px solid #dce3ee;color:#9aa8bc;font:500 12px/1 var(--mono);letter-spacing:1px;}
+
+  /* 首部 */
+  .hero{position:relative;overflow:hidden;border:1px solid #dce8f8;border-radius:12px;padding:18px 22px 17px;
+    background:linear-gradient(110deg,#f2f7ff 0%,#fff 70%);box-shadow:0 2px 10px rgba(22,104,220,.05);}
+  .hero::before{content:"";position:absolute;right:-70px;top:-130px;width:360px;height:360px;border-radius:50%;
+    background:radial-gradient(circle,rgba(61,139,253,.10),rgba(61,139,253,0) 70%);pointer-events:none;}
+  .hero>*{position:relative;z-index:1;}
+  .hero-top{display:flex;align-items:center;gap:11px;flex-wrap:wrap;}
+  .hero h1{font-size:21px;font-weight:700;letter-spacing:.3px;color:#1c2532;}
+  .hero-tag{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;border-radius:20px;padding:3px 11px;
+    background:var(--blue-bg);border:1px solid var(--blue-line);color:var(--primary-dark);}
+  .hero-tag .mini-spinner{width:10px;height:10px;border:2px solid rgba(22,104,220,.25);border-top-color:var(--primary);
+    border-radius:50%;animation:spin .9s linear infinite;}
+  .hero p{font-size:13px;line-height:1.8;color:var(--text-2);margin-top:9px;max-width:980px;}
+  .hero p b{color:var(--primary);font-weight:600;}
+
+  /* 执行中横幅 */
+  .run-banner{display:flex;align-items:center;gap:14px;margin:16px 0 0;padding:14px 18px;border-radius:11px;
+    border:1px solid var(--blue-line);background:linear-gradient(100deg,#e9f1fe,#fff 78%);}
+  .rb-spinner{width:32px;height:32px;border:3px solid #d3e3fb;border-top-color:var(--primary);border-radius:50%;
+    animation:spin 1s linear infinite;flex-shrink:0;}
+  .rb-body{min-width:0;flex:1;}
+  .rb-body b{font-size:13.5px;font-weight:700;color:var(--text);}
+  .rb-body p{font-size:11.5px;color:var(--text-2);margin-top:2px;line-height:1.65;}
+  .rb-elapsed{font:700 14px/1.3 var(--mono);color:var(--primary-dark);border:1px solid var(--blue-line);
+    background:#fff;border-radius:8px;padding:7px 12px;text-align:center;white-space:nowrap;}
+  .rb-elapsed small{display:block;font-size:9.5px;font-weight:500;color:var(--text-3);font-family:inherit;}
+
+  /* 通用卡片 */
+  .card{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:16px 20px 18px;box-shadow:var(--shadow);margin-bottom:12px;transition:transform .2s,box-shadow .2s,border-color .2s;}
+  .card::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:var(--radius) var(--radius) 0 0;
+    background:linear-gradient(90deg,#9dc3f5,#e6eaf1);}
+  .card.tone-blue::before{background:linear-gradient(90deg,#8fb8f0,#e6eaf1);}
+  .card.tone-teal::before{background:linear-gradient(90deg,#9bd9cd,#e6eaf1);}
+  .card:hover{transform:translateY(-2px);box-shadow:var(--shadow-hover);border-color:#d6e0ee;}
+  .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
+  .card-title{font-size:14.5px;font-weight:700;letter-spacing:.2px;display:flex;align-items:center;gap:8px;}
+  .card-title .ico{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--blue-bg);color:var(--primary);}
+  .card-title .ico svg{width:15px;height:15px;}
+  .card-title.teal .ico{background:var(--teal-bg);color:var(--teal);}
+  .card-sub{font-size:11.5px;color:var(--text-3);}
+  .card-right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;border-radius:20px;padding:2px 10px;font-weight:600;flex-shrink:0;}
+  .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .tag.ok{background:var(--green-bg);color:var(--green);}
+  .tag.info{background:var(--blue-bg);color:var(--primary-dark);}
+  .tag.run{background:var(--blue-bg);color:var(--primary-dark);}
+  .tag.ghost{background:#f1f4f9;color:var(--text-2);}
+  .tag.ghost::before{display:none;}
+  .note{font-size:11.5px;color:var(--text-2);line-height:1.75;margin:2px 0 13px;
+    background:linear-gradient(90deg,#f6f9ff,rgba(246,249,255,0));border-left:3px solid #c9dcfb;
+    padding:7px 12px;border-radius:0 6px 6px 0;}
+  .note b{color:var(--primary-dark);font-weight:600;}
+  .group-head{display:flex;align-items:center;gap:9px;margin:18px 0 10px;}
+  .group-head .dot{width:7px;height:7px;border-radius:2px;background:var(--primary);flex-shrink:0;}
+  .group-head .t{font-size:12.5px;font-weight:700;white-space:nowrap;}
+  .group-head .rule{flex:1;height:1px;background:#eef1f6;}
+
+  /* 01 任务信息 */
+  .ov-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .ov-model{font-size:16px;font-weight:600;letter-spacing:.2px;}
+  .ov-id{font-family:var(--mono);font-size:11px;color:var(--text-3);background:#f0f3f7;border-radius:4px;padding:2px 8px;}
+  .ov-cost{margin-left:auto;font-size:12px;color:var(--text-3);}
+  .ov-cost b{color:var(--text-2);font-weight:500;}
+  .ov-specs{display:grid;grid-template-columns:repeat(4,1fr);margin-top:13px;padding-top:12px;border-top:1px solid var(--border);}
+  .ov-cell{padding:0 16px 12px;border-right:1px solid var(--border);min-width:0;}
+  .ov-cell:nth-child(4n){border-right:none;}
+  .ov-cell:nth-child(n+5){padding-top:12px;border-top:1px solid var(--border);}
+  .ov-cell:nth-child(1){padding-left:0;}
+  .ov-cell .k{font-size:11.5px;color:var(--text-3);margin-bottom:4px;}
+  .ov-cell .v{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ov-cell .v small{font-size:11px;font-weight:400;color:var(--text-3);font-family:inherit;}
+  .mini-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;padding-top:13px;
+    border-top:1px dashed var(--blue-line);}
+  .mini-stat{background:#f6f9ff;border:1px solid #e3ecf9;border-radius:8px;padding:9px 11px;}
+  .mini-stat .k{font-size:10.5px;color:var(--text-3);}
+  .mini-stat .v{font-size:13px;font-weight:700;color:var(--text);line-height:1.5;}
+  .mini-stat .v.run{color:var(--primary-dark);}
+  .mini-stat .v.mute{color:var(--text-3);font-size:12px;}
+
+  /* 02 采集 */
+  .hw-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;}
+  .hw-group{background:linear-gradient(180deg,#f9fbff,#fff);border:1px solid var(--border);border-radius:10px;
+    padding:12px 13px;transition:transform .2s,box-shadow .2s;}
+  .hw-group:hover{transform:translateY(-2px);box-shadow:0 8px 18px rgba(28,37,50,.09);}
+  .hw-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;}
+  .hw-ico{width:27px;height:27px;border-radius:7px;background:var(--teal-bg);color:var(--teal);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .hw-ico svg{width:14px;height:14px;}
+  .hw-name{font-size:12.5px;font-weight:700;}
+  .hw-cnt{font-size:10px;color:var(--text-3);margin-left:auto;font-family:var(--mono);}
+  .hw-items{display:flex;flex-direction:column;gap:5px;}
+  .hw-item{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #eef2f8;
+    border-radius:6px;padding:5px 8px;min-width:0;}
+  .hw-item .tick{color:var(--green);flex-shrink:0;}
+  .hw-item .tick svg{width:12px;height:12px;display:block;}
+  .hw-item .cn{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+  /* 03 执行进度卡（参考三方执行中页） */
+  .run-card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:22px 24px;}
+  .run-head{display:flex;align-items:center;gap:12px;}
+  .run-spinner{width:30px;height:30px;border:3px solid var(--blue-bg);border-top-color:var(--primary);
+    border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .run-title{font-size:15px;font-weight:600;}
+  .run-sub{font-size:12px;color:var(--text-3);margin-top:2px;}
+  .run-steps{display:flex;align-items:center;margin:20px 0 6px;flex-wrap:wrap;}
+  .rs-step{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+  .rs-dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;flex-shrink:0;}
+  .rs-step.done .rs-dot{background:var(--green-bg);color:var(--green);}
+  .rs-step.done .rs-name{color:var(--text-2);}
+  .rs-step.active .rs-dot{background:var(--primary);color:#fff;box-shadow:0 0 0 4px rgba(22,104,220,.15);}
+  .rs-step.active .rs-name{color:var(--primary);font-weight:600;}
+  .rs-step.todo .rs-dot{background:#f0f3f7;color:var(--text-3);}
+  .rs-step.todo .rs-name{color:var(--text-3);}
+  .rs-name{font-size:13px;}
+  .rs-line{flex:1;min-width:20px;height:2px;background:#e6eaf1;margin:0 14px;border-radius:1px;overflow:hidden;}
+  .rs-line.done{background:var(--green);}
+  .rs-line.active{background:linear-gradient(90deg,var(--green),#cfe0ff);}
+  .rs-line.todo{background:repeating-linear-gradient(90deg,#dfe5ed 0 5px,transparent 5px 10px);}
+  .run-progress{margin-top:18px;}
+  .rp-info{display:flex;align-items:baseline;font-size:12.5px;color:var(--text-2);margin-bottom:8px;gap:8px;flex-wrap:wrap;}
+  .rp-info .pct{margin-left:auto;font-family:var(--mono);font-weight:700;color:var(--primary);font-size:13px;}
+  .rp-track{height:8px;border-radius:4px;background:#eef1f5;overflow:hidden;}
+  .rp-bar.indet{width:36%;height:100%;border-radius:4px;background:linear-gradient(90deg,#3d8bfd,#1668dc);
+    animation:indet 4s ease-in-out infinite;}
+  @keyframes indet{0%{margin-left:-36%;}100%{margin-left:100%;}}
+  .run-meta{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);display:flex;gap:22px;
+    font-size:12px;color:var(--text-3);flex-wrap:wrap;}
+  .run-meta b{color:var(--text-2);font-weight:500;}
+  .run-note{margin-top:12px;background:var(--blue-bg);border:1px solid #cfe1fb;border-radius:7px;
+    padding:9px 13px;font-size:12px;color:var(--primary-dark);line-height:1.6;}
+
+  /* 原子任务说明 */
+  .atomic{margin-top:13px;border:1px solid var(--border);border-radius:10px;background:#fbfcfe;padding:14px 16px;}
+  .atomic-title{font-size:12px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:7px;margin-bottom:11px;}
+  .atomic-title .ico{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--blue-bg);color:var(--primary);}
+  .atomic-title .ico svg{width:13px;height:13px;}
+  .atomic-chain{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .ac-node{flex:1;min-width:150px;border:1px solid var(--border);border-radius:8px;background:#fff;padding:9px 11px;}
+  .ac-node b{display:block;font-size:11.5px;font-weight:700;color:var(--text-2);}
+  .ac-node span{font-size:10px;color:var(--text-3);}
+  .ac-node.done{border-color:#bfe6d2;background:#f5fbf7;}
+  .ac-node.done b{color:#176c46;}
+  .ac-node.active{border-color:var(--blue-line);background:#f4f8ff;}
+  .ac-node.active b{color:var(--primary-dark);}
+  .ac-node.todo{border-style:dashed;background:#fafbfd;}
+  .ac-arrow{color:#c2cbd8;font-size:12px;}
+  .atomic-note{font-size:10.5px;color:var(--text-3);margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);line-height:1.65;}
+
+  /* 结果产出前的骨架占位 */
+  .pending-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:13px;}
+  .pending-panel{border:1px dashed #d9e2ee;border-radius:10px;background:
+    repeating-linear-gradient(135deg,#fbfcfe 0 12px,#f8fafc 12px 24px);padding:14px 16px;}
+  .pending-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+  .pending-head .no{font:700 11px/1 var(--mono);border-radius:5px;padding:4px 7px;background:#eef2f8;color:var(--text-3);}
+  .pending-head b{font-size:12px;font-weight:700;color:var(--text-2);}
+  .pending-head .st{margin-left:auto;font-size:10.5px;border:1px solid #e2e7ee;background:#fff;
+    border-radius:12px;padding:2px 9px;color:var(--text-3);}
+  .sk{background:linear-gradient(90deg,#edf1f6 25%,#f6f8fb 50%,#edf1f6 75%);background-size:200% 100%;
+    animation:shimmer 1.8s ease-in-out infinite;border-radius:6px;}
+  @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+  .sk-row{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;}
+  .sk-row .sk{height:62px;}
+  .sk-bars{display:flex;align-items:flex-end;gap:9px;height:62px;}
+  .sk-bars .sk{flex:1;}
+  .pending-lines{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px;}
+  .pending-lines span{font-size:10px;color:var(--text-3);border:1px dashed #dfe5ed;background:rgba(255,255,255,.7);
+    border-radius:12px;padding:2px 9px;}
+  .pending-foot{font-size:10.5px;color:var(--text-3);margin-top:11px;line-height:1.6;}
+
+  /* 页脚 */
+  .btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:#fff;color:var(--text-2);
+    border-radius:7px;padding:5px 11px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .18s;text-decoration:none;}
+  .btn svg{width:13px;height:13px;}
+  .btn:hover{border-color:#c9d9f2;color:var(--primary-dark);background:#f6f9ff;}
+  .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .btn.primary:hover{background:var(--primary-dark);color:#fff;}
+  .footer{margin-top:18px;padding:14px 17px;border:1px dashed #d7e0ee;border-radius:11px;background:rgba(255,255,255,.65);
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--text-3);}
+  .footer .spacer{flex:1;}
+  .footer .lb{font-weight:600;color:var(--text-2);}
+
+  @media(max-width:1080px){.hw-grid{grid-template-columns:repeat(2,1fr);}.pending-grid{grid-template-columns:1fr;}}
+  @media(max-width:860px){
+    .sidebar{display:none;}.content{padding:16px 14px 32px;}
+    .ov-specs,.mini-grid{grid-template-columns:repeat(2,1fr);}
+    .ov-cell:nth-child(4n){border-right:1px solid var(--border);}
+    .ov-cell:nth-child(2n){border-right:none;}
+    .ov-cell:nth-child(n+3){padding-top:12px;border-top:1px solid var(--border);}
+    .sec-extra,.sec-index{display:none;}.crumb{display:none;}
+  }
+  @media(max-width:520px){.hw-grid,.mini-grid{grid-template-columns:1fr;}.hero h1{font-size:18px;}
+    .card{padding:15px 14px 17px;}.run-card{padding:18px 15px;}.sk-row{grid-template-columns:repeat(2,1fr);}}
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;}
+    .run-spinner,.rb-spinner,.hero-tag .mini-spinner{animation:none!important;}
+    .rp-bar.indet{animation:none!important;width:40%;margin-left:30%;}
+    .sk{animation:none!important;background:#eef1f6;}
+  }
+  @media print{.sidebar,.topbar,.footer,.section-nav{display:none!important;}.layout{display:block;height:auto;overflow:visible;}
+    .content{overflow:visible;padding:0;}.card,.run-card{box-shadow:none;break-inside:avoid;}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo"><div class="logo-icon" id="logoIcon"></div>
+      <div><div class="logo-name">智算调优平台</div><div class="logo-sub">ICP Tuning Platform</div></div></div>
+    <nav class="menu" id="sideMenu"></nav>
+    <div class="space-bar"><span class="space-dot"></span><span class="space-name">950DT 测试项目</span>
+      <button class="space-btn" type="button">切换</button></div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button class="btn-back" type="button" onclick="history.length>1?history.back():void 0">‹ 返回</button>
+      <span class="crumb">首页 / 模型调优 / <b>推理调优</b></span>
+      <div class="topbar-right"><span id="modeBadge"></span>
+        <span class="avatar">A</span><span>admin</span><span style="color:var(--text-3)">▾</span></div>
+    </header>
+    <main class="content"><div class="content-inner">
+      <div id="hero"></div><div id="banner"></div>
+      <div class="detail" id="detailArea"></div><div id="footer"></div>
+    </div></main>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   执行中案例 · 推理策略寻优与仿真结果
+   核心约定：推理寻优（infer_strategy_npu）与模拟仿真（infer_simulate）
+   是一次提交、统一返回的原子任务。只有两份响应全部产出，才会渲染结果界面；
+   执行期间不展示任何部分结果、候选策略或仿真指标，也不编造接口未透传的进度。
+   ===================================================================== */
+
+/* ==================== 1. 任务状态（执行中，无结果响应） ==================== */
+const TASK = {
+  status: "running",
+  id: "infer-950dt-1109-1423",
+  created_at: "2026-11-09 14:23:33",
+  started_at: "2026-11-09 14:23:33",
+  finished_at: null,
+  elapsed: 135,
+  request: {
+    model: "DeepSeek-V4.1-Flash-MXFP4",
+    device: "950DT",
+    num_devices: 32,
+    num_nodes: 4,
+    input_length: 4096,
+    output_length: 1024,
+    ttft_limit: 20,
+    tpot_limit: 100,
+    serving_modes: 2,
+    topk: 1
+  }
+};
+const COLLECT = [
+  ["单台机器内卡间", ["节点内卡间带宽","节点内卡间时延"]],
+  ["机器间传输", ["跨节点带宽","跨节点时延"]],
+  ["CPU", ["CPU 容量","CPU 传输带宽","CPU 传输时延"]],
+  ["NPU", ["NPU 容量","NPU 带宽","NPU 时延","NPU 利用率"]]
+];
+
+/* ==================== 2. 图标 ==================== */
+const ICON = {
+  logo:'<path d="M12 2l8 5v10l-8 5-8-5V7z"/><path d="M12 7l4 2.5v5L12 17l-4-2.5v-5z"/>',
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+  pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  chip:'<rect x="5" y="5" width="14" height="14" rx="2"/><circle cx="12" cy="12" r="3"/>',
+  doc:'<path d="M4 19V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  server:'<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  database:'<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  split:'<path d="M4 6h6l4 6h6"/><path d="M4 18h6l4-6"/><path d="M18 9l3 3-3 3"/>',
+  activity:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/>',
+  layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/>',
+  inbox:'<path d="M3 12h5l2 3h4l2-3h5"/><path d="M5 5h14l2 7v7H3v-7z"/>',
+  print:'<path d="M6 9V3h12v6"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>'
+};
+const icon = (name,size) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${size?` width="${size}" height="${size}"`:""}>${ICON[name]||ICON.info}</svg>`;
+const SEC_ICON = {
+  "01":'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M9 9h6M9 13h6M9 17h4"/>',
+  "02":'<rect x="3" y="3" width="18" height="6" rx="2"/><rect x="3" y="15" width="18" height="6" rx="2"/><path d="M7 6h.01M7 18h.01M12 9v6M10 12h4"/>',
+  "03":'<path d="M4 3v17h17M8 16v-5M13 16V7M18 16v-3"/>'
+};
+
+/* ==================== 3. 工具 ==================== */
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function elapsedText(sec){
+  const m = Math.floor(sec/60), s = sec%60;
+  return m>0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
+
+/* ==================== 4. 公共片段 ==================== */
+const SECTIONS = ["任务信息","信息采集","执行进度"];
+function sectionNavHtml(){
+  return `<nav class="section-nav" aria-label="页面章节导航">${SECTIONS.map((name,i)=>
+    `<a href="#section-0${i+1}"><span>0${i+1}</span>${name}</a>`).join("")}</nav>`;
+}
+function secConn(no,name,extra,state){
+  return `<div class="sec-conn ${state||""}" id="section-${no}">
+    <span class="sec-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${SEC_ICON[no]}</svg></span>
+    <h2 class="sec-heading">${esc(name)}</h2><span class="sec-rule" aria-hidden="true"></span>
+    ${extra?`<span class="sec-extra ${state==="running"?"run":""}">${extra}</span>`:""}
+    <span class="sec-index" aria-hidden="true">${no} / 03</span></div>`;
+}
+function cardHead(title,sub,right,tone){
+  const icoName = tone==="teal"?"activity":"chip";
+  return `<div class="card-head"><span class="card-title ${tone||""}"><span class="ico">${icon(icoName)}</span>${esc(title)}</span>
+    ${sub?`<span class="card-sub">${esc(sub)}</span>`:""}${right?`<span class="card-right">${right}</span>`:""}</div>`;
+}
+
+/* ==================== 5. 首部 / 横幅 ==================== */
+function heroHtml(){
+  return `<section class="hero"><div class="hero-top"><h1>推理策略寻优与仿真结果</h1>
+    <span class="hero-tag"><span class="mini-spinner"></span>任务执行中</span></div>
+    <p>输入模型与集群信息，工具自动完成 <b>信息采集 → 推理寻优 → 模拟仿真</b>。
+      其中推理寻优与模拟仿真作为一次原子任务提交，<b>两份响应全部产出后</b>才会一次性渲染结果界面；
+      执行期间仅展示任务状态与执行进度，不提供任何部分结果。</p></section>`;
+}
+function bannerHtml(){
+  return `<div class="run-banner"><span class="rb-spinner"></span>
+    <div class="rb-body"><b>原子任务执行中 · 结果界面尚未生成</b>
+      <p>寻优服务与仿真服务正在按编排顺序执行；页面定时轮询任务状态，全部完成后自动切换为结果界面。</p></div>
+    <span class="rb-elapsed" id="bannerElapsed">${esc(elapsedText(TASK.elapsed))}<small>已运行</small></span></div>`;
+}
+function modeBadgeHtml(){
+  return `<span class="mode-badge"><span class="mb-ico">${icon("clock")}</span>
+    <span>部署形态 · 待产出</span><span class="mb-hint">全部结果返回后识别</span></span>`;
+}
+
+/* ==================== 6. 01 任务信息 ==================== */
+function overviewHtml(){
+  const r = TASK.request;
+  const cell = (label,value,unit) => `<div class="ov-cell"><div class="k">${esc(label)}</div>
+    <div class="v">${esc(value)}${unit?`<small> ${esc(unit)}</small>`:""}</div></div>`;
+  return `<div class="card tone-blue">
+    ${cardHead("任务概要","请求参数与运行状态",
+      `<span class="tag run">执行中</span><span class="tag ghost">响应未返回</span>`)}
+    <div class="ov-top"><span class="ov-model">${esc(r.model)}</span>
+      <span class="ov-id">${esc(TASK.id)}</span>
+      <span class="ov-cost">创建于 <b>${esc(TASK.created_at)}</b> · 已运行 <b id="ovElapsed">${esc(elapsedText(TASK.elapsed))}</b></span></div>
+    <div class="ov-specs">
+      ${cell("模型名称",r.model,"")}${cell("NPU 机型",r.device,"")}
+      ${cell("卡数",r.num_devices,"卡")}${cell("节点数",r.num_nodes,"节点")}
+      ${cell("输入序列长度",r.input_length,"tokens")}${cell("输出序列长度",r.output_length,"tokens")}
+      ${cell("首 Token 时延上限",r.ttft_limit,"s")}${cell("每 Token 生成时延上限",r.tpot_limit,"ms")}
+    </div>
+    <div class="mini-grid">
+      <div class="mini-stat"><div class="k">当前阶段</div><div class="v run">03 执行进度</div></div>
+      <div class="mini-stat"><div class="k">任务状态</div><div class="v run">running</div></div>
+      <div class="mini-stat"><div class="k">开始时间</div><div class="v">${esc(TASK.started_at)}</div></div>
+      <div class="mini-stat"><div class="k">完成时间 / 结果</div><div class="v mute">待全部产出</div></div>
+    </div></div>`;
+}
+
+/* ==================== 7. 02 信息采集 ==================== */
+function collectHtml(){
+  return `<div class="card tone-teal">
+    ${cardHead("集群信息采集","一次性预采集 · 多任务复用",
+      `<span class="tag ok">已采集</span><span class="tag ghost">已投入本次任务</span>`,"teal")}
+    <div class="note"><b>阶段状态：</b>采集在任务启动前已完成并落库，本次寻优与仿真均基于这组实测规格执行；
+      该环节不随任务状态变化，可多任务复用。</div>
+    <div class="hw-grid">
+      ${COLLECT.map(([g,items],i)=>`<div class="hw-group">
+        <div class="hw-head"><span class="hw-ico">${icon(["server","split","chip","database"][i])}</span>
+          <span class="hw-name">${esc(g)}</span><span class="hw-cnt">${items.length} 项</span></div>
+        <div class="hw-items">${items.map(cn=>`<div class="hw-item"><span class="tick">${icon("check")}</span><span class="cn">${esc(cn)}</span></div>`).join("")}</div>
+      </div>`).join("")}
+    </div></div>`;
+}
+
+/* ==================== 8. 03 执行进度 ==================== */
+function runningHtml(){
+  return `<div class="card tone-blue">
+    ${cardHead("执行进度","寻优 + 仿真作为整体执行",
+      `<span class="tag run">执行中</span><span class="tag ghost">结果未产出</span>`)}
+    <div class="run-card">
+      <div class="run-head"><span class="run-spinner"></span>
+        <div><div class="run-title">任务执行中</div>
+          <div class="run-sub">infer_strategy_npu + infer_simulate · 一次提交，统一返回</div></div>
+        <span class="tag run" style="margin-left:auto;">执行中</span></div>
+      <div class="run-steps">
+        <div class="rs-step done"><span class="rs-dot">✓</span><span class="rs-name">任务信息</span></div>
+        <span class="rs-line done"></span>
+        <div class="rs-step done"><span class="rs-dot">✓</span><span class="rs-name">信息采集</span></div>
+        <span class="rs-line active"></span>
+        <div class="rs-step active"><span class="rs-dot">3</span><span class="rs-name">推理寻优 · 模拟仿真</span></div>
+        <span class="rs-line todo"></span>
+        <div class="rs-step todo"><span class="rs-dot">4</span><span class="rs-name">结果界面</span></div>
+      </div>
+      <div class="run-progress">
+        <div class="rp-info"><span>任务执行中，完成后一次性展示并行策略、卡组分配与仿真指标</span>
+          <span class="pct">进行中</span></div>
+        <div class="rp-track"><div class="rp-bar indet"></div></div>
+      </div>
+      <div class="run-meta">
+        <span>已运行 <b id="runElapsed">${esc(elapsedText(TASK.elapsed))}</b></span>
+        <span>页面定时自动刷新，无需手动操作</span>
+        <span>接口未透传进度明细，进度条为不确定式动画</span>
+      </div>
+      <div class="run-note">推理策略寻优与模拟仿真是同一任务的连续环节：寻优产出候选后仿真立即建模，
+        两份响应统一返回。只有全部完成才会渲染 03 / 04 的结果界面，执行期间不会先显示部分候选或阶段性指标。</div>
+
+      <div class="atomic">
+        <div class="atomic-title"><span class="ico">${icon("layers")}</span>原子任务调用链</div>
+        <div class="atomic-chain">
+          <div class="ac-node done"><b>任务提交</b><span>请求参数与采集数据已就绪</span></div>
+          <span class="ac-arrow">→</span>
+          <div class="ac-node active"><b>推理寻优</b><span>并行策略搜索与 SLO 剪枝</span></div>
+          <span class="ac-arrow">→</span>
+          <div class="ac-node active"><b>模拟仿真</b><span>基于候选策略的代价建模</span></div>
+          <span class="ac-arrow">→</span>
+          <div class="ac-node todo"><b>统一返回</b><span>两份响应齐备后渲染结果界面</span></div>
+        </div>
+        <div class="atomic-note">中间结果不作为界面数据落库：任一份响应缺失时，页面保持执行中或未执行状态，不会拆开渲染。</div>
+      </div>
+
+      <div class="pending-grid">
+        <div class="pending-panel">
+          <div class="pending-head"><span class="no">03</span><b>推理寻优</b><span class="st">待产出</span></div>
+          <div class="sk-row"><i class="sk"></i><i class="sk"></i><i class="sk"></i><i class="sk"></i></div>
+          <div class="pending-lines"><span>TP / PP / DP / EP</span><span>卡组分配</span><span>性能指标</span></div>
+          <div class="pending-foot">候选策略与并行度配置在响应返回前不可用。</div>
+        </div>
+        <div class="pending-panel">
+          <div class="pending-head"><span class="no">04</span><b>模拟仿真</b><span class="st">待产出</span></div>
+          <div class="sk-bars"><i class="sk" style="height:34px"></i><i class="sk" style="height:52px"></i>
+            <i class="sk" style="height:42px"></i><i class="sk" style="height:60px"></i><i class="sk" style="height:28px"></i></div>
+          <div class="pending-lines"><span>吞吐构成</span><span>TTFT / TPOT / ITL 分位</span></div>
+          <div class="pending-foot">仿真指标依赖寻优候选，两份响应齐备后一次性填充。</div>
+        </div>
+      </div>
+    </div></div>`;
+}
+
+/* ==================== 9. 页脚 ==================== */
+function footerHtml(){
+  return `<div class="footer"><span class="lb">案例导航</span>
+    <a class="btn" href="推理寻优与仿真结果界面-v2旗舰版.html">正常结果 ${icon("activity")}</a>
+    <a class="btn" href="推理寻优与仿真结果界面-报错版-寻优失败.html">寻优失败 ${icon("split")}</a>
+    <a class="btn" href="推理寻优与仿真结果界面-报错版-仿真失败.html">仿真失败 ${icon("split")}</a>
+    <span class="spacer"></span>
+    <span>执行中案例 · 不展示任何部分结果</span>
+    <button class="btn primary" type="button" id="printBtn">${icon("print")} 打印</button>
+  </div>`;
+}
+
+/* ==================== 10. 渲染与计时 ==================== */
+function render(){
+  document.getElementById("modeBadge").innerHTML = modeBadgeHtml();
+  document.getElementById("hero").innerHTML = heroHtml();
+  document.getElementById("banner").innerHTML = bannerHtml();
+  document.getElementById("detailArea").innerHTML =
+    sectionNavHtml() +
+    secConn("01","任务信息","<b>已记录</b>","") + overviewHtml() +
+    secConn("02","信息采集","<b>已采集</b>","") + collectHtml() +
+    secConn("03","执行进度","<b>执行中</b>","running") + runningHtml();
+  document.getElementById("footer").innerHTML = footerHtml();
+  document.getElementById("printBtn").addEventListener("click",()=>window.print());
+  startTimer();
+}
+/* 仅更新「已运行」展示，不触发任何结果渲染 */
+function startTimer(){
+  let sec = TASK.elapsed;
+  setInterval(()=>{
+    sec += 1;
+    const text = elapsedText(sec);
+    ["bannerElapsed","ovElapsed","runElapsed"].forEach(id=>{
+      const el = document.getElementById(id);
+      if(!el) return;
+      if(id === "bannerElapsed"){
+        el.innerHTML = `${esc(text)}<small>已运行</small>`;
+      }else{
+        el.textContent = text;
+      }
+    });
+  },1000);
+}
+
+document.getElementById("logoIcon").innerHTML = icon("logo");
+document.getElementById("sideMenu").innerHTML = [
+  ["grid","集群总览",true],["target","调优工作台",false],["pulse","监控诊断中心",false],
+  ["chip","模型调优",false],["doc","文档中心",false]
+].map(([ico,name,arrow])=>`<div class="menu-item${name==="模型调优"?" active":""}">${icon(ico)}${esc(name)}${arrow?'<span class="arrow">▸</span>':""}</div>`).join("");
+render();
+</script>
+</body>
+</html>

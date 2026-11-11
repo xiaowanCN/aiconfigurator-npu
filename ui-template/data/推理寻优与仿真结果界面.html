@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>推理寻优与仿真结果</title>
+<style>
+  :root{
+    --bg:#f4f6fa; --panel:#ffffff; --border:#e2e8f1; --line:#eef1f6;
+    --text:#17243c; --sub:#63758e; --faint:#98a6ba;
+    --blue:#2f6fed; --blue-soft:#eef4ff; --blue-line:#cfe0ff;
+    --purple:#6941c6; --purple-soft:#f3edfc; --purple-line:#ddd0f5;
+    --teal:#0e8f80; --teal-soft:#e7f6f3; --teal-line:#bfe9e1;
+    --green:#12805c; --green-soft:#e7f6ee; --green-line:#bfe6d2;
+    --amber:#b45309; --amber-soft:#fff5e6;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    font-family:"Inter","Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;
+    background:radial-gradient(1200px 420px at 15% -8%,#e9effb 0%,rgba(233,239,251,0) 70%),
+               radial-gradient(1000px 380px at 92% 4%,#f0ebfb 0%,rgba(240,235,251,0) 68%),
+               var(--bg);
+    color:var(--text);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px 64px;}
+  .top-accent{height:3px;margin:0 -22px 4px;background:linear-gradient(90deg,var(--blue) 0%,#5a7ff0 35%,var(--purple) 68%,var(--teal) 100%);}
+
+  /* ---------- 章节 ---------- */
+  .section-head{display:flex;align-items:center;gap:14px;margin:30px 0 16px;}
+  .sec-num{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.06em;
+           color:var(--blue);background:var(--blue-soft);border:1px solid var(--blue-line);
+           border-radius:7px;padding:4px 8px;line-height:1.2;}
+  .sec-num.p{color:var(--purple);background:var(--purple-soft);border-color:var(--purple-line);}
+  .sec-num.t{color:var(--teal);background:var(--teal-soft);border-color:var(--teal-line);}
+  .sec-text{display:flex;align-items:baseline;gap:10px;white-space:nowrap;}
+  .sec-title{font-size:17px;font-weight:700;letter-spacing:.01em;}
+  .sec-sub{font-family:var(--mono);font-size:11px;color:var(--faint);}
+  .sec-line{flex:1;height:1px;background:linear-gradient(90deg,var(--border),rgba(226,232,241,0));min-width:20px;}
+
+  /* ---------- 形态切换 ---------- */
+  .seg{display:flex;gap:3px;padding:3px;background:#eef1f7;border:1px solid var(--border);border-radius:9px;}
+  .seg-btn{border:0;background:transparent;color:var(--sub);border-radius:6px;padding:5px 15px;
+           font-size:12.5px;font-weight:600;cursor:pointer;transition:.18s;white-space:nowrap;}
+  .seg-btn:hover{color:var(--text);}
+  .seg-btn.active{background:#fff;color:var(--blue);box-shadow:0 1px 3px rgba(23,36,60,.12);}
+  .seg-btn.disagg.active{color:var(--purple);}
+
+  /* ---------- 卡片 ---------- */
+  .card{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:12px;
+        padding:22px 24px 24px;margin-bottom:14px;overflow:hidden;
+        box-shadow:0 1px 2px rgba(23,36,60,.035),0 10px 28px rgba(23,36,60,.045);}
+  .card::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;}
+  .card.c-blue::before{background:linear-gradient(90deg,var(--blue),#8ab0ff);}
+  .card.c-purple::before{background:linear-gradient(90deg,var(--purple),#a98ae6);}
+  .card.c-teal::before{background:linear-gradient(90deg,var(--teal),#69cfbe);}
+
+  /* ---------- 分组标题 ---------- */
+  .group-head{display:flex;align-items:center;gap:9px;margin:22px 0 12px;}
+  .card > .group-head:first-child{margin-top:2px;}
+  .group-head .dot{width:7px;height:7px;border-radius:2px;background:var(--blue);flex:0 0 auto;}
+  .group-head .t{font-size:12.5px;font-weight:700;color:var(--text);white-space:nowrap;}
+  .group-head .p{font-family:var(--mono);font-size:10.5px;color:var(--faint);white-space:nowrap;}
+  .group-head .rule{flex:1;height:1px;background:var(--line);}
+  .group-head.purple .dot{background:var(--purple);}
+  .group-head.teal .dot{background:var(--teal);}
+
+  /* ---------- 字段方格块 ---------- */
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:10px;}
+  .stat{position:relative;background:#fbfcfe;border:1px solid var(--border);border-radius:9px;
+        padding:14px 14px 12px;transition:transform .18s,box-shadow .18s,border-color .18s;}
+  .stat::before{content:"";position:absolute;left:0;top:13px;bottom:13px;width:2px;
+                border-radius:0 2px 2px 0;background:var(--blue);opacity:.5;}
+  .stat:hover{transform:translateY(-2px);border-color:#c9d6ea;box-shadow:0 6px 16px rgba(23,36,60,.08);}
+  .stat .v{font-family:var(--mono);font-size:23px;font-weight:700;letter-spacing:-.02em;
+           line-height:1.25;word-break:break-all;color:var(--text);}
+  .stat .v span.txt{font-size:14px;letter-spacing:0;display:inline-block;padding:5px 0 3px;}
+  .stat .l{font-family:var(--mono);font-size:10.5px;color:var(--sub);margin-top:7px;
+           word-break:break-all;letter-spacing:.01em;}
+  .stat.purple::before{background:var(--purple);}
+  .stat.teal::before{background:var(--teal);}
+
+  /* 关键策略：主色填充、大数字 */
+  .stat-grid.tight{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+  .stat.key{background:var(--blue-soft);border-color:var(--blue-line);padding:16px 10px 14px;text-align:center;}
+  .stat.key::before{display:none;}
+  .stat.key .v{color:var(--blue);font-size:29px;}
+  .stat.key .l{color:#4f6da8;font-size:11px;margin-top:4px;}
+  .stat.key.purple{background:var(--purple-soft);border-color:var(--purple-line);}
+  .stat.key.purple .v{color:var(--purple);}
+  .stat.key.purple .l{color:#6d5a9c;}
+
+  .bool{font-family:var(--mono);font-size:13px;font-weight:700;border-radius:5px;padding:2px 9px;}
+  .bool.yes{color:var(--green);background:var(--green-soft);border:1px solid var(--green-line);}
+  .bool.no{color:#b42318;background:#fdeceb;border:1px solid #f6cfcb;}
+  .null-pill{font-family:var(--mono);font-size:11px;color:var(--faint);background:#f1f4f8;
+             border:1px solid #e6ebf2;border-radius:5px;padding:2px 8px;}
+
+  /* ---------- 部署形态横幅 ---------- */
+  .mode-banner{display:flex;align-items:center;gap:18px;margin-top:22px;padding:16px 20px;
+    border:1px solid var(--blue-line);border-radius:10px;
+    background:linear-gradient(100deg,var(--blue-soft) 0%,#f7faff 72%,#fff 100%);}
+  .mode-banner.purple{border-color:var(--purple-line);
+    background:linear-gradient(100deg,var(--purple-soft) 0%,#faf7ff 72%,#fff 100%);}
+  .mb-left{display:flex;flex-direction:column;gap:3px;min-width:150px;}
+  .mb-field{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);}
+  .mb-path{font-family:var(--mono);font-size:10.5px;color:var(--faint);}
+  .mb-value{font-size:26px;font-weight:800;letter-spacing:.02em;color:var(--blue);line-height:1.2;margin-left:auto;}
+  .mode-banner.purple .mb-value{color:var(--purple);}
+
+  /* ---------- 信息采集 ---------- */
+  .collect-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+  .collect-title{font-size:15px;font-weight:700;}
+  .status-pill{display:inline-flex;align-items:center;gap:6px;color:var(--green);
+    background:var(--green-soft);border:1px solid var(--green-line);border-radius:20px;
+    padding:3px 11px;font-size:11.5px;font-weight:700;}
+  .status-pill .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 0 3px rgba(18,128,92,.14);}
+  .collect-groups{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;}
+  .collect-group{background:#fafbfe;border:1px solid var(--line);border-radius:9px;padding:11px 13px 13px;}
+  .cg-title{font-size:12px;font-weight:700;color:var(--sub);margin-bottom:9px;
+    display:flex;align-items:center;gap:7px;}
+  .cg-title::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--teal);}
+  .cg-items{display:flex;flex-wrap:wrap;gap:6px;}
+  .cg-item{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);
+    border-radius:6px;padding:4px 9px;font-family:var(--mono);font-size:10.5px;color:var(--text);}
+  .cg-item .tick{color:var(--green);font-size:11px;font-weight:700;line-height:1;}
+
+  /* ---------- PD 分离子卡 ---------- */
+  .sub-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .sub{border:1px solid var(--border);border-radius:10px;padding:14px 16px 18px;
+       background:linear-gradient(180deg,#fbfcff,#fff 55%);}
+  .sub-head{display:flex;align-items:center;gap:9px;margin-bottom:4px;}
+  .badge{font-family:var(--mono);font-size:11px;font-weight:700;border-radius:5px;padding:2px 9px;}
+  .badge.p{color:var(--blue);background:var(--blue-soft);border:1px solid var(--blue-line);}
+  .badge.d{color:var(--purple);background:var(--purple-soft);border:1px solid var(--purple-line);}
+  .sub-head .path{font-family:var(--mono);font-size:10px;color:var(--faint);}
+  .sub .group-head{margin:16px 0 10px;}
+  .sub .stat-grid{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;}
+  .sub .stat{padding:11px 9px 9px;}
+  .sub .stat .v{font-size:18px;}
+  .sub .stat .v span.txt{font-size:12px;padding:3px 0 2px;}
+  .sub .stat .l{font-size:9.5px;margin-top:5px;}
+  .sub .stat-grid.tight{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;}
+  .sub .stat.key{padding:12px 5px 10px;}
+  .sub .stat.key .v{font-size:22px;}
+  .sub .stat.key .l{font-size:9.5px;}
+
+  /* ---------- 表格 ---------- */
+  .table-wrap{border:1px solid var(--border);border-radius:9px;overflow:hidden;}
+  table.kv{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px;}
+  table.kv th,table.kv td{padding:9px 14px;text-align:left;vertical-align:middle;
+    border-bottom:1px solid var(--line);}
+  table.kv tr:last-child th,table.kv tr:last-child td{border-bottom:0;}
+  table.kv thead th{background:#f6f8fc;color:var(--sub);font-weight:700;font-family:var(--mono);
+    font-size:11px;letter-spacing:.02em;border-bottom:1px solid var(--border);white-space:nowrap;}
+  table.kv thead th:not(:first-child){text-align:right;}
+  table.kv tbody tr:nth-child(even){background:#fafbfe;}
+  table.kv tbody tr:hover{background:#f3f7ff;}
+  table.kv td{font-family:var(--mono);color:var(--text);}
+  table.kv td.k{color:var(--sub);font-weight:600;background:rgba(246,248,252,.55);}
+  table.kv td.num{text-align:right;font-weight:600;}
+  table.kv td .null-pill{font-weight:400;}
+
+  @media(max-width:860px){
+    .wrap{padding:0 14px 44px;} .top-accent{margin:0 -14px 4px;}
+    .card{padding:18px 16px 20px;}
+    .section-head{flex-wrap:wrap;gap:10px;margin:24px 0 12px;}
+    .sec-line{display:none;} .seg{margin-left:auto;}
+    .sec-text{flex-wrap:wrap;gap:6px;}
+    .stat-grid{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));}
+    .sub-grid,.collect-groups{grid-template-columns:1fr;}
+    .mode-banner{flex-wrap:wrap;gap:10px;}
+  }
+  @media(max-width:520px){
+    .stat-grid.tight,.sub .stat-grid.tight{grid-template-columns:repeat(2,minmax(0,1fr));}
+    .mb-value{font-size:22px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top-accent"></div>
+
+  <div class="section-head">
+    <span class="sec-num">01</span>
+    <div class="sec-text"><span class="sec-title">总体信息</span><span class="sec-sub">data.request</span></div>
+    <span class="sec-line"></span>
+    <span class="seg" id="modeSwitch"></span>
+  </div>
+  <div id="overall"></div>
+
+  <div class="section-head">
+    <span class="sec-num" id="secNumOpt">02</span>
+    <div class="sec-text"><span class="sec-title">推理寻优结果</span><span class="sec-sub" id="optPath"></span></div>
+    <span class="sec-line"></span>
+  </div>
+  <div id="optimize"></div>
+
+  <div class="section-head">
+    <span class="sec-num t">03</span>
+    <div class="sec-text"><span class="sec-title">推理仿真结果</span><span class="sec-sub">data.throughput / data.ttft / data.tpot / data.itl</span></div>
+    <span class="sec-line"></span>
+  </div>
+  <div id="simulate"></div>
+
+</div>
+
+<script>
+/* ====== 接口响应原文（推理调优工具链 V1.0.0 接口文档「返回值」示例）====== */
+
+/* 寻优：内层 code=0，serving_modes=0（PD 混部 agg） */
+const OPT_AGG = {
+  "code": 0, "status": "success", "message": "寻优任务完成",
+  "common": { "infer_strategy_npu": {
+    "code": 0, "status": "success", "message": "寻优策略任务完成，已找到结果",
+    "data": {
+      "request": {
+        "model": "DeepSeek-V4.1-Flash-MXFP4", "device": "950DT", "num_devices": "32", "num_nodes": "4",
+        "input_length": "4096", "output_length": "1024", "ttft_limit": "20", "tpot_limit": "100",
+        "serving_modes": "2", 
+      },
+      "result": {
+        "agg": { "candidates": [{
+          "throughput_tokens_per_s": 4179.66, "throughput_tokens_per_s_per_device": 130.62,
+          "throughput_req_per_s": 4.09, "ttft_ms": 1778.74, "tpot_ms": 44.22, "meets_slo": true,
+          "concurrency": 192, "batch_size": 6, "num_devices": 32,
+          "parallel": { "tp": 1, "pp": 1, "dp": 32, "ep": 32 }
+        }] },
+        "disagg": {}
+      }
+    }
+  }}
+};
+
+/* 寻优：内层 code=0，serving_modes=1（PD 分离 disagg） */
+const OPT_DISAGG = {
+  "code": 0, "status": "success", "message": "寻优任务完成",
+  "common": { "infer_strategy_npu": {
+    "code": 0, "status": "success", "message": "寻优策略任务完成，已找到结果",
+    "data": {
+      "created_at": "2026-11-04T09:06:16+08:00",
+      "started_at": "2026-11-04T09:06:16+08:00",
+      "finished_at": "2026-11-04T09:10:12+08:00",
+      "request": {
+        "model": "DeepSeek-V4.1-Flash-MXFP4", "device": "950DT", "num_devices": "32", "num_nodes": "4",
+        "input_length": "4096", "output_length": "1024", "ttft_limit": "20", "tpot_limit": "100",
+        "serving_modes": "2", 
+      },
+      "result": {
+        "agg": {},
+        "disagg": { "candidates": [{
+          "prefill": {
+            "instances": 1, "devices_per_instance": 8, "devices_total": 8,
+            "parallel": { "tp": 8, "pp": 1, "dp": 1, "ep": 8 },
+            "batch_size": 193, "concurrency": 193, "ttft_ms": 600.79, "tpot_ms": null,
+            "tokens_per_s_per_instance": 27203.85, "tokens_per_s_per_device": 3400.48,
+            "tokens_per_s_cluster": 27203.86
+          },
+          "decode": {
+            "instances": 3, "devices_per_instance": 8, "devices_total": 24,
+            "parallel": { "tp": 2, "pp": 1, "dp": 4, "ep": 8 },
+            "batch_size": 6, "concurrency": 24, "ttft_ms": null, "tpot_ms": 67.10,
+            "tokens_per_s_per_instance": 357.67, "tokens_per_s_per_device": 44.71,
+            "tokens_per_s_cluster": 1073.01
+          }
+        }] }
+      }
+    }
+  }}
+};
+
+/* 仿真：外层 code=0，内层 code=0，仿真成功 */
+const SIM_SUCCESS = {
+  "code": 0, "status": "success", "message": "推理仿真任务执行成功",
+  "common": { "infer_simulate": {
+    "code": 0, "status": "success", "message": "推理仿真任务执行成功",
+    "data": {
+      "throughput": {
+        "requests": 1, "latency": 203.45, "input_tokens": 16384, "generated_tokens": 2048,
+        "prompt_throughput": 80.53, "generation_throughput": 10.07, "total_throughput": 90.60
+      },
+      "ttft": { "mean": 264.34, "median": 264.34, "p99": 264.34 },
+      "tpot": { "mean": 99.26, "median": 99.26, "p99": 99.26 },
+      "itl":  { "mean": 99.26, "median": 99.26, "p99": 101.53 }
+    }
+  }}
+};
+
+/* ====== 信息采集模块 ======
+   接口文档「前置说明」：单台机器内卡间的带宽和延迟、机器间传输的带宽和延迟、
+   CPU 传输的带宽和延迟、CPU 和 NPU 的容量及传输带宽和延迟。
+   只列出被采集的机器信息项，不展示采集数值。 */
+const COLLECT = [
+  ["单台机器内卡间", [
+    "intra_node_npu_bandwidth", "intra_node_npu_latency"
+  ]],
+  ["机器间传输", [
+    "inter_node_bandwidth", "inter_node_latency"
+  ]],
+  ["CPU", [
+    "cpu_capacity", "cpu_bandwidth", "cpu_latency"
+  ]],
+  ["NPU", [
+    "npu_capacity", "npu_bandwidth", "npu_latency", "npu_utilization"
+  ]]
+];
+
+/* ====== 通用工具 ====== */
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const opt = o => o.common.infer_strategy_npu;
+const sim = o => o.common.infer_simulate;
+const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+/* 把嵌套对象展开成 字段名路径 → 值，保证页面上只出现接口返回中的字段 */
+const flat = (obj,prefix="") => Object.entries(obj).flatMap(([k,v]) =>
+  isObj(v) ? flat(v,prefix+k+".") : [[prefix+k,v]]);
+const val = v => (v === null || v === undefined)
+  ? '<span class="null-pill">null</span>' : esc(v);
+
+const block = ([k,v],cls="") => {
+  const inner = (v === true || v === false)
+    ? `<span class="bool ${v?"yes":"no"}">${v}</span>`
+    : (v === null || v === undefined)
+      ? '<span class="null-pill">null</span>'
+      : `<span class="${String(v).length>18?"txt":""}">${esc(v)}</span>`;
+  return `<div class="stat ${cls}"><div class="v">${inner}</div><div class="l">${esc(k)}</div></div>`;
+};
+const grid = (pairs,cls="",extra="") => `<div class="stat-grid ${extra}">${pairs.map(p=>block(p,cls)).join("")}</div>`;
+const groupHead = (title,path,tone="") => `<div class="group-head ${tone}"><span class="dot"></span><span class="t">${title}</span><span class="p">${esc(path)}</span><span class="rule"></span></div>`;
+/* 按分组定义抽取字段，剩余字段兜底为「其他」，保证不漏字段 */
+const groupsOf = (pairs,defs) => {
+  const used = new Set();
+  const out = defs.map(([title,path,keys]) => {
+    const sel = keys.map(k=>pairs.find(([n])=>n===k)).filter(Boolean);
+    sel.forEach(([n])=>used.add(n));
+    return [title,path,sel];
+  });
+  const rest = pairs.filter(([n])=>!used.has(n));
+  if(rest.length) out.push(["其他","",rest]);
+  return out.filter(g=>g[2].length);
+};
+
+/* 关键策略字段：tp / pp / dp / ep 及实例配置前置展示 */
+const KEY = ["parallel.tp","parallel.pp","parallel.dp","parallel.ep",
+             "instances","devices_per_instance","devices_total","batch_size","concurrency"];
+const pick = (pairs,keys) => keys.map(k=>pairs.find(([n])=>n===k)).filter(Boolean);
+
+/* 部署形态：内部沿用接口字段名 agg / disagg，界面显示中文形态名 */
+const MODE_LABEL = { agg:"PD混部", disagg:"PD分离" };
+const OPT = { agg: OPT_AGG, disagg: OPT_DISAGG };
+let MODE = "agg";
+
+/* 总体信息字段：request 全字段；serving_modes 的值替换为中文形态名 */
+const overallPairs = () => Object.entries(opt(OPT[MODE]).data.request)
+  .map(([k,v]) => [k, k === "serving_modes" ? MODE_LABEL[MODE] : v]);
+/* 结果字段名若与总体信息字段名重复，则删除（信息采集字段名也纳入比对） */
+const isDup = k => new Set([
+  ...overallPairs().map(([f])=>f),
+  ...COLLECT.flatMap(([,items])=>items)
+]).has(k.split(".").pop());
+const dedup = pairs => pairs.filter(([k])=>!isDup(k));
+
+function renderModeSwitch(){
+  document.getElementById("modeSwitch").innerHTML = ["agg","disagg"].map(m =>
+    `<button type="button" class="seg-btn ${m} ${m===MODE?"active":""}" data-mode="${m}">${MODE_LABEL[m]}</button>`).join("");
+}
+
+/* ====== 一、总体信息 ====== */
+const OVERALL_GROUPS = [
+  ["模型与设备","data.request",["model","device","num_devices","num_nodes"]],
+  ["输入与约束","data.request",["input_length","output_length","ttft_limit","tpot_limit"]]
+];
+function renderOverall(){
+  const pairs = overallPairs().filter(([k])=>k!=="serving_modes");
+  document.getElementById("overall").innerHTML = `
+    <div class="card c-teal">
+      <div class="collect-head">
+        <span class="collect-title">信息采集</span>
+        <span class="status-pill"><span class="pulse"></span>已采集</span>
+      </div>
+      <div class="collect-groups">
+        ${COLLECT.map(([g,items])=>`<div class="collect-group"><div class="cg-title">${esc(g)}</div><div class="cg-items">${items.map(k=>`<span class="cg-item"><span class="tick">✓</span>${esc(k)}</span>`).join("")}</div></div>`).join("")}
+      </div>
+    </div>
+    <div class="card c-blue">
+      ${groupsOf(pairs,OVERALL_GROUPS).map(([t,p,ps])=>groupHead(t,p)+grid(ps)).join("")}
+      <div class="mode-banner ${MODE==="disagg"?"purple":""}">
+        <div class="mb-left"><span class="mb-field">serving_modes</span><span class="mb-path">data.request</span></div>
+        <div class="mb-value">${MODE_LABEL[MODE]}</div>
+      </div>
+    </div>`;
+}
+
+/* ====== 二、寻优结果 ====== */
+function renderOptimize(){
+  const d = opt(OPT[MODE]).data;
+  const c = d.result[MODE].candidates[0];
+  document.getElementById("optPath").innerHTML = `data.result.${MODE}.candidates[0]`;
+  let body, cls;
+  if(MODE === "agg"){
+    cls = "c-blue";
+    const all = dedup(flat(c));
+    const keys = KEY.filter(k=>all.some(([n])=>n===k));
+    const par = pick(all,keys).filter(([k])=>k.startsWith("parallel."));
+    const cfg = pick(all,keys).filter(([k])=>!k.startsWith("parallel."));
+    const perf = all.filter(([k])=>!keys.includes(k));
+    body = `
+      ${groupHead("并行策略","data.result.agg.candidates[0].parallel")}
+      ${grid(par,"key","tight")}
+      ${groupHead("运行配置","data.result.agg.candidates[0]")}
+      ${grid(cfg)}
+      ${groupHead("性能指标","data.result.agg.candidates[0]")}
+      ${grid(perf)}`;
+  }else{
+    cls = "c-purple";
+    const pf = dedup(flat(c.prefill));
+    const dc = dedup(flat(c.decode));
+    const keys = KEY.filter(k=>pf.some(([n])=>n===k) && dc.some(([n])=>n===k));
+    const parKeys = keys.filter(k=>k.startsWith("parallel."));
+    const cfgKeys = keys.filter(k=>!k.startsWith("parallel."));
+    const dcMap = Object.fromEntries(dc);
+    const perf = pf.filter(([k])=>!keys.includes(k));
+    const side = (name,pairs,badge,tone) => `
+      <div class="sub">
+        <div class="sub-head"><span class="badge ${badge}">${name}</span><span class="path">data.result.disagg.candidates[0].${name}</span></div>
+        ${groupHead("并行策略","parallel",tone)}
+        ${grid(pick(pairs,parKeys),"key purple","tight")}
+        ${groupHead("实例配置","",tone)}
+        ${grid(pick(pairs,cfgKeys),"purple")}
+      </div>`;
+    body = `
+      <div class="sub-grid">${side("prefill",pf,"p","purple")}${side("decode",dc,"d","purple")}</div>
+      ${groupHead("性能指标","data.result.disagg.candidates[0]","purple")}
+      <div class="table-wrap"><table class="kv">
+        <thead><tr><th></th><th>prefill</th><th>decode</th></tr></thead>
+        <tbody>${perf.map(([k,v])=>`<tr><td class="k">${esc(k)}</td><td class="num">${val(v)}</td><td class="num">${val(dcMap[k])}</td></tr>`).join("")}</tbody>
+      </table></div>`;
+  }
+  document.getElementById("optimize").innerHTML = `<div class="card ${cls}">${body}</div>`;
+}
+
+/* ====== 三、仿真结果 ====== */
+function renderSimulate(){
+  const d = sim(SIM_SUCCESS).data;
+  const tp = dedup(Object.entries(d.throughput));
+  const scaleKeys = ["requests","input_tokens","generated_tokens","latency"];
+  const scale = pick(tp,scaleKeys);
+  const tput = tp.filter(([k])=>!scaleKeys.includes(k));
+  const groups = [["ttft",d.ttft],["tpot",d.tpot],["itl",d.itl]].filter(([g])=>!isDup(g));
+  const cols = ["mean","median","p99"].filter(c=>!isDup(c));
+
+  document.getElementById("simulate").innerHTML = `
+    <div class="card c-teal">
+      ${groupHead("请求与规模","data.throughput","teal")}
+      ${grid(scale,"teal")}
+      ${groupHead("吞吐","data.throughput","teal")}
+      ${grid(tput,"teal")}
+      ${groupHead("时延分位","data.ttft / data.tpot / data.itl","teal")}
+      <div class="table-wrap"><table class="kv">
+        <thead><tr><th></th>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
+        <tbody>${groups.map(([name,g])=>`<tr><td class="k">${name}</td>${cols.map(c=>`<td class="num">${val(g[c])}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table></div>
+    </div>`;
+}
+
+function renderAll(){
+  renderModeSwitch();
+  renderOverall();
+  renderOptimize();
+  renderSimulate();
+  const num = document.getElementById("secNumOpt");
+  if(num) num.className = "sec-num " + (MODE==="disagg" ? "p" : "");
+}
+document.getElementById("modeSwitch").addEventListener("click", e=>{
+  const btn = e.target.closest("[data-mode]");
+  if(!btn) return;
+  MODE = btn.dataset.mode;
+  renderAll();
+});
+renderAll();
+</script>
+</body>
+</html>

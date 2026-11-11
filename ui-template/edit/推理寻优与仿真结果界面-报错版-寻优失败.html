@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智算调优平台 · 推理策略寻优与仿真结果（报错版 · 寻优失败）</title>
+<style>
+  :root{
+    --sidebar-bg:#0a1f3c; --sidebar-hover:#14304c;
+    --primary:#1668dc; --primary-dark:#0e56c0; --primary-2:#3d8bfd;
+    --bg:#f2f4f8; --card:#fff; --border:#e6eaf1;
+    --text:#1c2532; --text-2:#55637a; --text-3:#8b96a8;
+    --green:#0f9d58; --green-bg:#e6f6ec;
+    --red:#e1463e; --red-bg:#fdecea; --red-line:#f5cdc9;
+    --orange:#e8890c; --orange-bg:#fdf3e3; --orange-line:#f3ddb5;
+    --blue-bg:#e9f1fe; --blue-line:#cfe0ff;
+    --teal:#0d9488; --teal-bg:#e6f6f3;
+    --radius:10px; --shadow:0 1px 3px rgba(28,37,50,.05);
+    --shadow-hover:0 12px 28px rgba(28,37,50,.11);
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{-webkit-font-smoothing:antialiased;}
+  body{font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue","Segoe UI",Arial,sans-serif;
+    background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+  .num,.ov-cell .v,.err-code,.msg-pre,.mini-stat .v,.tl-time{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:#c9d2de;border-radius:5px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  /* 平台外壳 */
+  .layout{display:flex;height:100vh;overflow:hidden;}
+  .sidebar{width:214px;flex-shrink:0;display:flex;flex-direction:column;color:#c6d3e2;
+    background:linear-gradient(180deg,#0a1f3c 0%,#0c2547 100%);}
+  .logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.07);}
+  .logo-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    color:#fff;background:linear-gradient(135deg,#3d8bfd,#1250b5);box-shadow:0 2px 8px rgba(22,104,220,.45);}
+  .logo-icon svg{width:19px;height:19px;}
+  .logo-name{font-size:15px;font-weight:600;color:#fff;line-height:1.25;}
+  .logo-sub{font-size:10px;color:#6f8cab;letter-spacing:.4px;}
+  .menu{flex:1;padding:12px 10px;}
+  .menu-item{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:8px;cursor:pointer;
+    font-size:13.5px;margin-bottom:4px;color:#a9bcd4;position:relative;transition:all .18s;}
+  .menu-item svg{width:16px;height:16px;flex-shrink:0;}
+  .menu-item:hover{background:#14304c;color:#e6eef7;}
+  .menu-item.active{background:linear-gradient(90deg,rgba(61,139,253,.22),rgba(61,139,253,.08));color:#fff;font-weight:500;}
+  .menu-item.active::before{content:"";position:absolute;left:-10px;top:9px;bottom:9px;width:3px;
+    border-radius:0 3px 3px 0;background:#3d8bfd;}
+  .menu-item .arrow{margin-left:auto;font-size:10px;color:#5f7ea3;}
+  .space-bar{padding:13px 12px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:8px;}
+  .space-dot{width:8px;height:8px;border-radius:50%;background:#2fbf71;flex-shrink:0;box-shadow:0 0 6px rgba(47,191,113,.8);}
+  .space-name{font-size:12px;color:#c6d3e2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .space-btn{background:#24466e;color:#dce7f2;border:none;border-radius:5px;font-size:11px;padding:3px 10px;cursor:pointer;}
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .topbar{height:50px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;
+    padding:0 18px;gap:12px;flex-shrink:0;}
+  .btn-back{display:flex;align-items:center;gap:6px;background:var(--blue-bg);color:var(--primary);border:none;
+    border-radius:17px;padding:6px 15px;font-size:13px;cursor:pointer;}
+  .btn-back:hover{background:#d9e8fd;}
+  .crumb{font-size:13px;color:var(--text-3);}
+  .crumb b{color:var(--text);font-weight:500;}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2);}
+  .avatar{width:27px;height:27px;border-radius:50%;background:linear-gradient(135deg,#4d8ef7,#1668dc);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:11px;}
+  .mode-badge{display:inline-flex;align-items:center;gap:8px;border-radius:20px;padding:4px 12px 4px 6px;
+    font-size:12px;font-weight:600;border:1px solid #e2e7ee;background:#f3f5f8;color:var(--text-2);}
+  .mode-badge .mb-ico{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:#c5cedb;color:#fff;}
+  .mode-badge .mb-ico svg{width:12px;height:12px;}
+  .mode-badge .mb-hint{font-size:10.5px;font-weight:400;opacity:.8;border-left:1px solid currentColor;padding-left:8px;}
+  .content{flex:1;overflow-y:auto;padding:20px 26px 40px;}
+  .content-inner{max-width:1240px;margin:0 auto;}
+
+  /* 章节导航与标题 */
+  .section-nav{display:flex;align-items:center;gap:5px;padding:6px;margin-bottom:18px;
+    border:1px solid var(--border);border-radius:10px;background:#fff;box-shadow:var(--shadow);overflow-x:auto;}
+  .section-nav a{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 12px;
+    border-radius:7px;color:var(--text-2);font-size:12px;text-decoration:none;white-space:nowrap;transition:background .15s,color .15s;}
+  .section-nav a span{font:11px var(--mono);color:#97a6bc;}
+  .section-nav a:hover,.section-nav a:focus-visible{background:#edf4ff;color:var(--primary);}
+  .section-nav a:focus-visible{outline:2px solid #91baff;outline-offset:-2px;}
+  .sec-conn{display:flex;align-items:center;gap:12px;min-height:46px;margin:25px 0 10px;scroll-margin-top:18px;}
+  .sec-conn:first-of-type{margin-top:2px;}
+  .sec-icon{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex-shrink:0;
+    border:1px solid #d9e6f8;border-radius:10px;color:var(--primary);
+    background:linear-gradient(145deg,#fff 0%,#eaf2ff 100%);box-shadow:0 2px 5px rgba(22,104,220,.04);}
+  .sec-icon svg{width:19px;height:19px;}
+  .sec-conn.failed .sec-icon{border-color:var(--red-line);color:var(--red);
+    background:linear-gradient(145deg,#fff,#fdecea);}
+  .sec-conn.warn .sec-icon{border-color:var(--orange-line);color:var(--orange);
+    background:linear-gradient(145deg,#fff,#fdf3e3);}
+  .sec-conn.skipped .sec-icon{border-color:#e2e7ee;color:#9aa6b6;
+    background:linear-gradient(145deg,#fff,#f4f6f9);}
+  .sec-heading{margin:0;font-size:16px;font-weight:600;line-height:1.4;letter-spacing:.4px;color:#24344b;}
+  .sec-rule{flex:1;min-width:12px;height:1px;margin-left:8px;background:linear-gradient(90deg,#dbe2ed,rgba(219,226,237,.25));}
+  .sec-extra{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid #dcece5;
+    border-radius:6px;background:#f4faf7;font-size:11px;color:var(--text-2);white-space:nowrap;}
+  .sec-extra b{color:#16815a;font-weight:500;}
+  .sec-extra.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red);}
+  .sec-extra.bad b{color:var(--red);}
+  .sec-extra.warnx{border-color:var(--orange-line);background:var(--orange-bg);color:var(--orange);}
+  .sec-extra.warnx b{color:var(--orange);}
+  .sec-extra.mute{border-color:#e2e7ee;background:#f6f8fb;color:var(--text-3);}
+  .sec-extra.mute b{color:var(--text-3);}
+  .sec-index{padding-left:12px;border-left:1px solid #dce3ee;color:#9aa8bc;font:500 12px/1 var(--mono);letter-spacing:1px;}
+
+  /* 首部 */
+  .hero{position:relative;overflow:hidden;border:1px solid #f0d9d6;border-radius:12px;padding:18px 22px 17px;
+    background:linear-gradient(110deg,#fff7f6 0%,#fff 70%);box-shadow:0 2px 10px rgba(225,70,62,.05);}
+  .hero::before{content:"";position:absolute;right:-70px;top:-130px;width:360px;height:360px;border-radius:50%;
+    background:radial-gradient(circle,rgba(225,70,62,.08),rgba(225,70,62,0) 70%);pointer-events:none;}
+  .hero>*{position:relative;z-index:1;}
+  .hero-top{display:flex;align-items:center;gap:11px;flex-wrap:wrap;}
+  .hero h1{font-size:21px;font-weight:700;letter-spacing:.3px;color:#1c2532;}
+  .hero-tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;border-radius:20px;padding:3px 11px;
+    background:var(--red-bg);border:1px solid var(--red-line);color:var(--red);}
+  .hero-tag .dot{width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 0 3px rgba(225,70,62,.14);}
+  .hero-tag.empty{background:var(--orange-bg);border-color:var(--orange-line);color:var(--orange);}
+  .hero-tag.empty .dot{background:var(--orange);box-shadow:0 0 0 3px rgba(232,137,12,.14);}
+  .hero p{font-size:13px;line-height:1.8;color:var(--text-2);margin-top:9px;max-width:980px;}
+  .hero p b{color:var(--red);font-weight:600;}
+  .hero.empty-mode p b{color:var(--orange);}
+
+  /* 失败横幅 */
+  .alert-strip{display:flex;align-items:center;gap:13px;margin:16px 0 0;padding:13px 18px;border-radius:11px;
+    border:1px solid var(--red-line);background:linear-gradient(100deg,#fdecea,#fff 78%);}
+  .alert-strip.warn{border-color:var(--orange-line);background:linear-gradient(100deg,#fdf3e3,#fff 78%);}
+  .alert-ico{width:32px;height:32px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+    background:var(--red);color:#fff;}
+  .alert-strip.warn .alert-ico{background:var(--orange);}
+  .alert-ico svg{width:18px;height:18px;}
+  .alert-body{min-width:0;flex:1;}
+  .alert-body b{font-size:13.5px;font-weight:700;color:var(--text);}
+  .alert-body p{font-size:11.5px;color:var(--text-2);margin-top:2px;line-height:1.65;}
+  .alert-code{font:700 12px/1 var(--mono);color:var(--red);border:1px solid var(--red-line);
+    background:#fff;border-radius:6px;padding:6px 10px;white-space:nowrap;}
+  .alert-strip.warn .alert-code{color:var(--orange);border-color:var(--orange-line);}
+
+  /* 阶段状态条 */
+  .pipeline{display:flex;align-items:stretch;gap:0;margin:16px 0 2px;padding:14px 18px;
+    border:1px solid var(--border);border-radius:11px;background:#fff;box-shadow:var(--shadow);overflow-x:auto;}
+  .pl-item{display:flex;align-items:center;gap:9px;flex:1;min-width:150px;}
+  .pl-ico{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:700;background:var(--green-bg);color:var(--green);border:1px solid #bfe6d2;}
+  .pl-ico svg{width:15px;height:15px;}
+  .pl-item.failed .pl-ico{background:var(--red-bg);color:var(--red);border-color:var(--red-line);}
+  .pl-item.warn .pl-ico{background:var(--orange-bg);color:var(--orange);border-color:var(--orange-line);}
+  .pl-item.skipped .pl-ico{background:#f2f4f8;color:#a7b1c0;border-color:#e2e7ee;}
+  .pl-txt b{display:block;font-size:12px;font-weight:700;color:var(--text);white-space:nowrap;}
+  .pl-txt small{font-size:10.5px;color:var(--text-3);white-space:nowrap;}
+  .pl-item.failed .pl-txt b{color:var(--red);}
+  .pl-item.warn .pl-txt b{color:var(--orange);}
+  .pl-item.skipped .pl-txt b{color:var(--text-3);}
+  .pl-line{flex:0 0 34px;height:2px;align-self:center;margin:0 8px;background:#dfe7f0;border-radius:2px;}
+  .pl-line.broken{background:repeating-linear-gradient(90deg,#f0c3bf 0 5px,transparent 5px 10px);}
+
+  /* 通用卡片 */
+  .card{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:16px 20px 18px;box-shadow:var(--shadow);margin-bottom:12px;transition:transform .2s,box-shadow .2s,border-color .2s;}
+  .card::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:var(--radius) var(--radius) 0 0;
+    background:linear-gradient(90deg,#9dc3f5,#e6eaf1);}
+  .card.tone-red::before{background:linear-gradient(90deg,#f0a9a4,#e6eaf1);}
+  .card.tone-orange::before{background:linear-gradient(90deg,#f0c079,#e6eaf1);}
+  .card.tone-gray::before{background:linear-gradient(90deg,#d9dfe8,#eef1f6);}
+  .card:hover{transform:translateY(-2px);box-shadow:var(--shadow-hover);border-color:#d6e0ee;}
+  .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
+  .card-title{font-size:14.5px;font-weight:700;letter-spacing:.2px;display:flex;align-items:center;gap:8px;}
+  .card-title .ico{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--blue-bg);color:var(--primary);}
+  .card-title .ico svg{width:15px;height:15px;}
+  .card-title.red .ico{background:var(--red-bg);color:var(--red);}
+  .card-title.orange .ico{background:var(--orange-bg);color:var(--orange);}
+  .card-title.teal .ico{background:var(--teal-bg);color:var(--teal);}
+  .card-sub{font-size:11.5px;color:var(--text-3);}
+  .card-right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;border-radius:20px;padding:2px 10px;font-weight:600;flex-shrink:0;}
+  .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .tag.ok{background:var(--green-bg);color:var(--green);}
+  .tag.info{background:var(--blue-bg);color:var(--primary-dark);}
+  .tag.red{background:var(--red-bg);color:var(--red);}
+  .tag.orange{background:var(--orange-bg);color:var(--orange);}
+  .tag.ghost{background:#f1f4f9;color:var(--text-2);}
+  .tag.ghost::before{display:none;}
+  .note{font-size:11.5px;color:var(--text-2);line-height:1.75;margin:2px 0 13px;
+    background:linear-gradient(90deg,#f6f9ff,rgba(246,249,255,0));border-left:3px solid #c9dcfb;
+    padding:7px 12px;border-radius:0 6px 6px 0;}
+  .note b{color:var(--primary-dark);font-weight:600;}
+  .note.red{background:linear-gradient(90deg,#fff6f5,rgba(255,246,245,0));border-left-color:#f0a9a4;}
+  .note.red b{color:var(--red);}
+  .note.orange{background:linear-gradient(90deg,#fffaf2,rgba(255,250,242,0));border-left-color:#f0c079;}
+  .note.orange b{color:var(--orange);}
+  .group-head{display:flex;align-items:center;gap:9px;margin:18px 0 10px;}
+  .group-head .dot{width:7px;height:7px;border-radius:2px;background:var(--primary);flex-shrink:0;}
+  .group-head.red .dot{background:var(--red);}
+  .group-head.orange .dot{background:var(--orange);}
+  .group-head .t{font-size:12.5px;font-weight:700;white-space:nowrap;}
+  .group-head .rule{flex:1;height:1px;background:#eef1f6;}
+
+  /* 任务信息 */
+  .ov-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .ov-model{font-size:16px;font-weight:600;letter-spacing:.2px;}
+  .ov-id{font-family:var(--mono);font-size:11px;color:var(--text-3);background:#f0f3f7;border-radius:4px;padding:2px 8px;}
+  .ov-cost{margin-left:auto;font-size:12px;color:var(--text-3);}
+  .ov-cost b{color:var(--text-2);font-weight:500;}
+  .ov-specs{display:grid;grid-template-columns:repeat(4,1fr);margin-top:13px;padding-top:12px;border-top:1px solid var(--border);}
+  .ov-cell{padding:0 16px 12px;border-right:1px solid var(--border);min-width:0;}
+  .ov-cell:nth-child(4n){border-right:none;}
+  .ov-cell:nth-child(n+5){padding-top:12px;border-top:1px solid var(--border);}
+  .ov-cell:nth-child(1){padding-left:0;}
+  .ov-cell .k{font-size:11.5px;color:var(--text-3);margin-bottom:4px;}
+  .ov-cell .v{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ov-cell .v small{font-size:11px;font-weight:400;color:var(--text-3);font-family:inherit;}
+  .ov-cell.invalid .v{color:var(--red);}
+  .ov-cell.invalid .k::after{content:" · 非法入参";color:var(--red);font-weight:600;}
+  .fail-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;
+    padding-top:13px;border-top:1px dashed var(--red-line);}
+  .mini-stat{background:#fff8f7;border:1px solid #f7ded9;border-radius:8px;padding:9px 11px;}
+  .mini-stat .k{font-size:10.5px;color:var(--text-3);}
+  .mini-stat .v{font-size:13px;font-weight:700;color:var(--text);line-height:1.5;}
+  .mini-stat .v.bad{color:var(--red);}
+
+  /* 采集信息 */
+  .hw-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;}
+  .hw-group{background:linear-gradient(180deg,#fbfcfe,#fff);border:1px solid var(--border);border-radius:10px;
+    padding:12px 13px;transition:transform .2s,box-shadow .2s;}
+  .hw-group:hover{transform:translateY(-2px);box-shadow:0 8px 18px rgba(28,37,50,.09);}
+  .hw-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;}
+  .hw-ico{width:27px;height:27px;border-radius:7px;background:#f1f4f8;color:#8b96a8;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .hw-ico svg{width:14px;height:14px;}
+  .hw-name{font-size:12.5px;font-weight:700;}
+  .hw-cnt{font-size:10px;color:var(--text-3);margin-left:auto;font-family:var(--mono);}
+  .hw-items{display:flex;flex-direction:column;gap:5px;}
+  .hw-item{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #eef2f8;
+    border-radius:6px;padding:5px 8px;min-width:0;}
+  .hw-item .tick{color:var(--green);flex-shrink:0;}
+  .hw-item .tick svg{width:12px;height:12px;display:block;}
+  .hw-item .cn{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+  /* 错误主卡 */
+  .error-hero{display:flex;align-items:center;gap:16px;padding:16px 18px;border-radius:11px;
+    border:1px solid var(--red-line);background:linear-gradient(105deg,#fdecea,#fff 72%);}
+  .error-hero.warn{border-color:var(--orange-line);background:linear-gradient(105deg,#fdf3e3,#fff 72%);}
+  .err-icon{width:46px;height:46px;border-radius:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+    background:var(--red);color:#fff;box-shadow:0 6px 16px rgba(225,70,62,.22);}
+  .error-hero.warn .err-icon{background:var(--orange);box-shadow:0 6px 16px rgba(232,137,12,.22);}
+  .err-icon svg{width:24px;height:24px;}
+  .err-main{min-width:0;flex:1;}
+  .err-title{font-size:15px;font-weight:700;color:var(--text);}
+  .err-desc{font-size:11.5px;color:var(--text-2);margin-top:3px;line-height:1.6;}
+  .err-code{font-size:20px;font-weight:800;color:var(--red);border:1px solid var(--red-line);background:#fff;
+    border-radius:9px;padding:6px 14px;white-space:nowrap;}
+  .error-hero.warn .err-code{color:var(--orange);border-color:var(--orange-line);}
+  .err-code small{display:block;font-size:9.5px;font-weight:500;color:var(--text-3);text-align:center;letter-spacing:.5px;}
+  .msg-box{margin-top:13px;border:1px solid var(--border);border-radius:9px;overflow:hidden;}
+  .msg-head{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#f6f8fc;border-bottom:1px solid var(--border);
+    font-size:11px;font-weight:700;color:var(--text-2);}
+  .msg-head .dot{width:6px;height:6px;border-radius:50%;background:var(--red);}
+  .msg-pre{margin:0;padding:12px 14px;background:#fff;color:#8a3540;font-size:11.5px;line-height:1.75;
+    white-space:pre-wrap;word-break:break-word;}
+  .error-hero.warn~.msg-box .msg-pre{color:#8a5a16;}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:13px;}
+  .panel{border:1px solid var(--border);border-radius:10px;background:#fff;padding:13px 15px;}
+  .panel-title{font-size:12px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:7px;margin-bottom:10px;}
+  .panel-title .ico{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--red-bg);color:var(--red);}
+  .panel-title .ico svg{width:13px;height:13px;}
+  .panel-title.orange .ico{background:var(--orange-bg);color:var(--orange);}
+  .panel-title.blue .ico{background:var(--blue-bg);color:var(--primary);}
+  .kv-line{display:flex;align-items:flex-start;gap:10px;font-size:11.5px;padding:5px 0;border-bottom:1px dashed #eef1f6;}
+  .kv-line:last-child{border-bottom:0;}
+  .kv-line .k{color:var(--text-3);flex:0 0 88px;}
+  .kv-line .v{color:var(--text);font-weight:600;word-break:break-all;}
+  .kv-line .v.bad{color:var(--red);font-family:var(--mono);font-size:11px;}
+  .chip-wrap{display:flex;flex-wrap:wrap;gap:6px;}
+  .chip{font:10.5px/1.5 var(--mono);border-radius:6px;padding:3px 9px;border:1px solid var(--border);
+    background:#f8fafc;color:var(--text-2);}
+  .chip.bad{background:var(--red-bg);border-color:var(--red-line);color:var(--red);font-weight:700;}
+  .chip.good{background:var(--green-bg);border-color:#bfe6d2;color:var(--green);}
+  .suggest{list-style:none;display:flex;flex-direction:column;gap:8px;}
+  .suggest li{display:flex;gap:9px;font-size:11.5px;color:var(--text-2);line-height:1.65;}
+  .suggest .n{width:18px;height:18px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+    background:var(--blue-bg);color:var(--primary-dark);font:700 10px/1 var(--mono);margin-top:2px;}
+  .suggest b{color:var(--text);font-weight:600;}
+
+  /* 时间线 */
+  .timeline{display:flex;align-items:center;gap:0;margin-top:13px;padding:12px 14px;
+    border:1px dashed var(--border);border-radius:9px;background:#fbfcfe;flex-wrap:wrap;}
+  .tl-item{flex:1;min-width:130px;}
+  .tl-item .k{font-size:10.5px;color:var(--text-3);}
+  .tl-time{font-size:12px;font-weight:600;color:var(--text);margin-top:2px;}
+  .tl-arrow{color:#b7c2d2;font-size:13px;padding:0 10px;}
+  .tl-note{width:100%;font-size:10.5px;color:var(--text-3);margin-top:9px;padding-top:8px;border-top:1px dashed var(--border);}
+
+  /* 流程中断 / 空结果 */
+  .flow-break{display:flex;align-items:center;gap:8px;margin-top:13px;flex-wrap:wrap;}
+  .flow-node{flex:1;min-width:130px;text-align:center;border:1px solid var(--border);border-radius:8px;
+    padding:9px 10px;background:#fff;font-size:11px;color:var(--text-2);}
+  .flow-node.stop{border-color:var(--red-line);background:var(--red-bg);color:var(--red);font-weight:700;}
+  .flow-node.off{background:#f7f8fa;color:#a7b1c0;border-style:dashed;}
+  .flow-node b{display:block;font-size:11.5px;font-weight:700;margin-bottom:2px;}
+  .flow-arrow{color:#c2cbd8;font-size:13px;}
+  .empty-results{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:13px;}
+  .empty-box{border:1px dashed #d8dfe9;border-radius:10px;background:#fafbfd;padding:16px;text-align:center;}
+  .empty-box svg{width:24px;height:24px;color:#b6c0cd;}
+  .empty-box b{display:block;font-size:12px;font-weight:700;color:var(--text-2);margin-top:7px;}
+  .empty-box p{font-size:10.5px;color:var(--text-3);margin-top:4px;}
+
+  /* 04 未执行 */
+  .skipped-card{border:1px dashed #d4dbe5;border-radius:12px;background:
+    repeating-linear-gradient(135deg,#fbfcfe 0 12px,#f8fafc 12px 24px);
+    padding:26px 22px;text-align:center;}
+  .skipped-ico{width:52px;height:52px;border-radius:14px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;
+    background:#eef1f6;color:#9aa6b6;border:1px solid #dfe5ed;}
+  .skipped-ico svg{width:26px;height:26px;}
+  .skipped-card h3{font-size:15px;font-weight:700;color:var(--text-2);}
+  .skipped-card p{font-size:12px;color:var(--text-3);line-height:1.8;margin-top:7px;max-width:680px;margin-left:auto;margin-right:auto;}
+  .skipped-chain{display:flex;align-items:center;gap:8px;margin:20px auto 0;max-width:860px;flex-wrap:wrap;justify-content:center;}
+  .sk-chain-node{flex:1;min-width:140px;border:1px dashed #dce2eb;border-radius:8px;background:rgba(255,255,255,.75);
+    padding:10px 12px;font-size:11px;color:#a2adbc;}
+  .sk-chain-node b{display:block;font-size:11.5px;font-weight:700;color:#9aa6b6;margin-bottom:2px;}
+  .sk-chain-arrow{color:#c8d0dc;font-size:12px;}
+  .skipped-foot{margin-top:18px;display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;}
+  .pill{font-size:11px;border-radius:20px;padding:4px 12px;border:1px solid #e2e7ee;background:#fff;color:var(--text-3);}
+  .btn-disabled{display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e7ee;background:#f4f6f9;
+    color:#a7b1c0;border-radius:7px;padding:6px 13px;font-size:11.5px;font-weight:600;cursor:not-allowed;}
+  .btn-disabled svg{width:13px;height:13px;}
+
+  /* 页脚 */
+  .btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:#fff;color:var(--text-2);
+    border-radius:7px;padding:5px 11px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .18s;text-decoration:none;}
+  .btn svg{width:13px;height:13px;}
+  .btn:hover{border-color:#c9d9f2;color:var(--primary-dark);background:#f6f9ff;}
+  .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .btn.primary:hover{background:var(--primary-dark);color:#fff;}
+  .footer{margin-top:18px;padding:14px 17px;border:1px dashed #d7e0ee;border-radius:11px;background:rgba(255,255,255,.65);
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--text-3);}
+  .footer .demo{display:flex;align-items:center;gap:6px;}
+  .footer .demo .lb{font-weight:600;color:var(--text-2);}
+  .demo-btn{border:1px solid var(--border);background:#fff;border-radius:16px;padding:3px 12px;font-size:11px;
+    color:var(--text-2);cursor:pointer;transition:all .18s;}
+  .demo-btn:hover{border-color:#c9d9f2;color:var(--primary-dark);}
+  .demo-btn.active{background:var(--red);border-color:var(--red);color:#fff;font-weight:600;}
+  .footer .spacer{flex:1;}
+
+  @media(max-width:1080px){.hw-grid{grid-template-columns:repeat(2,1fr);}.two-col,.empty-results{grid-template-columns:1fr;}}
+  @media(max-width:860px){
+    .sidebar{display:none;}.content{padding:16px 14px 32px;}
+    .ov-specs,.fail-summary{grid-template-columns:repeat(2,1fr);}
+    .ov-cell:nth-child(4n){border-right:1px solid var(--border);}
+    .ov-cell:nth-child(2n){border-right:none;}
+    .ov-cell:nth-child(n+3){padding-top:12px;border-top:1px solid var(--border);}
+    .sec-extra,.sec-index{display:none;}.crumb{display:none;}
+  }
+  @media(max-width:520px){.hw-grid,.fail-summary{grid-template-columns:1fr;}.hero h1{font-size:18px;}.card{padding:15px 14px 17px;}}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+  @media print{.sidebar,.topbar,.footer,.section-nav{display:none!important;}.layout{display:block;height:auto;overflow:visible;}
+    .content{overflow:visible;padding:0;}.card{box-shadow:none;break-inside:avoid;}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo"><div class="logo-icon" id="logoIcon"></div>
+      <div><div class="logo-name">智算调优平台</div><div class="logo-sub">ICP Tuning Platform</div></div></div>
+    <nav class="menu" id="sideMenu"></nav>
+    <div class="space-bar"><span class="space-dot"></span><span class="space-name">950DT 测试项目</span>
+      <button class="space-btn" type="button">切换</button></div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button class="btn-back" type="button" onclick="history.length>1?history.back():void 0">‹ 返回</button>
+      <span class="crumb">首页 / 模型调优 / <b>推理调优</b></span>
+      <div class="topbar-right"><span id="modeBadge"></span>
+        <span class="avatar">A</span><span>admin</span><span style="color:var(--text-3)">▾</span></div>
+    </header>
+    <main class="content"><div class="content-inner">
+      <div id="hero"></div>
+      <div id="alert"></div>
+      <div class="detail" id="detailArea"></div>
+      <div id="footer"></div>
+    </div></main>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   报错版 A · 推理寻优失败（下游模拟仿真不执行）
+   覆盖两种响应：
+     code=1 / status=failed  → 入参错误导致执行失败
+     code=3 / status=empty   → 寻优结果为空（未找到满足 SLO 的策略）
+   页脚可切换两种示例；真实接入可注入 window.INFER_OPT_RESULT。
+   ===================================================================== */
+
+/* ==================== 1. 报错响应示例 ==================== */
+const ERR_INPUT = {
+  "code": 1, "status": "failed",
+  "message": "入参不对：--model='Unknown-Model' 不在白名单内；支持：GLM-5.2-w4a4c8-mxfp4, GLM-5.2-BF16, GLM-5.3-BF16, GLM-5.2-FP8, GLM-5.3-FP8, DeepSeek-R1-FP8, DeepSeek-V4.1-Flash-MXFP4, DeepSeek-V4-Pro-W8A8",
+  "common": { "infer_strategy_npu": {
+    "code": 1, "status": "failed",
+    "message": "入参不对：--model='Unknown-Model' 不在白名单内；支持：GLM-5.2-w4a4c8-mxfp4, GLM-5.2-BF16, GLM-5.3-BF16, GLM-5.2-FP8, GLM-5.3-FP8, DeepSeek-R1-FP8, DeepSeek-V4.1-Flash-MXFP4, DeepSeek-V4-Pro-W8A8",
+    "data": {
+      "created_at": "2026-11-09T14:23:33+08:00",
+      "started_at": "2026-11-09T14:23:33+08:00",
+      "finished_at": "2026-11-09T14:23:33+08:00",
+      "request": {
+        "model": "Unknown-Model", "device": "950DT", "num_devices": 32, "num_nodes": 4,
+        "input_length": 4096, "output_length": 1024, "ttft_limit": 20.0, "tpot_limit": 100,
+        "serving_modes": 0, "quantize-linear-action": null, "quantize-non-expert-linear-action": null,
+        "mxfp4-group-size": "32", "quantize-attention-action": null, "topk": 1
+      },
+      "result": { "agg": {}, "disagg": {} }
+    }
+  }}
+};
+const ERR_EMPTY = {
+  "code": 0, "status": "success", "message": "寻优任务完成（无结果）",
+  "common": { "infer_strategy_npu": {
+    "code": 3, "status": "empty", "message": "未找到满足 SLO 的部署策略",
+    "data": {
+      "created_at": "2026-11-09T14:23:33+08:00",
+      "started_at": "2026-11-09T14:23:33+08:00",
+      "finished_at": "2026-11-09T14:23:46+08:00",
+      "request": {
+        "model": "DeepSeek-V4.1-Flash-MXFP4", "device": "950DT", "num_devices": 8, "num_nodes": 1,
+        "input_length": 4096, "output_length": 1024, "ttft_limit": 20.0, "tpot_limit": 100,
+        "serving_modes": 1, "quantize-linear-action": "MXFP4", "quantize-non-expert-linear-action": "FP8",
+        "mxfp4-group-size": "32", "quantize-attention-action": "DISABLED", "topk": 1
+      },
+      "result": { "agg": {}, "disagg": {} }
+    }
+  }}
+};
+const DEMO = { input: ERR_INPUT, empty: ERR_EMPTY };
+const KIND_META = {
+  input: { label:"入参错误", type:"执行失败", tone:"red", css:"", codeWord:"code 1" },
+  empty: { label:"寻优无结果", type:"结果为空", tone:"orange", css:"warn", codeWord:"code 3" }
+};
+
+/* ==================== 2. 采集信息 ==================== */
+const COLLECT = [
+  ["单台机器内卡间", ["节点内卡间带宽","节点内卡间时延"]],
+  ["机器间传输", ["跨节点带宽","跨节点时延"]],
+  ["CPU", ["CPU 容量","CPU 传输带宽","CPU 传输时延"]],
+  ["NPU", ["NPU 容量","NPU 带宽","NPU 时延","NPU 利用率"]]
+];
+
+/* ==================== 3. 图标 ==================== */
+const ICON = {
+  logo:'<path d="M12 2l8 5v10l-8 5-8-5V7z"/><path d="M12 7l4 2.5v5L12 17l-4-2.5v-5z"/>',
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+  pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  chip:'<rect x="5" y="5" width="14" height="14" rx="2"/><circle cx="12" cy="12" r="3"/>',
+  doc:'<path d="M4 19V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  warn:'<path d="M12 3L2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/>',
+  x:'<path d="M18 6L6 18M6 6l12 12"/>',
+  ban:'<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  server:'<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  database:'<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  split:'<path d="M4 6h6l4 6h6"/><path d="M4 18h6l4-6"/><path d="M18 9l3 3-3 3"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  inbox:'<path d="M3 12h5l2 3h4l2-3h5"/><path d="M5 5h14l2 7v7H3v-7z"/>',
+  print:'<path d="M6 9V3h12v6"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>',
+  activity:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/>'
+};
+const icon = (name,size) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${size?` width="${size}" height="${size}"`:""}>${ICON[name]||ICON.info}</svg>`;
+const SEC_ICON = {
+  "01":'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M9 9h6M9 13h6M9 17h4"/>',
+  "02":'<rect x="3" y="3" width="18" height="6" rx="2"/><rect x="3" y="15" width="18" height="6" rx="2"/><path d="M7 6h.01M7 18h.01M12 9v6M10 12h4"/>',
+  "03":'<path d="M8 3h8v5a4 4 0 0 1-8 0V3ZM8 5H4v2a4 4 0 0 0 4 4M16 5h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M9 17h6v4"/>',
+  "04":'<path d="M4 3v17h17M8 16v-5M13 16V7M18 16v-3"/>'
+};
+
+/* ==================== 4. 工具 ==================== */
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const timeText = s => s ? String(s).replace("T"," ").replace(/\+08:00/,"") : "—";
+function durationText(a,b){
+  const d = new Date(b) - new Date(a);
+  if (!isFinite(d) || d < 0) return "—";
+  const m = Math.floor(d/60000), s = Math.round((d%60000)/1000);
+  return m>0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
+const showVal = v => (v === null || v === undefined) ? "未配置" : String(v);
+
+/* ==================== 5. 解析报错响应 ==================== */
+function readError(resp){
+  const outer = resp || {}, node = (outer.common||{}).infer_strategy_npu || {};
+  const d = node.data || {};
+  const code = Number(node.code);
+  const kind = code === 3 || node.status === "empty" ? "empty" : "input";
+  const msg = node.message || outer.message || "未知错误";
+  const white = (msg.match(/支持：(.+)$/)||[])[1];
+  const whitelist = white ? white.split(",").map(s=>s.trim()).filter(Boolean) : [];
+  const badModel = (msg.match(/--model='([^']+)'/)||[])[1] || "";
+  return {
+    kind, code, status: node.status || "failed", message: msg,
+    outer: { code: outer.code, status: outer.status, message: outer.message },
+    request: d.request || {}, times: { created:d.created_at, started:d.started_at, finished:d.finished_at },
+    result: d.result || {}, whitelist, badModel,
+    hasCandidates: !!((d.result||{}).agg||{}).candidates?.length || !!((d.result||{}).disagg||{}).candidates?.length
+  };
+}
+
+/* ==================== 6. 公共片段 ==================== */
+const SECTIONS = ["任务信息","信息采集","推理寻优","模拟仿真"];
+function sectionNavHtml(){
+  return `<nav class="section-nav" aria-label="页面章节导航">${SECTIONS.map((name,i)=>
+    `<a href="#section-0${i+1}"><span>0${i+1}</span>${name}</a>`).join("")}</nav>`;
+}
+function secConn(no,name,extra,state){
+  return `<div class="sec-conn ${state||""}" id="section-${no}">
+    <span class="sec-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${SEC_ICON[no]}</svg></span>
+    <h2 class="sec-heading">${esc(name)}</h2><span class="sec-rule" aria-hidden="true"></span>
+    ${extra?`<span class="sec-extra ${state==="failed"?"bad":state==="warn"?"warnx":state==="skipped"?"mute":""}">${extra}</span>`:""}
+    <span class="sec-index" aria-hidden="true">${no} / 04</span></div>`;
+}
+function cardHead(title,sub,right,tone){
+  return `<div class="card-head"><span class="card-title ${tone||""}"><span class="ico">${icon(tone==="red"?"x":tone==="orange"?"warn":tone==="teal"?"activity":"chip")}</span>${esc(title)}</span>
+    ${sub?`<span class="card-sub">${esc(sub)}</span>`:""}${right?`<span class="card-right">${right}</span>`:""}</div>`;
+}
+function groupHead(title,tone){
+  return `<div class="group-head ${tone||""}"><span class="dot"></span><span class="t">${esc(title)}</span><span class="rule"></span></div>`;
+}
+
+/* ==================== 7. 首部 / 横幅 / 阶段状态 ==================== */
+function heroHtml(e){
+  const m = KIND_META[e.kind];
+  return `<section class="hero ${e.kind==="empty"?"empty-mode":""}">
+    <div class="hero-top"><h1>推理策略寻优与仿真结果</h1>
+      <span class="hero-tag ${e.kind==="empty"?"empty":""}"><span class="dot"></span>${esc(m.label)}</span></div>
+    <p>本次任务在 <b>03 推理寻优</b> 阶段${e.kind==="input"?"执行失败":"未产出候选策略"}（内层 ${esc(m.codeWord)} / ${esc(e.status)}）。
+      按任务编排规则，<b>04 模拟仿真不再触发</b>；01 任务信息与 02 信息采集记录保留，便于定位与重试。</p></section>`;
+}
+function alertHtml(e){
+  const m = KIND_META[e.kind];
+  const title = e.kind === "input" ? "推理寻优失败 · 入参校验未通过" : "推理寻优完成 · 未找到满足 SLO 的部署策略";
+  const desc = e.kind === "input"
+    ? `内层 code=${esc(e.code)}，任务在 ${esc(timeText(e.times.finished))} 立即终止；下游模拟仿真未执行。`
+    : `内层 code=${esc(e.code)}，策略空间搜索完成但候选数为 0；下游模拟仿真不执行。`;
+  return `<div class="alert-strip ${m.css}"><span class="alert-ico">${icon(e.kind==="input"?"x":"warn")}</span>
+    <div class="alert-body"><b>${esc(title)}</b><p>${desc}</p></div>
+    <span class="alert-code">${esc(m.codeWord)} · ${esc(e.status)}</span></div>`;
+}
+function pipelineHtml(e){
+  const item = (no,name,state,text) => `<div class="pl-item ${state}"><span class="pl-ico">${icon(state==="done"?"check":state==="failed"||state==="warn"?"x":"ban")}</span>
+    <div class="pl-txt"><b>${no} ${esc(name)}</b><small>${esc(text)}</small></div></div>`;
+  return `<div class="pipeline">
+    ${item("01","任务信息","done","已记录")}<span class="pl-line"></span>
+    ${item("02","信息采集","done","已采集 · 未被消费")}<span class="pl-line"></span>
+    ${item("03","推理寻优",e.kind==="input"?"failed":"warn",e.kind==="input"?"执行失败":"无结果")}<span class="pl-line broken"></span>
+    ${item("04","模拟仿真","skipped","未执行")}</div>`;
+}
+function modeBadgeHtml(){
+  return `<span class="mode-badge"><span class="mb-ico">${icon("ban")}</span>
+    <span>部署形态 · 未识别</span><span class="mb-hint">无候选结果</span></span>`;
+}
+
+/* ==================== 8. 01 任务信息（报错态） ==================== */
+function overviewHtml(e){
+  const r = e.request, m = KIND_META[e.kind];
+  const cell = (label,value,unit,invalid) => `<div class="ov-cell ${invalid?"invalid":""}"><div class="k">${esc(label)}</div>
+    <div class="v">${esc(showVal(value))}${unit?`<small> ${esc(unit)}</small>`:""}</div></div>`;
+  const cost = durationText(e.times.started,e.times.finished);
+  return `<div class="card tone-${m.tone==="red"?"red":"orange"}">
+    ${cardHead("任务概要","请求参数与失败摘要",
+      `<span class="tag ${m.tone==="red"?"red":"orange"}">${esc(m.label)}</span>
+       <span class="tag ghost">外层 code ${esc(e.outer.code)}</span>`,m.tone==="red"?"red":"orange")}
+    <div class="ov-top"><span class="ov-model">${esc(showVal(r.model))}</span>
+      <span class="ov-id">${esc(e.status)}</span>
+      <span class="ov-cost">创建于 <b>${esc(timeText(e.times.created))}</b> · 耗时 <b>${esc(cost)}</b></span></div>
+    <div class="ov-specs">
+      ${cell("模型名称",r.model,"",e.kind==="input"&&!!e.badModel)}
+      ${cell("NPU 机型",r.device,"")}
+      ${cell("卡数",r.num_devices,"卡")}
+      ${cell("节点数",r.num_nodes,"节点")}
+      ${cell("输入序列长度",r.input_length,"tokens")}
+      ${cell("输出序列长度",r.output_length,"tokens")}
+      ${cell("首 Token 时延上限",r.ttft_limit,"s")}
+      ${cell("每 Token 生成时延上限",r.tpot_limit,"ms")}
+    </div>
+    <div class="fail-summary">
+      <div class="mini-stat"><div class="k">失败阶段</div><div class="v bad">03 推理寻优</div></div>
+      <div class="mini-stat"><div class="k">内层返回码</div><div class="v bad">${esc(e.code)} · ${esc(e.status)}</div></div>
+      <div class="mini-stat"><div class="k">结束时间</div><div class="v">${esc(timeText(e.times.finished))}</div></div>
+      <div class="mini-stat"><div class="k">下游处理</div><div class="v">04 模拟仿真未执行</div></div>
+    </div>
+    <div class="note ${m.tone==="red"?"red":"orange"}" style="margin-top:13px;margin-bottom:0">
+      <b>失败摘要：</b>${esc(e.message)}　·　请求参数按接口原值展示${e.kind==="input"?"，非法字段已高亮":""}。</div></div>`;
+}
+
+/* ==================== 9. 02 信息采集（未被下游消费） ==================== */
+function collectHtml(){
+  return `<div class="card tone-gray">
+    ${cardHead("集群信息采集","一次性预采集 · 多任务复用",
+      `<span class="tag ok">已采集</span><span class="tag ghost">本次未被消费</span>`)}
+    <div class="note"><b>阶段状态：</b>信息采集在寻优之前独立完成并已成功落库；因 03 推理寻优未产出结果，本轮采集数据未被后续任务使用，仍可在重试时复用，无需重新采集。</div>
+    <div class="hw-grid">
+      ${COLLECT.map(([g,items],i)=>`<div class="hw-group">
+        <div class="hw-head"><span class="hw-ico">${icon(["server","split","chip","database"][i])}</span>
+          <span class="hw-name">${esc(g)}</span><span class="hw-cnt">${items.length} 项</span></div>
+        <div class="hw-items">${items.map(cn=>`<div class="hw-item"><span class="tick">${icon("check")}</span><span class="cn">${esc(cn)}</span></div>`).join("")}</div>
+      </div>`).join("")}
+    </div></div>`;
+}
+
+/* ==================== 10. 03 推理寻优（两种报错形态） ==================== */
+function timelineHtml(e){
+  const cost = durationText(e.times.started,e.times.finished);
+  const note = e.kind === "input"
+    ? "创建、开始、完成时间一致：参数校验阶段即失败，未进入策略空间搜索。"
+    : "策略空间搜索与 SLO 剪枝已执行完毕，全部候选被淘汰，未产出可返回策略。";
+  return `<div class="timeline">
+    <div class="tl-item"><div class="k">创建时间</div><div class="tl-time">${esc(timeText(e.times.created))}</div></div>
+    <span class="tl-arrow">→</span>
+    <div class="tl-item"><div class="k">开始时间</div><div class="tl-time">${esc(timeText(e.times.started))}</div></div>
+    <span class="tl-arrow">→</span>
+    <div class="tl-item"><div class="k">结束时间 · 耗时 ${esc(cost)}</div><div class="tl-time">${esc(timeText(e.times.finished))}</div></div>
+    <div class="tl-note">${esc(note)}</div></div>`;
+}
+function errorInputHtml(e){
+  const r = e.request;
+  const chips = e.whitelist.map(x=>`<span class="chip ${x===r.model?"good":""}">${esc(x)}</span>`).join("");
+  return `<div class="card tone-red">
+    ${cardHead("推理寻优执行失败","内层 code=1 · 入参校验未通过",
+      `<span class="tag red">failed</span><span class="tag ghost">下游未执行</span>`,"red")}
+    <div class="error-hero">
+      <span class="err-icon">${icon("x")}</span>
+      <div class="err-main"><div class="err-title">入参校验失败 · 任务在启动阶段终止</div>
+        <div class="err-desc">请求中的模型标识不在支持列表内，寻优引擎在参数校验环节直接返回，未生成任何候选部署策略。</div></div>
+      <span class="err-code">${esc(e.code)}<small>INNER CODE</small></span>
+    </div>
+    <div class="msg-box"><div class="msg-head"><span class="dot"></span>接口原始错误消息 · infer_strategy_npu.message</div>
+      <pre class="msg-pre">${esc(e.message)}</pre></div>
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-title"><span class="ico">${icon("search")}</span>问题定位</div>
+        <div class="kv-line"><span class="k">错误类型</span><span class="v">入参错误（模型白名单校验）</span></div>
+        <div class="kv-line"><span class="k">非法参数</span><span class="v bad">--model='${esc(e.badModel||r.model)}'</span></div>
+        <div class="kv-line"><span class="k">本次取值</span><span class="v bad">${esc(showVal(r.model))}</span></div>
+        <div class="kv-line"><span class="k">外层状态</span><span class="v">code ${esc(e.outer.code)} / ${esc(e.outer.status)}</span></div>
+        <div class="kv-line"><span class="k">候选结果</span><span class="v">agg {} · disagg {} · 0 条</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title blue"><span class="ico">${icon("database")}</span>支持的模型白名单（${e.whitelist.length} 项）</div>
+        <div class="chip-wrap">${chips||'<span class="chip">接口未返回白名单</span>'}</div>
+        <div class="panel-title" style="margin-top:14px"><span class="ico">${icon("info")}</span>参数快照</div>
+        <div class="kv-line"><span class="k">卡数 / 节点</span><span class="v">${esc(showVal(r.num_devices))} 卡 / ${esc(showVal(r.num_nodes))} 节点</span></div>
+        <div class="kv-line"><span class="k">服务化形态码</span><span class="v">${esc(showVal(r.serving_modes))}</span></div>
+        <div class="kv-line"><span class="k">量化配置</span><span class="v">${esc(showVal(r["quantize-linear-action"]))}</span></div>
+        <div class="kv-line"><span class="k">topk</span><span class="v">${esc(showVal(r.topk))}</span></div>
+      </div>
+    </div>
+    ${groupHead("处理建议","red")}
+    <ul class="suggest">
+      <li><span class="n">1</span><span><b>修正模型标识</b>：将 <b>--model</b> 改为白名单内的模型名，例如 <b>DeepSeek-V4.1-Flash-MXFP4</b>。</span></li>
+      <li><span class="n">2</span><span><b>重新发起任务</b>：参数修正后由 01 任务信息重新入队，本轮 02 采集数据可直接复用。</span></li>
+      <li><span class="n">3</span><span><b>下游自动恢复</b>：寻优成功产出候选后，04 模拟仿真会按编排规则自动触发，无需单独补跑。</span></li>
+    </ul>
+    ${groupHead("任务时间线","red")}
+    ${timelineHtml(e)}
+    ${groupHead("流程中断位置","red")}
+    <div class="flow-break">
+      <div class="flow-node stop"><b>参数校验</b>✕ 白名单未通过</div><span class="flow-arrow">→</span>
+      <div class="flow-node off"><b>策略空间枚举</b>未执行</div><span class="flow-arrow">→</span>
+      <div class="flow-node off"><b>SLO 剪枝 / 排序</b>未执行</div><span class="flow-arrow">→</span>
+      <div class="flow-node off"><b>候选策略输出</b>无结果</div>
+    </div></div>`;
+}
+function errorEmptyHtml(e){
+  const r = e.request;
+  return `<div class="card tone-orange">
+    ${cardHead("推理寻优无结果","内层 code=3 · 未找到满足 SLO 的部署策略",
+      `<span class="tag orange">empty</span><span class="tag ghost">外层寻优任务完成（无结果）</span>`,"orange")}
+    <div class="error-hero warn">
+      <span class="err-icon">${icon("inbox")}</span>
+      <div class="err-main"><div class="err-title">策略空间已完整搜索，但没有可行解</div>
+        <div class="err-desc">在给定集群规模与 SLO 约束下，所有并行 / 批大小组合均被剪枝，agg 与 disagg 两侧候选集都为空。</div></div>
+      <span class="err-code">${esc(e.code)}<small>INNER CODE</small></span>
+    </div>
+    <div class="msg-box"><div class="msg-head"><span class="dot" style="background:var(--orange)"></span>接口原始消息 · infer_strategy_npu.message</div>
+      <pre class="msg-pre" style="color:#8a5a16">${esc(e.message)}</pre></div>
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-title orange"><span class="ico">${icon("clock")}</span>本次约束条件</div>
+        <div class="kv-line"><span class="k">首 Token 上限</span><span class="v">TTFT ≤ ${esc(showVal(r.ttft_limit))} s</span></div>
+        <div class="kv-line"><span class="k">每 Token 上限</span><span class="v">TPOT ≤ ${esc(showVal(r.tpot_limit))} ms</span></div>
+        <div class="kv-line"><span class="k">输入 / 输出</span><span class="v">${esc(showVal(r.input_length))} / ${esc(showVal(r.output_length))} tokens</span></div>
+        <div class="kv-line"><span class="k">集群规模</span><span class="v">${esc(showVal(r.num_devices))} 卡 · ${esc(showVal(r.num_nodes))} 节点</span></div>
+        <div class="kv-line"><span class="k">服务化形态码</span><span class="v">${esc(showVal(r.serving_modes))}</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title orange"><span class="ico">${icon("search")}</span>可能原因</div>
+        <ul class="suggest">
+          <li><span class="n">1</span><span><b>约束过紧</b>：TTFT / TPOT 上限低于当前模型在该卡数下的可达时延。</span></li>
+          <li><span class="n">2</span><span><b>资源不足</b>：8 卡 1 节点下，可行的 TP / PP / DP / EP 组合有限。</span></li>
+          <li><span class="n">3</span><span><b>剪枝耗尽</b>：显存、整除约束与 SLO early-stop 淘汰了全部候选。</span></li>
+        </ul>
+      </div>
+    </div>
+    ${groupHead("返回结果（两侧候选集均为空）","orange")}
+    <div class="empty-results">
+      <div class="empty-box">${icon("split")}<b>PD 混部 · agg</b><p>candidates 为空，无聚合部署策略</p></div>
+      <div class="empty-box">${icon("split")}<b>PD 分离 · disagg</b><p>candidates 为空，无 P/D 实例配比</p></div>
+    </div>
+    ${groupHead("调整建议","orange")}
+    <ul class="suggest">
+      <li><span class="n">1</span><span><b>放宽 SLO</b>：适度提高 TTFT / TPOT 上限，或降低输入序列长度。</span></li>
+      <li><span class="n">2</span><span><b>增加资源</b>：提升卡数 / 节点数，扩大可行并行组合与批大小搜索空间。</span></li>
+      <li><span class="n">3</span><span><b>调整形态与搜索区间</b>：切换 serving_modes、放宽 batch 搜索范围后重新发起。</span></li>
+    </ul>
+    ${groupHead("任务时间线","orange")}
+    ${timelineHtml(e)}
+    <div class="flow-break">
+      <div class="flow-node"><b>参数校验</b>✓ 通过</div><span class="flow-arrow">→</span>
+      <div class="flow-node"><b>策略空间枚举</b>✓ 已完成</div><span class="flow-arrow">→</span>
+      <div class="flow-node stop" style="border-color:var(--orange-line);background:var(--orange-bg);color:var(--orange)"><b>SLO 剪枝</b>全部淘汰</div><span class="flow-arrow">→</span>
+      <div class="flow-node off"><b>候选策略输出</b>0 条</div>
+    </div></div>`;
+}
+
+/* ==================== 11. 04 模拟仿真（上游失败 → 未执行） ==================== */
+function skippedSimulateHtml(e){
+  const steps = [["接收候选策略","读取 03 输出的并行配置"],["构造请求负载","按序列长度与并发建模"],
+    ["分阶段代价建模","Prefill / Decode 分别估算"],["输出仿真指标","吞吐 / TTFT / TPOT / ITL"]];
+  return `<div class="card tone-gray">
+    ${cardHead("模拟仿真 · 未执行","上游未产出结果，本阶段不触发",
+      `<span class="tag ghost">未执行</span><span class="tag ghost">data 为空</span>`)}
+    <div class="skipped-card">
+      <div class="skipped-ico">${icon("ban")}</div>
+      <h3>本阶段未执行</h3>
+      <p>03 推理寻优${e.kind==="input"?"执行失败":"未找到满足 SLO 的部署策略"}，没有可供仿真的候选部署配置。
+        按任务编排规则，下游模拟仿真不再触发；本页不展示任何仿真指标，也不产生空的占位数值。</p>
+      <div class="skipped-chain">
+        ${steps.map((s,i)=>`${i?'<span class="sk-chain-arrow">→</span>':""}<div class="sk-chain-node"><b>${esc(s[0])}</b>${esc(s[1])}</div>`).join("")}
+      </div>
+      <div class="skipped-foot">
+        <span class="pill">infer_simulate：未调用</span>
+        <span class="pill">吞吐 / TTFT / TPOT / ITL：无数据</span>
+        <span class="btn-disabled">${icon("clock")} 待上游修复后重新发起</span>
+      </div>
+    </div></div>`;
+}
+
+/* ==================== 12. 页脚 ==================== */
+function footerHtml(current){
+  const btn = (k,label) => `<button type="button" class="demo-btn ${current===k?"active":""}" data-demo="${k}">${esc(label)}</button>`;
+  return `<div class="footer">
+    <div class="demo"><span class="lb">报错示例（推理寻优失败 · 下游不执行）</span>
+      ${btn("input","code 1 入参错误")}${btn("empty","code 3 结果为空")}</div>
+    <span class="spacer"></span>
+    <a class="btn" href="推理寻优与仿真结果界面-报错版-仿真失败.html">查看另一版本 · 仿真失败 ${icon("split")}</a>
+    <button class="btn primary" type="button" id="printBtn">${icon("print")} 打印报告</button>
+  </div>`;
+}
+
+/* ==================== 13. 渲染 ==================== */
+function render(resp,current){
+  const e = readError(resp), m = KIND_META[e.kind];
+  document.getElementById("modeBadge").innerHTML = modeBadgeHtml();
+  document.getElementById("hero").innerHTML = heroHtml(e);
+  document.getElementById("alert").innerHTML = alertHtml(e);
+  document.getElementById("detailArea").innerHTML =
+    sectionNavHtml() + pipelineHtml(e) +
+    secConn("01","任务信息",`<b>${esc(m.label)}</b>`,"warn") + overviewHtml(e) +
+    secConn("02","信息采集","<b>已采集 · 未被消费</b>","skipped") + collectHtml() +
+    secConn("03","推理寻优",`<b>${esc(m.label)}</b>`,e.kind==="empty"?"warn":"failed") +
+      (e.kind === "input" ? errorInputHtml(e) : errorEmptyHtml(e)) +
+    secConn("04","模拟仿真","<b>未执行</b>","skipped") + skippedSimulateHtml(e);
+  document.getElementById("footer").innerHTML = footerHtml(current);
+  document.querySelectorAll("[data-demo]").forEach(b=>{
+    b.addEventListener("click",()=>render(DEMO[b.dataset.demo],b.dataset.demo));
+  });
+  document.getElementById("printBtn").addEventListener("click",()=>window.print());
+}
+
+document.getElementById("logoIcon").innerHTML = icon("logo");
+document.getElementById("sideMenu").innerHTML = [
+  ["grid","集群总览",true],["target","调优工作台",false],["pulse","监控诊断中心",false],
+  ["chip","模型调优",false],["doc","文档中心",false]
+].map(([ico,name,arrow])=>`<div class="menu-item${name==="模型调优"?" active":""}">${icon(ico)}${esc(name)}${arrow?'<span class="arrow">▸</span>':""}</div>`).join("");
+
+const initial = new URLSearchParams(location.search).get("demo") === "empty" ? "empty" : "input";
+window.renderInferReport = o => render(o,"custom");
+render(window.INFER_OPT_RESULT || DEMO[initial], initial);
+</script>
+</body>
+</html>

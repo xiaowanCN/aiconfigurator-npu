@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智算调优平台 · 推理策略寻优与仿真结果 V2 旗舰版</title>
+<style>
+  :root{
+    --sidebar:#0a1f3c; --sidebar-2:#0c2547;
+    --blue:#1668dc; --blue-d:#0e56c0; --violet:#7c3aed; --teal:#0d9488;
+    --amber:#d97706; --rose:#e11d48; --green:#0f9d58;
+    --blue-bg:#e9f1fe; --violet-bg:#f2ecfe; --teal-bg:#e6f6f3;
+    --green-bg:#e6f6ec; --amber-bg:#fdf3e3; --rose-bg:#fdecea;
+    --bg:#f3f6fb; --card:#ffffff; --line:#e6eaf1; --line-2:#eef2f8;
+    --ink:#17243c; --muted:#475569; --faint:#7b8aa1;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --shadow:0 1px 2px rgba(23,36,60,.04),0 10px 28px rgba(23,36,60,.055);
+    --shadow-hover:0 16px 36px rgba(23,36,60,.14);
+    --radius:12px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue","Segoe UI",Arial,sans-serif;
+    background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6;
+  }
+  .num,.stat .v,.dim-card .v,.hero-kpi .v,.ov-cell .v,.cs-val,.kv td.num,.raw-pre{
+    font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.2px;
+  }
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:#c9d2de;border-radius:5px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  /* ============ 平台外壳 ============ */
+  .layout{display:flex;height:100vh;overflow:hidden;}
+  .sidebar{width:214px;flex-shrink:0;display:flex;flex-direction:column;color:#c6d3e2;
+    background:linear-gradient(180deg,#0a1f3c 0%,#0c2547 100%);}
+  .logo{display:flex;align-items:center;gap:10px;padding:18px 16px 16px;border-bottom:1px solid rgba(255,255,255,.07);}
+  .logo-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    color:#fff;background:linear-gradient(135deg,#3d8bfd,#1250b5);box-shadow:0 2px 8px rgba(22,104,220,.45);}
+  .logo-icon svg{width:19px;height:19px;}
+  .logo-name{font-size:15px;font-weight:600;color:#fff;line-height:1.25;}
+  .logo-sub{font-size:10px;color:#6f8cab;letter-spacing:.4px;}
+  .menu{flex:1;padding:12px 10px;}
+  .menu-item{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:8px;cursor:pointer;
+    font-size:13.5px;margin-bottom:4px;color:#a9bcd4;position:relative;transition:all .18s;}
+  .menu-item svg{width:16px;height:16px;flex-shrink:0;}
+  .menu-item:hover{background:#14304c;color:#e6eef7;}
+  .menu-item.active{background:linear-gradient(90deg,rgba(61,139,253,.22),rgba(61,139,253,.08));color:#fff;font-weight:500;}
+  .menu-item.active::before{content:"";position:absolute;left:-10px;top:9px;bottom:9px;width:3px;
+    border-radius:0 3px 3px 0;background:#3d8bfd;}
+  .menu-item .arrow{margin-left:auto;font-size:10px;color:#5f7ea3;}
+  .space-bar{padding:13px 12px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:8px;}
+  .space-dot{width:8px;height:8px;border-radius:50%;background:#2fbf71;flex-shrink:0;box-shadow:0 0 6px rgba(47,191,113,.8);}
+  .space-name{font-size:12px;color:#c6d3e2;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .space-btn{background:#24466e;color:#dce7f2;border:none;border-radius:5px;font-size:11px;padding:3px 10px;cursor:pointer;}
+
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .topbar{height:50px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;
+    padding:0 18px;gap:12px;flex-shrink:0;}
+  .btn-back{display:flex;align-items:center;gap:6px;background:var(--blue-bg);color:var(--blue);border:none;
+    border-radius:17px;padding:6px 15px;font-size:13px;cursor:pointer;transition:background .18s;}
+  .btn-back:hover{background:#d9e8fd;}
+  .crumb{font-size:13px;color:var(--faint);}
+  .crumb b{color:var(--ink);font-weight:600;}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);}
+  .avatar{width:27px;height:27px;border-radius:50%;background:linear-gradient(135deg,#4d8ef7,#1668dc);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:11px;}
+
+  /* 部署形态只读徽章：替代原来的「PD混部 / PD分离」切换按钮 */
+  .mode-badge{display:inline-flex;align-items:center;gap:8px;border-radius:20px;padding:4px 12px 4px 6px;
+    font-size:12px;font-weight:600;border:1px solid var(--blue-bg);background:var(--blue-bg);color:var(--blue-d);
+    box-shadow:0 1px 3px rgba(22,104,220,.12);}
+  .mode-badge.disagg{border-color:#e6d9fb;background:var(--violet-bg);color:#6d3cc4;}
+  .mode-badge .mb-ico{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,#3d8bfd,#1250b5);color:#fff;}
+  .mode-badge.disagg .mb-ico{background:linear-gradient(135deg,#a273f2,#6d3cc4);}
+  .mode-badge .mb-ico svg{width:12px;height:12px;}
+  .mode-badge .mb-hint{font-size:10.5px;font-weight:400;opacity:.72;border-left:1px solid currentColor;padding-left:8px;}
+
+  .content{flex:1;overflow-y:auto;padding:20px 26px 40px;}
+  .content-inner{max-width:1240px;margin:0 auto;}
+
+  /* ============ 顶部 Hero ============ */
+  .hero{position:relative;overflow:hidden;border-radius:14px;padding:20px 24px 18px;color:#fff;
+    background:linear-gradient(118deg,#0e2a56 0%,#16408a 42%,#4b2ea8 100%);
+    box-shadow:0 18px 40px rgba(14,42,86,.22);}
+  .hero::before{content:"";position:absolute;right:-60px;top:-120px;width:420px;height:420px;border-radius:50%;
+    background:radial-gradient(circle,rgba(120,170,255,.30),rgba(120,170,255,0) 70%);pointer-events:none;}
+  .hero::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.16;
+    background-image:linear-gradient(rgba(255,255,255,.5) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.5) 1px,transparent 1px);
+    background-size:26px 26px;mask-image:linear-gradient(90deg,transparent,#000);}
+  .hero>*{position:relative;z-index:1;}
+  .hero-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .hero h1{font-size:21px;font-weight:700;letter-spacing:.3px;}
+  .hero-tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;border-radius:20px;padding:3px 11px;
+    background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.28);backdrop-filter:blur(4px);}
+  .hero-tag .dot{width:6px;height:6px;border-radius:50%;background:#5fe3a1;box-shadow:0 0 0 3px rgba(95,227,161,.22);}
+  .hero-id{font-family:var(--mono);font-size:11px;color:#c5d8f7;background:rgba(255,255,255,.12);
+    border-radius:5px;padding:3px 9px;}
+  .hero-cost{margin-left:auto;font-size:11.5px;color:#c5d8f7;}
+  .hero-cost b{color:#fff;font-weight:600;}
+  .hero p{font-size:12.5px;line-height:1.85;color:#dbe7fb;margin-top:12px;max-width:960px;}
+  .hero p b{color:#fff;font-weight:600;}
+  .hero-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px;
+    padding-top:14px;border-top:1px solid rgba(255,255,255,.18);}
+  .hero-kpi{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.16);border-radius:9px;padding:9px 12px;
+    transition:background .2s,transform .2s;}
+  .hero-kpi:hover{background:rgba(255,255,255,.18);transform:translateY(-2px);}
+  .hero-kpi .k{font-size:10.5px;color:#c5d8f7;}
+  .hero-kpi .v{font-size:19px;font-weight:700;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .hero-kpi .v small{font-size:10.5px;font-weight:400;color:#c5d8f7;font-family:inherit;}
+
+  /* ============ 流程连接条 ============ */
+  .sec-conn{display:flex;align-items:center;gap:12px;margin:24px 0 2px;}
+  .sec-conn:first-of-type{margin-top:20px;}
+  .sec-line{flex:1;height:1px;background:linear-gradient(90deg,transparent,#dbe3ef);}
+  .sec-line:last-child{background:linear-gradient(90deg,#dbe3ef,transparent);}
+  .sec-chip{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+    border-radius:18px;padding:4px 15px 4px 5px;box-shadow:var(--shadow);white-space:nowrap;}
+  .sec-chip .no{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:700;color:#fff;font-family:var(--mono);
+    background:linear-gradient(135deg,var(--blue),var(--violet));box-shadow:0 2px 6px rgba(22,104,220,.3);}
+  .sec-chip .nm{font-size:13.5px;font-weight:600;letter-spacing:.2px;}
+  .sec-chip .extra{font-size:11px;color:var(--faint);border-left:1px solid var(--line);padding-left:9px;}
+  .sec-chip .extra b{color:var(--green);font-weight:600;}
+  .sec-down{text-align:center;color:#b7c2d2;font-size:11px;margin:3px 0 7px;letter-spacing:2px;line-height:1;}
+  .detail>.sec-conn:first-child+.sec-down{display:none;}
+
+  /* ============ 通用卡片 ============ */
+  .card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px 20px 20px;box-shadow:var(--shadow);margin-bottom:12px;
+    transition:transform .2s,box-shadow .2s,border-color .2s;}
+  .card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;border-radius:var(--radius) var(--radius) 0 0;
+    background:linear-gradient(90deg,var(--blue),var(--violet),var(--teal));}
+  .card.tone-violet::before{background:linear-gradient(90deg,var(--violet),#b585f5,var(--blue));}
+  .card.tone-teal::before{background:linear-gradient(90deg,var(--teal),#5ed2c0,var(--blue));}
+  .card.tone-amber::before{background:linear-gradient(90deg,var(--amber),#f3b55e,var(--rose));}
+  .card:hover{transform:translateY(-2px);box-shadow:var(--shadow-hover);border-color:#cfdcf0;}
+  .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
+  .card-title{font-size:14.5px;font-weight:700;letter-spacing:.2px;display:flex;align-items:center;gap:8px;}
+  .card-title .ico{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--blue-bg);color:var(--blue);}
+  .card-title .ico svg{width:15px;height:15px;}
+  .card-title.violet .ico{background:var(--violet-bg);color:var(--violet);}
+  .card-title.teal .ico{background:var(--teal-bg);color:var(--teal);}
+  .card-title.amber .ico{background:var(--amber-bg);color:var(--amber);}
+  .card-sub{font-size:11.5px;color:var(--faint);}
+  .card-right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .note{font-size:11.5px;color:var(--muted);line-height:1.75;margin:2px 0 13px;
+    background:linear-gradient(90deg,#f6f9ff,rgba(246,249,255,0));border-left:3px solid #c9dcfb;
+    padding:7px 12px;border-radius:0 6px 6px 0;}
+  .note b{color:var(--blue-d);font-weight:600;}
+
+  .tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;border-radius:20px;padding:2px 10px;font-weight:600;flex-shrink:0;}
+  .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .tag.ok{background:var(--green-bg);color:var(--green);}
+  .tag.info{background:var(--blue-bg);color:var(--blue-d);}
+  .tag.violet{background:var(--violet-bg);color:#6d3cc4;}
+  .tag.amber{background:var(--amber-bg);color:var(--amber);}
+  .tag.rose{background:var(--rose-bg);color:var(--rose);}
+  .tag.ghost{background:#f1f4f9;color:var(--muted);}
+  .tag.ghost::before{display:none;}
+
+  /* ============ 任务信息 ============ */
+  .ov-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .ov-model{font-size:17px;font-weight:700;letter-spacing:.2px;}
+  .ov-specs{display:flex;flex-wrap:wrap;margin-top:14px;padding-top:13px;border-top:1px solid var(--line);}
+  .ov-cell{flex:1;min-width:130px;padding:0 16px;border-right:1px solid var(--line);}
+  .ov-cell:first-child{padding-left:0;}
+  .ov-cell:last-child{border-right:none;}
+  .ov-cell .k{font-size:11px;color:var(--faint);margin-bottom:3px;}
+  .ov-cell .v{font-size:14.5px;font-weight:700;}
+  .ov-cell .v small{font-size:10.5px;font-weight:400;color:var(--faint);font-family:inherit;}
+
+  .group-head{display:flex;align-items:center;gap:9px;margin:18px 0 10px;}
+  .card>.group-head:first-child{margin-top:8px;}
+  .group-head .dot{width:7px;height:7px;border-radius:2px;background:var(--blue);flex-shrink:0;}
+  .group-head .t{font-size:12.5px;font-weight:700;white-space:nowrap;}
+  .group-head .rule{flex:1;height:1px;background:var(--line-2);}
+  .group-head.violet .dot{background:var(--violet);}
+  .group-head.teal .dot{background:var(--teal);}
+  .group-head.amber .dot{background:var(--amber);}
+
+  /* ============ 字段方格 ============ */
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px;}
+  .stat-grid.tight{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));}
+  .stat{position:relative;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:11px 13px 10px;
+    transition:transform .2s,box-shadow .2s,border-color .2s;cursor:help;}
+  .stat::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:2px;border-radius:0 2px 2px 0;
+    background:var(--blue);opacity:.55;}
+  .stat:hover{transform:translateY(-2px);box-shadow:0 8px 18px rgba(23,36,60,.10);border-color:#c9d9f2;z-index:2;}
+  .stat.violet::before{background:var(--violet);}
+  .stat.teal::before{background:var(--teal);}
+  .stat.amber::before{background:var(--amber);}
+  .stat .cn{font-size:11.5px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:5px;}
+  .stat .cn .u{font-size:10px;color:var(--faint);font-weight:400;}
+  .stat .v{font-size:21px;font-weight:700;line-height:1.35;word-break:break-all;color:var(--ink);}
+  .stat .v span.txt{font-size:13px;letter-spacing:0;}
+  .stat .d{font-size:10px;color:var(--faint);line-height:1.5;margin-top:5px;
+    border-top:1px dashed var(--line);padding-top:5px;}
+  .bool{font-family:var(--mono);font-size:12px;font-weight:700;border-radius:5px;padding:2px 9px;}
+  .bool.yes{color:var(--green);background:var(--green-bg);border:1px solid #bfe6d2;}
+  .bool.no{color:var(--rose);background:var(--rose-bg);border:1px solid #f6cfcb;}
+  .null-pill{font-family:var(--mono);font-size:10.5px;color:var(--faint);background:#f1f4f8;
+    border:1px solid #e6ebf2;border-radius:5px;padding:2px 8px;}
+
+  /* ============ 采集信息 ============ */
+  .hw-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;}
+  .hw-group{background:linear-gradient(180deg,#f9fbff,#fff);border:1px solid var(--line);border-radius:10px;
+    padding:12px 13px;transition:transform .2s,box-shadow .2s;}
+  .hw-group:hover{transform:translateY(-2px);box-shadow:0 8px 18px rgba(23,36,60,.09);}
+  .hw-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;}
+  .hw-ico{width:27px;height:27px;border-radius:7px;background:var(--teal-bg);color:var(--teal);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .hw-ico svg{width:14px;height:14px;}
+  .hw-name{font-size:12.5px;font-weight:700;}
+  .hw-cnt{font-size:10px;color:var(--faint);margin-left:auto;font-family:var(--mono);}
+  .hw-items{display:flex;flex-direction:column;gap:5px;}
+  .hw-item{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line-2);
+    border-radius:6px;padding:5px 8px;min-width:0;}
+  .hw-item .tick{color:var(--green);flex-shrink:0;}
+  .hw-item .tick svg{width:12px;height:12px;display:block;}
+  .hw-item .cn{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+  /* ============ 部署形态横幅 ============ */
+  .mode-banner{display:flex;align-items:center;gap:16px;margin-top:16px;padding:14px 18px;border-radius:10px;
+    border:1px solid #cfe0ff;background:linear-gradient(100deg,var(--blue-bg) 0%,#f7faff 72%,#fff 100%);}
+  .mode-banner.disagg{border-color:#e0d0f8;background:linear-gradient(100deg,var(--violet-bg) 0%,#fbf8ff 72%,#fff 100%);}
+  .mb-left{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .mb-field{font-size:12.5px;font-weight:700;}
+  .mb-desc{font-size:11px;color:var(--muted);flex:1;line-height:1.6;}
+  .mb-value{font-size:23px;font-weight:800;letter-spacing:.5px;color:var(--blue);white-space:nowrap;}
+  .mode-banner.disagg .mb-value{color:var(--violet);}
+
+  /* ============ 并行策略主视觉 ============ */
+  .strat-hero{border-radius:12px;padding:16px 18px 18px;color:#fff;position:relative;overflow:hidden;
+    background:linear-gradient(125deg,#102a57 0%,#1a3f8f 48%,#4a2ba6 100%);
+    box-shadow:0 14px 32px rgba(16,42,87,.20);}
+  .strat-hero.disagg{background:linear-gradient(125deg,#2c1a5e 0%,#5a2fa5 52%,#1250a8 100%);}
+  .strat-hero::before{content:"";position:absolute;right:-50px;top:-90px;width:300px;height:300px;border-radius:50%;
+    background:radial-gradient(circle,rgba(255,255,255,.16),rgba(255,255,255,0) 70%);}
+  .strat-hero>*{position:relative;z-index:1;}
+  .sh-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:13px;}
+  .sh-title{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+  .sh-title svg{width:16px;height:16px;}
+  .sh-tag{font-size:10.5px;border-radius:20px;padding:2px 10px;background:rgba(255,255,255,.16);
+    border:1px solid rgba(255,255,255,.25);}
+  .sh-formula{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:#d7e4ff;}
+  .dim-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;}
+  .dim-card{position:relative;border-radius:11px;padding:14px 12px 13px;text-align:center;overflow:hidden;
+    border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.11);
+    transition:transform .22s,box-shadow .22s,background .22s;cursor:help;}
+  .dim-card::after{content:"";position:absolute;right:-34px;top:-34px;width:96px;height:96px;border-radius:50%;
+    background:rgba(255,255,255,.10);}
+  .dim-card:hover{transform:translateY(-4px);background:rgba(255,255,255,.19);
+    box-shadow:0 12px 24px rgba(0,0,0,.20);}
+  .dim-card .abbr{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:1.2px;opacity:.85;}
+  .dim-card .v{font-size:36px;font-weight:800;line-height:1.15;text-shadow:0 2px 10px rgba(0,0,0,.18);}
+  .dim-card .cn{font-size:11.5px;font-weight:600;}
+  .dim-card .d{font-size:9.5px;line-height:1.5;opacity:.82;margin-top:5px;
+    border-top:1px solid rgba(255,255,255,.2);padding-top:5px;}
+  .sh-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:13px;font-size:10.5px;color:#d7e4ff;}
+  .sh-foot .chip{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.2);border-radius:20px;padding:2px 10px;}
+
+  /* 卡组拓扑 */
+  .topo{margin-top:14px;background:linear-gradient(180deg,#f8faff,#fff);border:1px dashed #cbd9f0;
+    border-radius:10px;padding:13px 15px;}
+  .topo-head{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;color:var(--muted);margin-bottom:10px;}
+  .topo-head .legend{margin-left:auto;display:flex;gap:12px;font-size:10px;font-weight:400;color:var(--faint);}
+  .topo-head .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px;}
+  .topo-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .node-box{background:#fff;border:1px solid #dde7f6;border-radius:8px;padding:7px 9px;transition:box-shadow .2s,transform .2s;}
+  .node-box:hover{box-shadow:0 6px 14px rgba(23,36,60,.10);transform:translateY(-2px);}
+  .node-label{font-family:var(--mono);font-size:9px;color:var(--faint);margin-bottom:5px;}
+  .node-cells{display:flex;gap:3px;flex-wrap:wrap;}
+  .cell{width:13px;height:13px;border-radius:3px;background:linear-gradient(135deg,#4d8ef7,#1668dc);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);}
+  .cell.p{background:linear-gradient(135deg,#5ed2c0,#0d9488);}
+  .cell.d{background:linear-gradient(135deg,#b18af5,#7c3aed);}
+
+  /* PD 分离子栏 */
+  .sub-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .sub{border:1px solid var(--line);border-radius:11px;padding:13px 14px 15px;
+    background:linear-gradient(180deg,#fbfcff,#fff 60%);transition:transform .2s,box-shadow .2s;}
+  .sub:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(23,36,60,.09);}
+  .sub-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+  .badge{font-size:11px;font-weight:700;border-radius:6px;padding:2px 9px;}
+  .badge.p{color:var(--blue-d);background:var(--blue-bg);border:1px solid #cfe0ff;}
+  .badge.d{color:#6d3cc4;background:var(--violet-bg);border:1px solid #e0d0f8;}
+  .sub .dim-grid{grid-template-columns:repeat(4,1fr);gap:7px;}
+  .sub .dim-card{padding:9px 5px 8px;background:linear-gradient(150deg,#1b5fd0,#4b3bd6);
+    border:1px solid rgba(255,255,255,.12);color:#fff;}
+  .sub.d-side .dim-card{background:linear-gradient(150deg,#6d3cc4,#b1529b);}
+  .sub .dim-card .v{font-size:23px;}
+  .sub .dim-card .d{display:none;}
+  .sub .stat-grid{grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:7px;}
+  .sub .stat{padding:9px 9px 8px;}
+  .sub .stat .v{font-size:17px;}
+  .sub .stat .v span.txt{font-size:11px;}
+  .sub .stat .d{display:none;}
+
+  /* ============ 表格 ============ */
+  .table-wrap{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;}
+  table.kv{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}
+  table.kv th,table.kv td{padding:9px 13px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--line-2);}
+  table.kv tr:last-child th,table.kv tr:last-child td{border-bottom:0;}
+  table.kv thead th{background:#f6f8fc;color:var(--muted);font-weight:700;font-size:11px;
+    border-bottom:1px solid var(--line);white-space:nowrap;}
+  table.kv thead th:not(:first-child){text-align:right;}
+  table.kv tbody tr:nth-child(even){background:#fafbfe;}
+  table.kv tbody tr:hover{background:#f1f6ff;}
+  table.kv td.k{color:var(--muted);font-weight:600;background:rgba(246,248,252,.6);}
+  table.kv td.num{text-align:right;font-weight:600;}
+  table.kv td.desc{font-size:10.5px;color:var(--faint);line-height:1.5;}
+
+  /* ============ 图表 ============ */
+  .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .chart-card{border:1px solid var(--line);border-radius:11px;background:#fff;padding:14px 16px 12px;
+    transition:box-shadow .2s,transform .2s;}
+  .chart-card:hover{box-shadow:0 10px 24px rgba(23,36,60,.09);transform:translateY(-2px);}
+  .chart-head{display:flex;align-items:center;gap:8px;margin-bottom:2px;}
+  .chart-title{font-size:12.5px;font-weight:700;}
+  .chart-sub{font-size:10.5px;color:var(--faint);margin-bottom:8px;line-height:1.6;}
+  .chart-card svg{width:100%;height:auto;display:block;}
+  .legend-row{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--muted);margin-top:6px;}
+  .legend-row span{display:flex;align-items:center;gap:5px;}
+  .lg-dot{width:9px;height:9px;border-radius:2px;display:inline-block;}
+
+  /* 吞吐构成条 */
+  .tput-bar{display:flex;height:26px;border-radius:7px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(0,0,0,.04);}
+  .tput-bar .seg1{background:linear-gradient(90deg,#1668dc,#4d8ef7);}
+  .tput-bar .seg2{background:linear-gradient(90deg,#0d9488,#5ed2c0);}
+  .tput-bar-legend{display:flex;justify-content:space-between;gap:10px;margin-top:9px;flex-wrap:wrap;}
+  .tput-item{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);}
+  .tput-item b{font-family:var(--mono);font-size:13px;color:var(--ink);}
+
+  /* ============ 原理双面板 ============ */
+  .pr-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .pr-panel{background:#fff;border:1px solid var(--line);border-radius:11px;padding:15px 17px;
+    transition:transform .2s,box-shadow .2s;}
+  .pr-panel:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(23,36,60,.09);}
+  .pr-head{display:flex;align-items:center;gap:10px;margin-bottom:13px;}
+  .pr-badge{width:31px;height:31px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .pr-badge svg{width:17px;height:17px;}
+  .pr-badge.a{background:var(--blue-bg);color:var(--blue);}
+  .pr-badge.b{background:var(--amber-bg);color:var(--amber);}
+  .pr-title{font-size:13px;font-weight:700;}
+  .pr-sub{font-size:10.5px;color:var(--faint);margin-top:1px;}
+  .pr-step{display:flex;gap:10px;align-items:flex-start;}
+  .pr-step-rail{display:flex;flex-direction:column;align-items:center;flex-shrink:0;}
+  .pr-num{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:10px;font-weight:700;font-family:var(--mono);flex-shrink:0;}
+  .pr-num.a{background:var(--blue-bg);color:var(--blue-d);}
+  .pr-num.b{background:var(--amber-bg);color:#b06a08;}
+  .pr-rail{width:1px;flex:1;min-height:10px;background:#dde3ec;margin:3px 0;}
+  .pr-step-body{padding-bottom:11px;}
+  .pr-step:last-child .pr-step-body{padding-bottom:0;}
+  .pr-step .n{font-size:12px;font-weight:600;line-height:20px;}
+  .pr-step .d{font-size:10.5px;color:var(--faint);line-height:1.6;margin-top:2px;}
+  .pr-chips{margin-top:13px;padding-top:11px;border-top:1px dashed var(--line);display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+  .pr-chips .lb{font-size:10.5px;color:var(--faint);}
+  .pr-chip{font-size:10px;border-radius:10px;padding:2px 9px;font-weight:600;}
+  .pr-chip.a{background:var(--blue-bg);color:var(--blue-d);}
+  .pr-chip.b{background:var(--amber-bg);color:#b06a08;}
+
+  /* ============ 折叠区 / 页脚 ============ */
+  details.fold{border:1px solid var(--line);border-radius:11px;background:#fff;box-shadow:var(--shadow);margin-bottom:12px;overflow:hidden;}
+  details.fold>summary{cursor:pointer;list-style:none;padding:12px 17px;font-size:12.5px;font-weight:700;
+    display:flex;align-items:center;gap:9px;background:linear-gradient(90deg,#f8faff,#fff);user-select:none;}
+  details.fold>summary::-webkit-details-marker{display:none;}
+  details.fold>summary::after{content:"▾";margin-left:auto;color:var(--faint);font-size:12px;transition:transform .2s;}
+  details.fold[open]>summary::after{transform:rotate(180deg);}
+  details.fold>summary .ico{width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--blue-bg);color:var(--blue);}
+  details.fold>summary .ico svg{width:14px;height:14px;}
+  details.fold>summary .sub{font-size:10.5px;font-weight:400;color:var(--faint);}
+  .fold-body{padding:4px 17px 17px;}
+  .raw-pre{max-height:340px;overflow:auto;background:#0f1c33;color:#cfe0ff;border-radius:9px;padding:14px 16px;
+    font-size:11px;line-height:1.7;white-space:pre;tab-size:2;}
+  .tool-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  .btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;color:var(--muted);
+    border-radius:7px;padding:5px 11px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .18s;}
+  .btn svg{width:13px;height:13px;}
+  .btn:hover{border-color:#c9d9f2;color:var(--blue-d);background:#f6f9ff;box-shadow:0 3px 10px rgba(23,36,60,.07);}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff;}
+  .btn.primary:hover{background:var(--blue-d);color:#fff;}
+
+  .footer{margin-top:18px;padding:14px 17px;border:1px dashed #d7e0ee;border-radius:11px;background:rgba(255,255,255,.65);
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--faint);}
+  .footer .demo{display:flex;align-items:center;gap:6px;}
+  .footer .demo .lb{font-weight:600;color:var(--muted);}
+  .demo-btn{border:1px solid var(--line);background:#fff;border-radius:16px;padding:3px 12px;font-size:11px;
+    color:var(--muted);cursor:pointer;transition:all .18s;}
+  .demo-btn:hover{border-color:#c9d9f2;color:var(--blue-d);}
+  .demo-btn.active{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600;}
+  .footer .spacer{flex:1;}
+  .footer code{font-family:var(--mono);font-size:10.5px;background:#eef2f8;border-radius:4px;padding:1px 5px;color:var(--muted);}
+
+  .empty{padding:26px;text-align:center;color:var(--faint);font-size:12.5px;}
+  .empty b{display:block;color:var(--rose);font-size:14px;margin-bottom:6px;}
+
+  @media(max-width:1080px){
+    .hw-grid{grid-template-columns:repeat(2,1fr);}
+    .hero-kpis{grid-template-columns:repeat(2,1fr);}
+    .chart-grid,.pr-grid{grid-template-columns:1fr;}
+  }
+  @media(max-width:860px){
+    .sidebar{display:none;}
+    .content{padding:16px 14px 32px;}
+    .sub-grid{grid-template-columns:1fr;}
+    .dim-grid{grid-template-columns:repeat(2,1fr);}
+    .ov-specs{flex-direction:column;gap:9px;}
+    .ov-cell{border-right:0;border-bottom:1px solid var(--line);padding:0 0 8px;}
+    .ov-cell:last-child{border-bottom:0;}
+    .sec-chip .extra{display:none;}
+    .crumb{display:none;}
+  }
+  @media(max-width:520px){
+    .hw-grid,.hero-kpis{grid-template-columns:1fr;}
+    .hero h1{font-size:18px;}
+    .mode-banner{flex-wrap:wrap;}
+    .card{padding:15px 14px 17px;}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;}
+  }
+  @media print{
+    .sidebar,.topbar,.footer,.tool-row,.demo{display:none!important;}
+    .layout{display:block;height:auto;overflow:visible;}
+    .content{overflow:visible;padding:0;}
+    .card,.chart-card,.pr-panel,.strat-hero{box-shadow:none;break-inside:avoid;}
+    details.fold{break-inside:avoid;}
+    details.fold>summary::after{display:none;}
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- ==================== 左侧导航 ==================== -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon" id="logoIcon"></div>
+      <div><div class="logo-name">智算调优平台</div><div class="logo-sub">ICP Tuning Platform</div></div>
+    </div>
+    <nav class="menu" id="sideMenu"></nav>
+    <div class="space-bar">
+      <span class="space-dot"></span><span class="space-name">950DT 测试项目</span>
+      <button class="space-btn" type="button">切换</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- ==================== 顶栏 ==================== -->
+    <header class="topbar">
+      <button class="btn-back" type="button" onclick="history.length>1?history.back():void 0">‹ 返回</button>
+      <span class="crumb">首页 / 模型调优 / <b>推理调优</b></span>
+      <div class="topbar-right">
+        <span id="modeBadge"></span>
+        <span class="avatar">A</span><span>admin</span><span style="color:var(--faint)">▾</span>
+      </div>
+    </header>
+
+    <main class="content">
+      <div class="content-inner">
+        <div id="hero"></div>
+        <div class="detail" id="detailArea"></div>
+        <div id="footer"></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   推理策略寻优与仿真结果 · V2 旗舰版
+   数据接入约定：
+   1) 真实场景：页面优先读取 window.INFER_OPT_RESULT / window.INFER_SIM_RESULT，
+      也可在页面加载后调用 window.renderInferReport(optResp, simResp) 重新渲染。
+      一次任务只会有一份寻优响应，部署形态由 result.agg / result.disagg
+      中实际存在 candidates 的一侧自动识别，不再提供并列的形态切换按钮。
+   2) 预览场景：内置 PD 混部、PD 分离两份示例响应，默认优先展示 PD 分离；
+      用页脚「演示数据」或 ?demo=agg 切换，仅在本地预览两种返回格式时使用，不属于业务功能。
+   ===================================================================== */
+
+/* ==================== 1. 示例响应（与接口文档「返回值」一致） ==================== */
+const REQUEST_BASE = {
+  "model": "DeepSeek-V4.1-Flash-MXFP4",
+  "device": "950DT",
+  "num_devices": "32",
+  "num_nodes": "4",
+  "input_length": "4096",
+  "output_length": "1024",
+  "ttft_limit": "20",
+  "tpot_limit": "100",
+  "serving_modes": "2",
+  "quantize-linear-action": "MXFP4",
+  "quantize-non-expert-linear-action": "FP8",
+  "mxfp4-group-size": "32",
+  "quantize-attention-action": "DISABLED"
+};
+const TIMES = {
+  "created_at": "2026-11-04T09:06:16+08:00",
+  "started_at": "2026-11-04T09:06:16+08:00",
+  "finished_at": "2026-11-04T09:10:12+08:00"
+};
+
+/* 1.1 PD 混部（agg）寻优结果 */
+const DEMO_OPT_AGG = {
+  "code": 0, "status": "success", "message": "寻优任务完成",
+  "common": { "infer_strategy_npu": {
+    "code": 0, "status": "success", "message": "寻优策略任务完成，已找到结果",
+    "data": {
+      ...TIMES,
+      "request": { ...REQUEST_BASE },
+      "result": {
+        "agg": { "candidates": [{
+          "throughput_tokens_per_s": 4179.66,
+          "throughput_tokens_per_s_per_device": 130.62,
+          "throughput_req_per_s": 4.09,
+          "ttft_ms": 1778.74,
+          "tpot_ms": 44.22,
+          "meets_slo": true,
+          "concurrency": 192,
+          "batch_size": 6,
+          "num_devices": 32,
+          "parallel": { "tp": 1, "pp": 1, "dp": 32, "ep": 32 }
+        }] },
+        "disagg": {}
+      }
+    }
+  }}
+};
+
+/* 1.2 PD 分离（disagg）寻优结果 */
+const DEMO_OPT_DISAGG = {
+  "code": 0, "status": "success", "message": "寻优任务完成",
+  "common": { "infer_strategy_npu": {
+    "code": 0, "status": "success", "message": "寻优策略任务完成，已找到结果",
+    "data": {
+      ...TIMES,
+      "request": { ...REQUEST_BASE },
+      "result": {
+        "agg": {},
+        "disagg": { "candidates": [{
+          "prefill": {
+            "instances": 1, "devices_per_instance": 8, "devices_total": 8,
+            "parallel": { "tp": 8, "pp": 1, "dp": 1, "ep": 8 },
+            "batch_size": 193, "concurrency": 193, "ttft_ms": 600.79, "tpot_ms": null,
+            "tokens_per_s_per_instance": 27203.85, "tokens_per_s_per_device": 3400.48,
+            "tokens_per_s_cluster": 27203.86
+          },
+          "decode": {
+            "instances": 3, "devices_per_instance": 8, "devices_total": 24,
+            "parallel": { "tp": 2, "pp": 1, "dp": 4, "ep": 8 },
+            "batch_size": 6, "concurrency": 24, "ttft_ms": null, "tpot_ms": 67.10,
+            "tokens_per_s_per_instance": 357.67, "tokens_per_s_per_device": 44.71,
+            "tokens_per_s_cluster": 1073.01
+          }
+        }] }
+      }
+    }
+  }}
+};
+
+/* 1.3 推理仿真结果：PD 混部 / PD 分离下游输出格式统一 */
+const DEMO_SIM = {
+  "code": 0, "status": "success", "message": "推理仿真任务执行成功",
+  "common": { "infer_simulate": {
+    "code": 0, "status": "success", "message": "推理仿真任务执行成功",
+    "data": {
+      "throughput": {
+        "requests": 1, "latency": 203.45, "input_tokens": 16384, "generated_tokens": 2048,
+        "prompt_throughput": 80.53, "generation_throughput": 10.07, "total_throughput": 90.60
+      },
+      "ttft": { "mean": 264.34, "median": 264.34, "p99": 264.34 },
+      "tpot": { "mean": 99.26, "median": 99.26, "p99": 99.26 },
+      "itl":  { "mean": 99.26, "median": 99.26, "p99": 101.53 }
+    }
+  }}
+};
+
+const DEMO_OPT = { agg: DEMO_OPT_AGG, disagg: DEMO_OPT_DISAGG };
+
+/* ==================== 2. 字段字典：英文 key → 中文名 / 单位 / 说明 ==================== */
+/* [中文名, 单位, 说明] */
+const FIELD = {
+  /* 任务与请求 */
+  "model":["模型名称","","本次寻优针对的大语言模型标识，决定层数、隐藏维度与 MoE 专家规模"],
+  "device":["NPU 机型","","承载推理的加速卡型号，用于匹配算力、显存与卡间带宽规格"],
+  "num_devices":["卡数","卡","本次部署占用的 NPU 卡总数，也是并行维度乘积的上限"],
+  "num_nodes":["节点数","节点","集群中参与部署的服务器节点数"],
+  "input_length":["输入序列长度","tokens","请求 Prompt 的 Token 长度，决定 Prefill 阶段计算量"],
+  "output_length":["输出序列长度","tokens","单次请求生成的 Token 数，决定 Decode 阶段步数"],
+  "ttft_limit":["首 Token 时延上限","ms","SLO 约束：从请求到达到首 Token 返回允许的最大时延"],
+  "tpot_limit":["每 Token 生成时延上限","ms","SLO 约束：Decode 阶段逐 Token 输出的最大平均间隔"],
+  "serving_modes":["服务化部署形态码","","接口下发的形态枚举值；页面展示形态以结果候选集自动识别为准"],
+  "quantize-linear-action":["专家层线性量化","","MoE 专家层线性算子的量化精度，降低权重显存占用"],
+  "quantize-non-expert-linear-action":["非专家层线性量化","","稠密（非专家）线性算子的量化精度"],
+  "mxfp4-group-size":["MXFP4 分组大小","","MXFP4 量化共享缩放因子的元素分组规模，影响精度与开销"],
+  "quantize-attention-action":["注意力量化","","注意力算子量化开关，DISABLED 表示保持原精度"],
+  "created_at":["任务创建时间","","寻优任务写入调度队列的时间"],
+  "started_at":["任务开始时间","","寻优任务实际开始执行的时间"],
+  "finished_at":["任务完成时间","","寻优任务产出候选策略的时间"],
+  /* 并行策略 */
+  "parallel.tp":["张量并行度 TP","","张量并行：把单层矩阵计算切到多张卡协同完成，降低单卡显存压力"],
+  "parallel.pp":["流水并行度 PP","","流水并行：按模型层切分为多段，各段流水执行"],
+  "parallel.dp":["数据并行度 DP","","数据并行：复制多份模型副本，各处理一部分请求"],
+  "parallel.ep":["专家并行度 EP","","专家并行：把 MoE 专家分散到多张卡，配合 all-to-all 通信"],
+  /* 运行配置 */
+  "instances":["实例数","个","该阶段部署的推理实例数量"],
+  "devices_per_instance":["单实例卡数","卡","每个推理实例占用的 NPU 卡数"],
+  "devices_total":["阶段总卡数","卡","该阶段所有实例合计占用的 NPU 卡数"],
+  "batch_size":["批大小","","单次前向后向聚合的请求批规模"],
+  "concurrency":["并发数","","同时处于服务中的最大请求并发量"],
+  /* 性能指标 */
+  "meets_slo":["是否满足 SLO","","候选策略是否同时满足 TTFT / TPOT 时延约束"],
+  "throughput_tokens_per_s":["集群总吞吐","tokens/s","整个部署单位时间内生成的 Token 数"],
+  "throughput_tokens_per_s_per_device":["单卡吞吐","tokens/s/卡","折算到单张 NPU 卡的平均生成吞吐"],
+  "throughput_req_per_s":["请求吞吐","req/s","单位时间内可完成的请求数"],
+  "ttft_ms":["首 Token 时延","ms","Time To First Token，Prefill 完成并返回首个 Token 的耗时"],
+  "tpot_ms":["每 Token 生成时延","ms","Time Per Output Token，Decode 阶段相邻 Token 的平均间隔"],
+  "tokens_per_s_per_instance":["单实例吞吐","tokens/s","单个推理实例的 Token 生成吞吐"],
+  "tokens_per_s_per_device":["单卡吞吐","tokens/s/卡","折算到单张 NPU 卡的 Token 生成吞吐"],
+  "tokens_per_s_cluster":["集群吞吐","tokens/s","该阶段全部实例合计的 Token 生成吞吐"],
+  /* 仿真 */
+  "requests":["请求数","个","本轮仿真发出的请求总数"],
+  "latency":["端到端时延","ms","单个请求从发起到全部 Token 生成结束的耗时"],
+  "input_tokens":["输入 Token 数","tokens","仿真请求累计输入的 Token 总量"],
+  "generated_tokens":["生成 Token 数","tokens","仿真累计生成的 Token 总量"],
+  "prompt_throughput":["Prefill 吞吐","tokens/s","Prompt 处理阶段的输入 Token 吞吐"],
+  "generation_throughput":["Decode 吞吐","tokens/s","Decode 阶段的输出 Token 吞吐"],
+  "total_throughput":["总吞吐","tokens/s","输入与输出 Token 合计吞吐"],
+  "ttft":["首 Token 时延","ms","仿真统计的 TTFT 分位指标"],
+  "tpot":["每 Token 生成时延","ms","仿真统计的 TPOT 分位指标"],
+  "itl":["Token 间时延","ms","Inter-Token Latency，相邻两个输出 Token 的间隔"],
+  "mean":["平均值","ms","该时延指标在多轮采样中的算术平均"],
+  "median":["中位数","ms","该时延指标在多轮采样中的 50 分位值"],
+  "p99":["P99","ms","该时延指标的 99 分位值，反映长尾表现"]
+};
+const fieldOf = k => {
+  if (FIELD[k]) return FIELD[k];
+  const last = String(k).split(".").pop();
+  if (/^(tp|pp|dp|ep)$/.test(last) && FIELD["parallel." + last]) return FIELD["parallel." + last];
+  return FIELD[last] || ["", "", ""];
+};
+const cnOf  = k => fieldOf(k)[0] || k;
+const unitOf= k => fieldOf(k)[1];
+const descOf= k => fieldOf(k)[2];
+const hasDict = k => !!fieldOf(k)[0];
+
+/* ==================== 3. 采集信息（接口文档「前置说明」） ==================== */
+const COLLECT = [
+  ["单台机器内卡间", [
+    ["intra_node_npu_bandwidth","节点内卡间带宽"], ["intra_node_npu_latency","节点内卡间时延"]
+  ]],
+  ["机器间传输", [
+    ["inter_node_bandwidth","跨节点带宽"], ["inter_node_latency","跨节点时延"]
+  ]],
+  ["CPU", [
+    ["cpu_capacity","CPU 容量"], ["cpu_bandwidth","CPU 传输带宽"], ["cpu_latency","CPU 传输时延"]
+  ]],
+  ["NPU", [
+    ["npu_capacity","NPU 容量"], ["npu_bandwidth","NPU 带宽"],
+    ["npu_latency","NPU 时延"], ["npu_utilization","NPU 利用率"]
+  ]]
+];
+
+/* ==================== 4. SVG 图标 ==================== */
+const ICON = {
+  logo:'<path d="M12 2l8 5v10l-8 5-8-5V7z"/><path d="M12 7l4 2.5v5L12 17l-4-2.5v-5z"/>',
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+  pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  chip:'<rect x="5" y="5" width="14" height="14" rx="2"/><circle cx="12" cy="12" r="3"/>',
+  doc:'<path d="M4 19V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+  layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16l9 5 9-5"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  print:'<path d="M6 9V3h12v6"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>',
+  server:'<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  database:'<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  activity:'<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  book:'<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M8 7h7"/>',
+  code:'<path d="M8 8l-4 4 4 4M16 8l4 4-4 4"/>',
+  split:'<path d="M4 6h6l4 6h6"/><path d="M4 18h6l4-6"/><path d="M18 9l3 3-3 3"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  shield:'<path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/>',
+  waves:'<path d="M3 8c3-3 6 3 9 0s6 3 9 0M3 16c3-3 6 3 9 0s6 3 9 0"/>'
+};
+const icon = (name,size) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${size?` width="${size}" height="${size}"`:""}>${ICON[name]||ICON.info}</svg>`;
+
+/* ==================== 5. 通用工具 ==================== */
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+const fmt = n => (typeof n === "number" && isFinite(n))
+  ? n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}) : esc(n);
+const valHtml = v => {
+  if (v === null || v === undefined) return '<span class="null-pill">无数据</span>';
+  if (v === true)  return '<span class="bool yes">满足</span>';
+  if (v === false) return '<span class="bool no">未满足</span>';
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : fmt(v);
+  const s = esc(v);
+  return `<span class="${String(v).length>16?"txt":""}">${s}</span>`;
+};
+const flat = (obj,prefix="") => Object.entries(obj||{}).flatMap(([k,v]) =>
+  isObj(v) ? flat(v,prefix+k+".") : [[prefix+k,v]]);
+const pick = (pairs,keys) => keys.map(k=>pairs.find(([n])=>n===k)).filter(Boolean);
+const timeText = s => s ? String(s).replace("T"," ").replace(/\+08:00/,"") : "—";
+function durationText(a,b){
+  const d = new Date(b) - new Date(a);
+  if (!isFinite(d) || d < 0) return "—";
+  const m = Math.floor(d/60000), s = Math.round((d%60000)/1000);
+  return m>0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
+
+/* 记录出现过的字段，供「指标释义」使用 */
+let USED = [];
+const mark = k => { if(k && !USED.includes(k)) USED.push(k); };
+
+/* ==================== 6. 数据解析（单份响应 → 单一部署形态） ==================== */
+function readOptimize(resp){
+  const node = resp && resp.common && resp.common.infer_strategy_npu;
+  if (!node) return { ok:false, reason:"响应缺少 common.infer_strategy_npu 节点" };
+  const d = node.data || {}, result = d.result || {};
+  const agg = (result.agg && Array.isArray(result.agg.candidates)) ? result.agg.candidates : [];
+  const dis = (result.disagg && Array.isArray(result.disagg.candidates)) ? result.disagg.candidates : [];
+  /* 真实任务只会返回一种形态；此处按实际存在候选集的一侧判定 */
+  const mode = agg.length ? "agg" : (dis.length ? "disagg" : null);
+  const candidate = mode === "agg" ? agg[0] : (mode === "disagg" ? dis[0] : null);
+  return {
+    ok: !!candidate, mode, candidate, request: d.request || {},
+    times: { created:d.created_at, started:d.started_at, finished:d.finished_at },
+    status: { code:node.code, status:node.status, message:node.message },
+    count: mode === "agg" ? agg.length : dis.length,
+    reason: "寻优响应中 agg / disagg 均无 candidates"
+  };
+}
+function readSimulate(resp){
+  const node = resp && resp.common && resp.common.infer_simulate;
+  if (!node || !node.data) return { ok:false, reason:"响应缺少 common.infer_simulate.data 节点" };
+  const d = node.data;
+  return { ok:true, data:d, status:{ code:node.code, status:node.status, message:node.message } };
+}
+
+/* ==================== 7. 片段渲染 ==================== */
+function secConn(no,name,extra){
+  return `<div class="sec-conn"><span class="sec-line"></span>
+    <span class="sec-chip"><span class="no">${no}</span><span class="nm">${esc(name)}</span>${extra?`<span class="extra">${extra}</span>`:""}</span>
+    <span class="sec-line"></span></div><div class="sec-down">▼</div>`;
+}
+function cardHead(title,sub,right,tone){
+  return `<div class="card-head">
+    <span class="card-title ${tone||""}"><span class="ico">${icon(tone==="violet"?"layers":tone==="teal"?"activity":tone==="amber"?"waves":tone==="database"?"database":"chip")}</span>${esc(title)}</span>
+    ${sub?`<span class="card-sub">${esc(sub)}</span>`:""}
+    ${right?`<span class="card-right">${right}</span>`:""}</div>`;
+}
+/* 分组标题与指标卡只呈现中文名称、单位和说明，不暴露接口字段路径 */
+function groupHead(title,tone){
+  return `<div class="group-head ${tone||""}"><span class="dot"></span><span class="t">${esc(title)}</span>
+    <span class="rule"></span></div>`;
+}
+function stat(pair,tone,showDesc){
+  const [k,v] = pair; mark(k);
+  const f = fieldOf(k), cn = f[0] || k, unit = f[1], desc = f[2];
+  const u = unit ? `<span class="u">${esc(unit)}</span>` : "";
+  return `<div class="stat ${tone||""}" title="${esc(desc||"暂无说明")}">
+    <div class="cn">${esc(cn)} ${u}</div>
+    <div class="v">${valHtml(v)}</div>
+    ${showDesc!==false && desc ? `<div class="d">${esc(desc)}</div>`:""}</div>`;
+}
+const grid = (pairs,tone,extra,showDesc) =>
+  `<div class="stat-grid ${extra||""}">${pairs.map(p=>stat(p,tone,showDesc)).join("")}</div>`;
+
+function dimCard(key,value,compact){
+  const [k,v] = [key,value]; mark(k);
+  const f = fieldOf(k), abbr = k.split(".").pop().toUpperCase();
+  const cn = f[0] || k;
+  return `<div class="dim-card" title="${esc(f[2]||"")}">
+    <div class="abbr">${esc(abbr)}</div>
+    <div class="v">${valHtml(v)}</div>
+    <div class="cn">${esc(cn)}</div>
+    ${compact?"":`<div class="d">${esc(f[2]||"")}</div>`}</div>`;
+}
+function topoHtml(ctx){
+  const req = ctx.opt.request, nodes = Number(req.num_nodes)||4, total = Number(req.num_devices)||32;
+  const per = Math.max(1,Math.ceil(total/nodes));
+  if (ctx.opt.mode === "agg"){
+    const c = ctx.opt.candidate, dp = (c.parallel&&c.parallel.dp)||total;
+    let boxes = "", left = total;
+    for(let i=0;i<nodes && left>0;i++){
+      const n = Math.min(per,left); left -= n;
+      boxes += `<div class="node-box"><div class="node-label">节点 ${i+1} · ${n} 卡</div>
+        <div class="node-cells">${Array.from({length:n},()=>'<i class="cell"></i>').join("")}</div></div>`;
+    }
+    return `<div class="topo">
+      <div class="topo-head">${icon("server",13)} 卡组拓扑 · 共 ${total} 卡 / ${nodes} 节点
+        <span class="legend"><span><i style="background:linear-gradient(135deg,#4d8ef7,#1668dc)"></i>DP 副本（${esc(dp)}）</span>
+        <span><i style="background:linear-gradient(135deg,#b18af5,#7c3aed)"></i>EP 专家覆盖 ${esc((c.parallel&&c.parallel.ep)||"—")} 卡</span></span></div>
+      <div class="topo-row">${boxes}</div></div>`;
+  }
+  const c = ctx.opt.candidate, pf = c.prefill||{}, dc = c.decode||{};
+  const cells = (n,cls) => Array.from({length:Math.max(0,Math.min(64,Number(n)||0))},()=>`<i class="cell ${cls}"></i>`).join("");
+  const inst = (n,per,cls) => {
+    let out = "";
+    for(let i=0;i<Math.max(0,Number(n)||0);i++){
+      out += `<div class="node-box"><div class="node-label">实例 ${i+1} · ${esc(per)} 卡</div>
+        <div class="node-cells">${cells(per,cls)}</div></div>`;
+    }
+    return out;
+  };
+  return `<div class="topo">
+    <div class="topo-head">${icon("split",13)} 卡组分配 · Prefill ${esc(pf.devices_total||0)} 卡 / Decode ${esc(dc.devices_total||0)} 卡
+      <span class="legend"><span><i style="background:linear-gradient(135deg,#5ed2c0,#0d9488)"></i>Prefill 实例</span>
+      <span><i style="background:linear-gradient(135deg,#b18af5,#7c3aed)"></i>Decode 实例</span></span></div>
+    <div class="topo-row">
+      <div class="node-box" style="border-color:#bfe9e1"><div class="node-label">P 侧 · ${esc(pf.instances||0)} 个实例</div>
+        <div class="node-cells" style="gap:8px">${inst(pf.instances,pf.devices_per_instance,"p")}</div></div>
+      <div class="node-box" style="border-color:#e0d0f8"><div class="node-label">D 侧 · ${esc(dc.instances||0)} 个实例</div>
+        <div class="node-cells" style="gap:8px">${inst(dc.instances,dc.devices_per_instance,"d")}</div></div>
+    </div></div>`;
+}
+
+/* ==================== 8. 各区块 ==================== */
+function heroHtml(ctx){
+  const req = ctx.opt.request, t = ctx.opt.times;
+  const modeLabel = ctx.opt.mode === "agg" ? "PD 混部" : "PD 分离";
+  const cost = durationText(t.started,t.finished);
+  const kpi = (k,v,u) => `<div class="hero-kpi"><div class="k">${esc(k)}</div><div class="v">${esc(v)}${u?`<small> ${esc(u)}</small>`:""}</div></div>`;
+  return `<section class="hero">
+    <div class="hero-top">
+      <h1>推理策略寻优与仿真结果</h1>
+      <span class="hero-tag"><span class="dot"></span>${esc(ctx.opt.status.message||"任务已完成")}</span>
+      <span class="hero-id">${esc(req.model||"—")}</span>
+      <span class="hero-cost">创建于 <b>${esc(timeText(t.created))}</b> · 耗时 <b>${esc(cost)}</b></span>
+    </div>
+    <p>面向大模型推理场景的部署策略寻优工具，整体分为 <b>集群信息采集 → 部署策略寻优 → 性能仿真验证</b> 三大环节：
+      先一次性预采集节点内 / 跨节点的带宽与时延、CPU 与 NPU 容量规格，再在
+      <b>TP × PP × DP × EP</b> 并行维度空间中结合 SLO 约束搜索最优部署方案，
+      最后由仿真环节输出 <b>吞吐、TTFT、TPOT、ITL</b> 等指标的分位统计。
+      当前任务识别为 <b>${modeLabel}</b> 部署形态。</p>
+    <div class="hero-kpis">
+      ${kpi("NPU 机型",req.device||"—","")}
+      ${kpi("集群规格",`${req.num_nodes||"—"} 节点 / ${req.num_devices||"—"} 卡`,"")}
+      ${kpi("序列长度",`${req.input_length||"—"} / ${req.output_length||"—"}`,"tokens")}
+      ${kpi("SLO 约束",`${req.ttft_limit||"—"} / ${req.tpot_limit||"—"}`,"ms")}
+    </div></section>`;
+}
+
+function overviewHtml(ctx){
+  const req = ctx.opt.request, t = ctx.opt.times;
+  const modeLabel = ctx.opt.mode === "agg" ? "PD 混部" : "PD 分离";
+  const pairs = flat(req);
+  const defs = [
+    ["模型与设备",["model","device","num_devices","num_nodes"]],
+    ["序列与 SLO 约束",["input_length","output_length","ttft_limit","tpot_limit"]],
+    ["量化与精度配置",["quantize-linear-action","quantize-non-expert-linear-action","mxfp4-group-size","quantize-attention-action"]],
+    ["服务化配置",["serving_modes"]]
+  ];
+  const used = new Set();
+  const groups = defs.map(([title,keys])=>{
+    const sel = pick(pairs,keys); sel.forEach(([k])=>used.add(k));
+    return [title,sel];
+  }).filter(g=>g[1].length);
+  const rest = pairs.filter(([k])=>!used.has(k));
+  if(rest.length) groups.push(["其他请求参数",rest]);
+  const cell = (k,v,u) => `<div class="ov-cell"><div class="k">${esc(k)}</div><div class="v">${esc(v)}${u?`<small> ${esc(u)}</small>`:""}</div></div>`;
+  return `<div class="card">
+    ${cardHead("任务概要","任务基础信息与请求参数",`<span class="tag ok">已完成</span><span class="tag ghost">${esc(ctx.opt.status.status||"—")}</span>`)}
+    <div class="ov-top"><span class="ov-model">${esc(req.model||"—")}</span>
+      <span class="tag info">${esc(modeLabel)}</span>
+      <span class="tag ghost">响应码 ${esc(ctx.opt.status.code)}</span></div>
+    <div class="ov-specs">
+      ${cell("NPU 机型",req.device||"—","")}
+      ${cell("集群规格",`${req.num_nodes||"—"} 节点 × ${Math.round((Number(req.num_devices)||0)/(Number(req.num_nodes)||1))} 卡/节点`,"")}
+      ${cell("总卡数",req.num_devices||"—","卡")}
+      ${cell("任务耗时",durationText(t.started,t.finished),"")}
+    </div>
+    <div class="note"><b>时间线：</b>创建 ${esc(timeText(t.created))} → 开始 ${esc(timeText(t.started))} → 完成 ${esc(timeText(t.finished))}。
+      请求参数按接口原值展示，各指标含义见卡片说明与「指标释义」。</div>
+    ${groups.map(([title,ps])=>groupHead(title)+grid(ps)).join("")}
+    <div class="mode-banner ${ctx.opt.mode==="disagg"?"disagg":""}">
+      <div class="mb-left"><span class="mb-field">部署形态（自动识别）</span></div>
+      <span class="mb-desc">${ctx.opt.mode==="agg"
+        ? "PD 混部：Prefill 与 Decode 在同一实例内混合执行，共享全部卡资源，以单一并行配置对外服务。"
+        : "PD 分离：Prefill 与 Decode 拆分为独立实例组，各自采用不同的并行策略与卡数，分别优化 TTFT 与 TPOT。"}</span>
+      <span class="mb-value">${esc(modeLabel)}</span>
+    </div></div>`;
+}
+
+function collectHtml(){
+  return `<div class="card tone-teal">
+    ${cardHead("集群信息采集","一次性预采集 · 多任务复用",`<span class="tag ok">已采集</span><span class="tag ghost">${COLLECT.reduce((s,g)=>s+g[1].length,0)} 项</span>`,"teal")}
+    <div class="note"><b>采集范围：</b>单台机器内卡间的带宽与时延、机器间传输的带宽与时延、CPU 与 NPU 的容量及传输带宽时延。
+      这些实测规格是寻优阶段剪枝与仿真阶段代价建模的输入；本页仅列出被采集的信息项，不展示采集数值。</div>
+    <div class="hw-grid">
+      ${COLLECT.map(([g,items],i)=>`<div class="hw-group">
+        <div class="hw-head"><span class="hw-ico">${icon(["server","split","chip","database"][i])}</span>
+          <span class="hw-name">${esc(g)}</span><span class="hw-cnt">${items.length} 项</span></div>
+        <div class="hw-items">${items.map(([,cn])=>`<div class="hw-item">
+          <span class="tick">${icon("check")}</span><span class="cn">${esc(cn)}</span></div>`).join("")}</div>
+      </div>`).join("")}
+    </div></div>`;
+}
+
+function strategyAggHtml(ctx){
+  const c = ctx.opt.candidate, all = flat(c);
+  const parKeys = ["parallel.tp","parallel.pp","parallel.dp","parallel.ep"];
+  const cfgKeys = ["num_devices","concurrency","batch_size"];
+  const perfKeys = ["throughput_tokens_per_s","throughput_tokens_per_s_per_device","throughput_req_per_s","ttft_ms","tpot_ms","meets_slo"];
+  const par = pick(all,parKeys), cfg = pick(all,cfgKeys), perf = pick(all,perfKeys);
+  const rest = all.filter(([k])=>!parKeys.includes(k)&&!cfgKeys.includes(k)&&!perfKeys.includes(k));
+  const v = k => { const p = all.find(([n])=>n===k); return p?p[1]:"—"; };
+  const prod = ["parallel.tp","parallel.pp","parallel.dp"].reduce((s,k)=>s*(Number(v(k))||1),1);
+  const slo = c.meets_slo === true;
+  return `<div class="card tone-violet">
+    ${cardHead("最优部署策略","PD 混部 · 单一聚合实例",
+      `<span class="tag ${slo?"ok":"rose"}">${slo?"满足 SLO 约束":"未满足 SLO 约束"}</span>
+       <span class="tag violet">候选 ${esc(ctx.opt.count)} 条</span>`,"violet")}
+    <div class="strat-hero">
+      <div class="sh-head"><span class="sh-title">${icon("layers")} 并行部署策略</span>
+        <span class="sh-tag">最优候选 #1</span>
+        <span class="sh-formula">TP × PP × DP = ${esc(prod)} 卡 · EP = ${esc(v("parallel.ep"))}</span></div>
+      <div class="dim-grid">${par.map(([k,val])=>dimCard(k,val)).join("")}</div>
+      <div class="sh-foot">
+        <span class="chip">张量并行：层内切分</span><span class="chip">流水并行：按层切段</span>
+        <span class="chip">数据并行：副本分流</span><span class="chip">专家并行：MoE 分片</span>
+      </div>
+    </div>
+    ${topoHtml(ctx)}
+    ${groupHead("运行配置","violet")}
+    ${grid(cfg,"violet")}
+    ${groupHead("性能指标","violet")}
+    ${grid(perf,"violet")}
+    ${rest.length?groupHead("其他返回字段","violet")+grid(rest,"violet"):""}
+  </div>`;
+}
+
+function strategyDisaggHtml(ctx){
+  const c = ctx.opt.candidate, pf = c.prefill||{}, dc = c.decode||{};
+  const parKeys = ["parallel.tp","parallel.pp","parallel.dp","parallel.ep"];
+  const cfgKeys = ["instances","devices_per_instance","devices_total","batch_size","concurrency"];
+  const perfKeys = ["ttft_ms","tpot_ms","tokens_per_s_per_instance","tokens_per_s_per_device","tokens_per_s_cluster"];
+  const side = (name,obj,badge,tone,sideCls) => {
+    const pairs = flat(obj).map(([k,val])=>[name+"."+k,val]);
+    /* 用带前缀的键渲染，但字典按末段匹配，需临时还原 */
+    const render = (keys,fn) => keys.map(k=>{
+      const p = pairs.find(([n])=>n===name+"."+k);
+      return p ? fn(k,p[1]) : "";
+    }).join("");
+    return `<div class="sub ${sideCls}">
+      <div class="sub-head"><span class="badge ${badge}">${esc(name)}</span>
+        <span class="tag ghost">${esc(obj.devices_total||0)} 卡 / ${esc(obj.instances||0)} 实例</span></div>
+      ${groupHead("并行策略",tone)}
+      <div class="dim-grid">${render(parKeys,(k,val)=>{
+        mark("parallel."+k.split(".").pop());
+        const f = fieldOf("parallel."+k.split(".").pop());
+        return `<div class="dim-card" title="${esc(f[2]||"")}"><div class="abbr">${esc(k.split(".").pop().toUpperCase())}</div>
+          <div class="v">${valHtml(val)}</div><div class="cn">${esc(f[0]||k)}</div></div>`;
+      })}</div>
+      ${groupHead("实例配置",tone)}
+      <div class="stat-grid">${render(cfgKeys,(k,val)=>stat([k,val],tone,false))}</div>
+    </div>`;
+  };
+  /* 性能对比表：中文行名 + 说明 */
+  const rows = perfKeys.map(k=>{
+    mark(k);
+    const f = fieldOf(k);
+    const a = pf[k], b = dc[k];
+    return `<tr><td class="k">${esc(f[0]||k)}</td>
+      <td class="num">${valHtml(a)}</td><td class="num">${valHtml(b)}</td>
+      <td class="desc">${esc(f[2]||"")}${f[1]?` · 单位 ${esc(f[1])}`:""}</td></tr>`;
+  }).join("");
+  const restPf = flat(pf).filter(([k])=>!parKeys.includes(k)&&!cfgKeys.includes(k)&&!perfKeys.includes(k));
+  return `<div class="card tone-violet">
+    ${cardHead("最优部署策略","PD 分离 · Prefill / Decode 独立实例组",
+      `<span class="tag violet">候选 ${esc(ctx.opt.count)} 条</span>
+       <span class="tag info">P ${esc(pf.devices_total||0)} 卡 / D ${esc(dc.devices_total||0)} 卡</span>`,"violet")}
+    <div class="strat-hero disagg">
+      <div class="sh-head"><span class="sh-title">${icon("split")} 双阶段并行部署策略</span>
+        <span class="sh-tag">最优候选 #1</span>
+        <span class="sh-formula">P: TP${esc(pf.parallel&&pf.parallel.tp)}·DP${esc(pf.parallel&&pf.parallel.dp)}
+          / D: TP${esc(dc.parallel&&dc.parallel.tp)}·DP${esc(dc.parallel&&dc.parallel.dp)}</span></div>
+      <div class="sub-grid">
+        ${side("prefill",pf,"p","", "p-side")}
+        ${side("decode",dc,"d","violet","d-side")}
+      </div>
+    </div>
+    ${topoHtml(ctx)}
+    ${groupHead("阶段性能指标对比","violet")}
+    <div class="table-wrap"><table class="kv">
+      <thead><tr><th>指标名称</th><th>Prefill 阶段</th><th>Decode 阶段</th><th>指标说明</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    ${restPf.length?groupHead("其他返回字段","violet")+grid(restPf,"violet"):""}
+  </div>`;
+}
+
+function simulateHtml(ctx){
+  const d = ctx.sim.data, tp = flat(d.throughput);
+  const scaleKeys = ["requests","input_tokens","generated_tokens","latency"];
+  const tputKeys = ["prompt_throughput","generation_throughput","total_throughput"];
+  const scale = pick(tp,scaleKeys), tput = pick(tp,tputKeys);
+  const rest = tp.filter(([k])=>!scaleKeys.includes(k)&&!tputKeys.includes(k));
+  const latencyKeys = ["ttft","tpot","itl"];
+  const cols = ["mean","median","p99"];
+  latencyKeys.forEach(k=>mark(k));
+  cols.forEach(k=>mark(k));
+
+  const p = v => Number(v)||0;
+  const total = p(d.throughput.total_throughput);
+  const pp = p(d.throughput.prompt_throughput), gp = p(d.throughput.generation_throughput);
+  const w1 = total? (pp/total*100):0, w2 = total? (gp/total*100):0;
+
+  /* 时延分位分组柱状图 */
+  const W=460,H=196,padL=38,padR=10,padT=18,padB=34;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const maxV = Math.max(...latencyKeys.flatMap(k=>cols.map(c=>Number(d[k]&&d[k][c])||0)),1)*1.18;
+  const ticks = [0,1,2,3,4].map(i=>maxV*i/4);
+  const gridSvg = ticks.map(t=>{
+    const y = padT+plotH*(1-t/maxV);
+    return `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="${t===0?"#c9d2de":"#eef1f5"}" stroke-width="1"/>
+      <text x="${padL-6}" y="${y+3.5}" text-anchor="end" font-size="9" fill="#8b96a8" font-family="Consolas,monospace">${Math.round(t)}</text>`;
+  }).join("");
+  const colors = ["#1668dc","#7c3aed","#0d9488"];
+  const groupW = plotW/latencyKeys.length, barW=20, gap=5;
+  let bars = "";
+  latencyKeys.forEach((k,gi)=>{
+    const cx = padL+groupW*gi+groupW/2;
+    cols.forEach((c,ci)=>{
+      const v = Number(d[k]&&d[k][c])||0;
+      const h = plotH*(v/maxV), x = cx-(barW*3+gap*2)/2+ci*(barW+gap), y = padT+plotH-h;
+      bars += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(0,h)}" rx="3" fill="${colors[ci]}" opacity="${0.55+ci*0.2}"/>
+        <text x="${x+barW/2}" y="${y-4}" text-anchor="middle" font-size="8.5" font-family="Consolas,monospace" fill="${colors[ci]}">${Math.round(v)}</text>`;
+    });
+    bars += `<text x="${cx}" y="${H-11}" text-anchor="middle" font-size="10.5" font-weight="600" fill="#475569">${esc(fieldOf(k)[0]||k)}</text>`;
+  });
+
+  const tableRows = latencyKeys.map(k=>{
+    const f = fieldOf(k);
+    return `<tr><td class="k">${esc(f[0]||k)}</td>
+      ${cols.map(c=>`<td class="num">${valHtml(d[k]?d[k][c]:null)}</td>`).join("")}
+      <td class="desc">${esc(f[2]||"")}</td></tr>`;
+  }).join("");
+
+  return `<div class="card tone-teal">
+    ${cardHead("仿真结果总览","PD 混部 / PD 分离下游输出格式统一",
+      `<span class="tag ok">仿真成功</span><span class="tag ghost">${esc(ctx.sim.status.message||"")}</span>`,"teal")}
+    <div class="note"><b>统一格式：</b>无论上游是 PD 混部还是 PD 分离，仿真阶段均输出相同的
+      <b>吞吐、首 Token 时延、每 Token 生成时延、Token 间时延</b> 四组指标，便于跨形态横向对比。
+      下图为吞吐构成与时延分位统计，数值均取自接口原始返回。</div>
+    ${groupHead("请求与规模","teal")}
+    ${grid(scale,"teal")}
+    ${groupHead("吞吐指标","teal")}
+    ${grid(tput,"teal")}
+    <div class="chart-grid" style="margin-top:13px">
+      <div class="chart-card">
+        <div class="chart-head"><span class="chart-title">吞吐构成</span></div>
+        <div class="chart-sub">Prefill 输入吞吐 + Decode 生成吞吐 = 总吞吐（${esc(fmt(total))} tokens/s）</div>
+        <div class="tput-bar"><div class="seg1" style="width:${w1.toFixed(1)}%"></div><div class="seg2" style="width:${w2.toFixed(1)}%"></div></div>
+        <div class="tput-bar-legend">
+          <span class="tput-item"><i class="lg-dot" style="background:#1668dc"></i>Prefill <b>${esc(fmt(pp))}</b> · ${w1.toFixed(1)}%</span>
+          <span class="tput-item"><i class="lg-dot" style="background:#0d9488"></i>Decode <b>${esc(fmt(gp))}</b> · ${w2.toFixed(1)}%</span>
+        </div>
+        <div class="chart-sub" style="margin-top:10px;margin-bottom:0">条形按总吞吐归一化，直观呈现输入处理与输出生成在吞吐中的占比。</div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head"><span class="chart-title">时延分位对比</span></div>
+        <div class="chart-sub">TTFT / TPOT / ITL 的平均值、中位数与 P99（单位 ms）</div>
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="时延分位柱状图">${gridSvg}${bars}</svg>
+        <div class="legend-row">
+          ${cols.map((c,i)=>`<span><i class="lg-dot" style="background:${colors[i]}"></i>${esc(fieldOf(c)[0]||c)}</span>`).join("")}
+        </div>
+      </div>
+    </div>
+    ${groupHead("时延分位明细","teal")}
+    <div class="table-wrap"><table class="kv">
+      <thead><tr><th>指标名称</th>${cols.map(c=>`<th>${esc(fieldOf(c)[0]||c)}</th>`).join("")}<th style="text-align:left">指标说明</th></tr></thead>
+      <tbody>${tableRows}</tbody></table></div>
+    ${rest.length?groupHead("其他仿真字段","teal")+grid(rest,"teal"):""}
+  </div>`;
+}
+
+const SEARCH_STEPS = [
+  ["集群信息预采集","一次性采集节点内 / 跨节点带宽时延、CPU 与 NPU 容量，多任务复用"],
+  ["部署形态判定","按任务下发的服务化配置，确定 PD 混部或 PD 分离搜索空间"],
+  ["并行策略空间展开","TP × PP × DP × EP 四维组合，结合实例数与单实例卡数联合枚举"],
+  ["SLO 约束剪枝","以 TTFT / TPOT 上限筛除超时组合，剔除显存与整除性不可行方案"],
+  ["最优候选输出","输出满足约束且吞吐最优的候选策略及其运行配置、性能指标"]
+];
+const SIM_STEPS = [
+  ["接收候选策略","读取寻优阶段输出的最优并行配置作为仿真输入"],
+  ["请求负载构造","按输入 / 输出序列长度与并发数构造仿真请求"],
+  ["阶段代价建模","Prefill 计算密集、Decode 访存密集，分别建模执行与通信开销"],
+  ["分位统计","对 TTFT / TPOT / ITL 采样，输出平均值、中位数与 P99"],
+  ["统一格式落盘","输出吞吐、首 Token 时延、每 Token 生成时延、Token 间时延四组指标，跨形态口径一致"]
+];
+function principlesHtml(){
+  const panel = (cls,badge,title,sub,steps,chips) => {
+    const step = (s,i) => `<div class="pr-step"><div class="pr-step-rail">
+      <span class="pr-num ${cls}">${i+1}</span>${i===steps.length-1?"":'<span class="pr-rail"></span>'}</div>
+      <div class="pr-step-body"><div class="n">${esc(s[0])}</div><div class="d">${esc(s[1])}</div></div></div>`;
+    return `<div class="pr-panel"><div class="pr-head"><span class="pr-badge ${cls}">${icon(badge)}</span>
+      <div><div class="pr-title">${esc(title)}</div><div class="pr-sub">${esc(sub)}</div></div></div>
+      ${steps.map(step).join("")}
+      <div class="pr-chips"><span class="lb">技术要点：</span>${chips.map(c=>`<span class="pr-chip ${cls}">${esc(c)}</span>`).join("")}</div></div>`;
+  };
+  return `<div class="pr-grid">
+    ${panel("a","search","推理寻优工具原理","基于预采集实测数据，在并行策略空间中搜索满足 SLO 的部署方案",SEARCH_STEPS,
+      ["四维并行空间","SLO 约束剪枝","PD 混部 / 分离","实例数联合枚举"])}
+    ${panel("b","waves","推理仿真工具原理","解析式代价模型预估性能，不跑真实推理即可验证策略",SIM_STEPS,
+      ["分阶段代价模型","分位统计","P99 长尾","统一输出格式"])}
+  </div>`;
+}
+
+function dictHtml(ctx){
+  const rows = USED.map(k=>{
+    const f = fieldOf(k);
+    return `<tr><td class="k">${esc(f[0]||k)}</td>
+      <td class="num">${esc(f[1]||"—")}</td>
+      <td class="desc">${esc(f[2]||"暂无说明")}</td>
+      <td class="desc">${hasDict(k)?'<span style="color:#0f9d58">已收录</span>':'<span style="color:#d97706">待补充</span>'}</td></tr>`;
+  }).join("");
+  return `<details class="fold"><summary><span class="ico">${icon("book")}</span>指标释义 · 中文名称与含义
+    <span class="sub">共 ${USED.length} 项指标，含中文名、单位与含义说明</span></summary>
+    <div class="fold-body"><div class="note"><b>说明口径：</b>页面所有可见标签均使用中文表述，悬浮任意指标卡可查看说明；
+      新增指标会自动收录到本表，不会遗漏。</div>
+      <div class="table-wrap"><table class="kv">
+        <thead><tr><th>指标名称</th><th>单位</th><th style="text-align:left">含义说明</th><th style="text-align:left">状态</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div></details>`;
+}
+function rawHtml(optResp,simResp){
+  return `<details class="fold"><summary><span class="ico">${icon("code")}</span>原始接口响应
+    <span class="sub">寻优 + 仿真两份 JSON，便于核对字段与取值</span></summary>
+    <div class="fold-body">
+      <div class="tool-row"><button class="btn" type="button" id="copyBtn">${icon("copy")} 复制 JSON</button>
+        <span class="card-sub">真实接入时，将 window.INFER_OPT_RESULT / window.INFER_SIM_RESULT 替换为接口返回值即可。</span></div>
+      <pre class="raw-pre" id="rawPre">${esc(JSON.stringify({infer_strategy_npu:optResp,infer_simulate:simResp},null,2))}</pre>
+    </div></details>`;
+}
+
+/* ==================== 9. 页面组装 ==================== */
+function modeBadgeHtml(mode){
+  const label = mode === "agg" ? "PD 混部" : (mode === "disagg" ? "PD 分离" : "形态未知");
+  return `<span class="mode-badge ${mode==="disagg"?"disagg":""}">
+    <span class="mb-ico">${icon(mode==="disagg"?"split":"chip")}</span>
+    <span>当前部署形态 · ${esc(label)}</span>
+    <span class="mb-hint">由结果数据自动识别</span></span>`;
+}
+function footerHtml(current){
+  const btn = (m,label) => `<button type="button" class="demo-btn ${current===m?"active":""}" data-demo="${m}">${esc(label)}</button>`;
+  return `<div class="footer">
+    <div class="demo"><span class="lb">演示数据（默认 PD 分离 · 仅用于预览两种响应格式）</span>
+      ${btn("disagg","PD 分离示例")}${btn("agg","PD 混部示例")}</div>
+    <span class="spacer"></span>
+    <span>真实接入：<code>window.INFER_OPT_RESULT</code> / <code>window.INFER_SIM_RESULT</code>
+      或调用 <code>window.renderInferReport(opt, sim)</code>，一次任务只呈现一种形态</span>
+    <button class="btn primary" type="button" id="printBtn">${icon("print")} 打印报告</button>
+  </div>`;
+}
+
+function render(optResp,simResp,currentDemo){
+  USED = [];
+  const opt = readOptimize(optResp), sim = readSimulate(simResp);
+  if (!opt.ok || !sim.ok){
+    document.getElementById("detailArea").innerHTML =
+      `<div class="card"><div class="empty"><b>数据解析失败</b>
+        ${esc(!opt.ok?("寻优响应："+opt.reason):"")} ${esc(!sim.ok?("仿真响应："+sim.reason):"")}
+        <br>请检查 <code>common.infer_strategy_npu</code> 与 <code>common.infer_simulate</code> 节点。</div></div>`;
+    document.getElementById("modeBadge").innerHTML = modeBadgeHtml(null);
+    document.getElementById("hero").innerHTML = "";
+    document.getElementById("footer").innerHTML = footerHtml(currentDemo);
+    bindFooter(currentDemo);
+    return;
+  }
+  const ctx = { opt, sim, mode:opt.mode };
+  document.getElementById("modeBadge").innerHTML = modeBadgeHtml(opt.mode);
+  document.getElementById("hero").innerHTML = heroHtml(ctx);
+  document.getElementById("detailArea").innerHTML =
+    secConn("01","任务信息",`响应码 <b>${esc(opt.status.code)}</b>`) +
+    overviewHtml(ctx) +
+    secConn("02","采集信息",`${COLLECT.reduce((s,g)=>s+g[1].length,0)} 项 · <b>已采集</b>`) +
+    collectHtml() +
+    secConn("03","寻优策略",`${esc(opt.mode==="agg"?"PD 混部":"PD 分离")} · <b>候选 ${esc(opt.count)} 条</b>`) +
+    (opt.mode === "agg" ? strategyAggHtml(ctx) : strategyDisaggHtml(ctx)) +
+    secConn("04","仿真结果","<b>格式统一</b> · 吞吐 / TTFT / TPOT / ITL") +
+    simulateHtml(ctx) +
+    secConn("05","工具基本原理","寻优 + 仿真 双链路") +
+    principlesHtml() +
+    secConn("06","字段说明与原始数据","指标释义 / 原始 JSON") +
+    dictHtml(ctx) + rawHtml(optResp,simResp);
+  document.getElementById("footer").innerHTML = footerHtml(currentDemo);
+  bindFooter(currentDemo);
+  bindTools(optResp,simResp);
+}
+
+function bindFooter(currentDemo){
+  document.querySelectorAll("[data-demo]").forEach(b=>{
+    b.addEventListener("click",()=>render(DEMO_OPT[b.dataset.demo],DEMO_SIM,b.dataset.demo));
+  });
+}
+function bindTools(optResp,simResp){
+  const printBtn = document.getElementById("printBtn");
+  if(printBtn) printBtn.addEventListener("click",()=>window.print());
+  const copyBtn = document.getElementById("copyBtn");
+  if(copyBtn) copyBtn.addEventListener("click",async()=>{
+    const text = JSON.stringify({infer_strategy_npu:optResp,infer_simulate:simResp},null,2);
+    try{ await navigator.clipboard.writeText(text); }
+    catch(e){
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand("copy"); }catch(_){}
+      document.body.removeChild(ta);
+    }
+    copyBtn.innerHTML = icon("check")+" 已复制";
+    setTimeout(()=>{ copyBtn.innerHTML = icon("copy")+" 复制 JSON"; },1600);
+  });
+}
+
+/* ==================== 10. 初始化 ==================== */
+document.getElementById("logoIcon").innerHTML = icon("logo");
+document.getElementById("sideMenu").innerHTML = [
+  ["grid","集群总览",true],["target","调优工作台",false],["pulse","监控诊断中心",false],
+  ["chip","模型调优",false],["doc","文档中心",false]
+].map(([ico,name,arrow])=>`<div class="menu-item${name==="模型调优"?" active":""}">${icon(ico)}${esc(name)}${arrow?'<span class="arrow">▸</span>':""}</div>`).join("");
+
+/* 默认优先展示 PD 分离；?demo=agg 可显式切到 PD 混部 */
+const initialDemo = new URLSearchParams(location.search).get("demo") === "agg" ? "agg" : "disagg";
+const injectedOpt = window.INFER_OPT_RESULT, injectedSim = window.INFER_SIM_RESULT;
+window.renderInferReport = (o,s) => render(o,s,"custom");
+render(injectedOpt || DEMO_OPT[initialDemo], injectedSim || DEMO_SIM, injectedOpt ? "custom" : initialDemo);
+</script>
+</body>
+</html>
